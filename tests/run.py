@@ -22,8 +22,9 @@ def compile_case(source, executable):
     )
 
 
-def read_trace(executable, line_count):
-    process = subprocess.Popen([str(executable)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def read_trace(executable, line_count, input_path):
+    stdin = open(input_path, "rb") if input_path.exists() else subprocess.DEVNULL
+    process = subprocess.Popen([str(executable)], stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
@@ -41,6 +42,8 @@ def read_trace(executable, line_count):
     process.kill()
     process.wait()
     selector.close()
+    if stdin is not subprocess.DEVNULL:
+        stdin.close()
     lines = received.decode(errors="replace").split("\n")[:line_count]
     return lines, timed_out, process.returncode
 
@@ -52,7 +55,7 @@ def run_trace_case(source, expected_path):
     compiled = compile_case(source, executable)
     if compiled.returncode != 0:
         return [f"compile failed (exit {compiled.returncode}):", compiled.stderr.rstrip()]
-    actual, timed_out, returncode = read_trace(executable, len(expected))
+    actual, timed_out, returncode = read_trace(executable, len(expected), source.with_suffix(".in"))
     if actual == expected:
         return []
     report = [f"trace mismatch (exit {returncode}{', timed out' if timed_out else ''}):"]
