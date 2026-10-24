@@ -12,7 +12,7 @@ SEED_WORDS = [
     "clock'", "state'", "cur'", "on'",
     "process", "where", "end", "init", "true", "false", "when", "default", "and", "or", "xor", "not", "modulo",
     "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with", "if", "then", "else", "procedure",
-    "node", "function", "automaton", "label", "on", "external",
+    "node", "function", "automaton", "label", "on", "external", "indices",
 ]
 KEYWORDS = {
     "process", "where", "end", "init", "integer", "boolean", "event", "true", "false", "when", "default", "and", "or",
@@ -21,9 +21,10 @@ KEYWORDS = {
 }
 NAME_CONSTANTS = {
     "event": "N_EVENT", "boolean": "N_BOOLEAN", "ubyte": "N_UBYTE", "ulong": "N_ULONG", "load": "N_LOAD",
+    "store": "N_STORE", "syscall": "N_SYSCALL",
     "instruction": "N_INSTRUCTION", "Automaton_Initial_State": "N_INITIAL", "Automaton_Transition": "N_TRANSITION",
     "Automaton_IsIn": "N_ISIN", "clock'": "N_CLOCK_MARK", "state'": "N_STATE_MARK", "cur'": "N_CURRENT_MARK",
-    "on'": "N_ON_MARK",
+    "on'": "N_ON_MARK", "indices": "N_INDICES",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -40,7 +41,7 @@ CODE_LIMIT = 104
 OPS = [
     "CONST", "SIGNAL", "ENUMCONST", "CALL", "DELAY", "PREV", "INDEX", "NEG", "NOT", "UWHEN", "CLOCK", "IF", "BRANCH",
     "DEFAULT", "WHEN", "XOR", "OR", "AND", "EQ", "NE", "LT", "LE", "GT", "GE", "ADD", "SUB", "MUL", "DIV", "MOD",
-    "SHL", "SHR", "NEXT", "PAIR", "RANGE", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK",
+    "SHL", "SHR", "NEXT", "PAIR", "RANGE", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK", "EFFECT",
 ]
 OPENERS = {"CALL", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK"}
 LEAVES = {"CONST", "SIGNAL", "ENUMCONST"}
@@ -127,11 +128,21 @@ TEMPLATES = [
     ("NO_OUTPUT", "model # has no output and cannot be used in an expression", ["NAME"]),
     ("HAS_OUTPUT", "model # has an output and cannot be called as a process", ["NAME"]),
     ("NOT_STATE", "# is not a state of automaton #", ["NAME", "NAME"]),
+    ("SIGNAL_UNDECLARED", "signal # is not declared", ["NAME"]),
+    ("LABEL_AS_SIGNAL", "label # cannot be used as a signal", ["NAME"]),
+    ("CONVERSION_ONE", "conversion to # expects one argument", ["NAME"]),
+    ("INDICES_CONSTANT", "indices expects a positive constant", []),
+    ("CALLS_IN_ITERATE", "model calls are not allowed inside iterate", []),
+    ("UNSAFE_CALL", "unsafe model # is called from # #", ["NAME", "CODE", "NAME"]),
+    ("MODEL_UNDECLARED", "model # is not declared", ["NAME"]),
+    ("NO_STATIC_PARAMETERS", "model # takes no static parameters", ["NAME"]),
+    ("CALLS_ITSELF", "model # calls itself", ["NAME"]),
+    ("TOO_MANY_OUTPUTS", "model # has # outputs; only models with at most one output can be called", ["NAME", "NUMBER"]),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
     "GUARDS", "LABELS", "LOOPS", "GROUPS", "DEPENDENCES", "STACK", "PATHS", "LOCALS", "PARSE", "FINISH", "ITEMS",
-    "OUTPUT",
+    "OUTPUT", "INSTANCES", "INSTANTIATE",
 ]
 NAMED_FRAGMENTS = [
     ("COLON", ":"), ("ERROR_SEPARATOR", ": error: "), ("ERROR_WORD", "error "), ("SPACE", " "),
@@ -140,6 +151,7 @@ NAMED_FRAGMENTS = [
     ("CLOSE_TWO", "]]"), ("CLOSE_THREE", "]]]"), ("EMPTY_LIST", "[]"), ("OPEN_NONE", "[none"),
     ("NONE_CLOSE", "none]"), ("CONST_OPEN", "[CONST ["), ("ENUMCONST_OPEN", "[ENUMCONST ["), ("SIZE_CLOSE", "] "),
     ("STATE_SUFFIX", "'state"), ("DEFINE", "DEFINE"), ("SEED", "SEED"),
+    ("HASH", "#"), ("DOT", "."), ("CALL_SUFFIX", "'call"),
 ]
 ROLE_WORDS = ["signal", "type", "model", "constant", "label"]
 
@@ -184,6 +196,10 @@ FINISH_PHASES = [
     "REWRITE_TRIGGER", "CLOCK", "STATE", "CUR", "CUR_TAIL", "GROUP", "GUARD_START", "DEFINE_PARSE", "DEFINE_FINISH",
     "READ_PARSE", "READ_FINISH", "READ_MEMBERS", "READ_DEPS", "ON", "FILTER", "DONE", "FAILED",
 ]
+INSTANTIATE_PHASES = [
+    "ROOT", "INSTANCE", "LABEL", "SIGNAL", "FINISH_SIGNAL", "LOOP", "EQUATION", "FINISH_EQUATION", "GROUP",
+    "FINISH_GROUP", "DEPENDENCE", "ENTRY", "ANCESTRY", "PATH", "INPUT", "EMIT", "DONE", "FAILED",
+]
 SHAPES = ["NAME", "NUMBER", "FRAGMENT", "POSITION", "TYPE", "USE", "END_POINT", "LIST", "GROUP"]
 SCALAR_ATOMS = ["NAME", "NUMBER", "FRAGMENT", "LINE", "COLUMN", "TYPE_HEAD", "TYPE_ELEMENT"]
 SCALAR_PROGRAMS = {
@@ -206,7 +222,7 @@ COLUMN_SHAPES = {
     "constraint_guards": "LIST NUMBERS", "dependence_from": "END_POINT", "dependence_to": "END_POINT",
     "dependence_positions": "POSITION", "dependence_guards": "LIST NUMBERS",
 }
-ITEM_CLASSES = ["HEADER", "NEWLINE", "OPEN", "CLOSE", "NAME", "TOKEN", "NUMBER", "FRAGMENT", "SIZE"]
+ITEM_CLASSES = ["HEADER", "NEWLINE", "OPEN", "CLOSE", "NAME", "TOKEN", "NUMBER", "FRAGMENT", "SIZE", "PREFIX"]
 ARG_ATOMS = [
     "OPEN", "CLOSE", "NAME", "LINE", "COLUMN", "VALUE", "TYPE_NUMBER", "TYPE_NAME", "VALUE_NAME", "INIT_LINE",
     "INIT_COLUMN", "NONE", "CONST", "ENUMCONST", "PARAMS", "COUNT",
@@ -217,6 +233,7 @@ ARG_PROGRAMS = {
     "SIGNAL": ["OPEN", "NAME", "LINE", "COLUMN", "CLOSE"],
     "ENUMCONST": ["OPEN", "TYPE_NAME", "VALUE_NAME", "LINE", "COLUMN", "CLOSE"],
     "CALL": ["OPEN", "LINE", "COLUMN", "NAME", "PARAMS", "COUNT", "CLOSE"],
+    "EFFECT": ["OPEN", "LINE", "COLUMN", "NAME", "PARAMS", "COUNT", "CLOSE"],
     "DELAY_NONE": ["OPEN", "LINE", "COLUMN", "NONE", "CLOSE"],
     "DELAY_CONST": ["OPEN", "LINE", "COLUMN", "OPEN", "CONST", "OPEN", "VALUE", "TYPE_NUMBER", "CLOSE", "CLOSE", "CLOSE"],
     "DELAY_ENUMCONST": [
@@ -399,7 +416,8 @@ def build():
     for index, word in enumerate(SEED_WORDS[:len(BUILTIN_KIND)]):
         integer(f"BUILTIN_{word.upper()}", index)
     for prefix, names in (("P", PARSE_STATES), ("X", OPERAND_CASES + OPERATOR_CASES), ("FRAME", FRAMES),
-                          ("INIT", DELAY_INITS), ("PHASE", FINISH_PHASES)):
+                          ("INIT", DELAY_INITS), ("PHASE", FINISH_PHASES),
+                          ("IP", INSTANTIATE_PHASES)):
         for index, name in enumerate(names):
             integer(f"{prefix}_{name}", index)
     integer("CONDITION_PRECEDENCE", CONDITION_PRECEDENCE)

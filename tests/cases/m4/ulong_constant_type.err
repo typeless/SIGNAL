@@ -1,0 +1,1 @@
+ulong_constant_type.sig:7:26: error: constant T has type [18446744073709551615] integer but its definition has type short

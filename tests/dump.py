@@ -11,7 +11,11 @@ def parse(text):
     return sigc.Parser(sigc.lex(text)).parse_program()
 
 
-PASSES = {"tokens": sigc.lex, "program": parse}
+def flat(text):
+    return sigc.instantiate(parse(text))
+
+
+PASSES = {"tokens": sigc.lex, "program": parse, "flat": flat}
 
 
 def render(value, nested):
