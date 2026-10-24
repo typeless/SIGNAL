@@ -50,3 +50,9 @@
   - The executable is a dyld-loaded Mach-O with seven load commands: `__PAGEZERO`, `__TEXT`, `__DATA`, `__LINKEDIT`, LC_LOAD_DYLINKER, LC_MAIN and LC_CODE_SIGNATURE; header flags DYLDLINK|PIE; no section headers; `__TEXT` and `__DATA` file sizes rounded to 16 KiB; the `__LINKEDIT` file size is the signature length. The output is written to a new file renamed over the target, so recompiling over a running executable leaves the new one launchable. Data holds no absolute addresses, so no rebase information is needed.
   - The signature is an ad-hoc CodeDirectory (version 0x20100, flag CS_ADHOC, SHA-256 over 16 KiB pages, empty identifier). `codesign --verify --strict` must accept every executable.
   - Apple `as`, `ld` and `codesign` serve only as test oracles in `tests/backend.py`, retired with the bootstrap at M4; the test suite runs the compiler with an empty PATH.
+- **D13 M4 self-hosting.** Approved 2026-10-25.
+  - The SIGNAL compiler runs one step per compilation; each pass is an `iterate` over column tables (D5). Language extensions it needs are added to `sigc.py` first and kept only where the compiler cannot be written without them.
+  - The compiler keeps the `sigc SOURCE -o OUTPUT` command line: the runtime keeps argc and argv, and source and executable move through `syscall` effects.
+  - Extension: a string literal may initialize a `constant` array of `ubyte`.
+  - Each pass is checked against a dump of the same pass from `sigc.py`; the exit check is executables byte-identical to `sigc.py`'s on every case, the full suite passing with stage 2, and stage 2 byte-identical to stage 1.
+  - `sigc.py` stays in the repository as the frozen stage 0 and is not extended after M4; `tests/backend.py` and its `as`/`ld` oracles are retired.
