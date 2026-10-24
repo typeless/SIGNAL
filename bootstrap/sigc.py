@@ -1,6 +1,8 @@
 import argparse
+import hashlib
+import os
 import re
-import subprocess
+import struct
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +39,109 @@ TYPE_NAMES = {name: type_id for type_id, (name, _, _, _) in enumerate(BUILTIN_TY
 LITERAL_TYPES = (SHORT, INTEGER, LONG)
 MASK64 = (1 << 64) - 1
 WINDOW_BYTES = 16384
+MACHO_BASE = 0x100000000
+SEGMENT_BYTES = 16384
+COMMAND_BYTES = 360
+TEXT_OFFSET = 392
+SIGNATURE_PAGE_BYTES = 16384
+CODE_DIRECTORY_HEADER_BYTES = 48
+SUPERBLOB_HEADER_BYTES = 20
+HASH_BYTES = 32
+TEXT, DATA = 0, 1
+XZR = SP = 31
+CC_EQ, CC_NE, CC_HS, CC_LO, CC_HI, CC_LS, CC_GE, CC_LT, CC_GT, CC_LE = 0, 1, 2, 3, 8, 9, 10, 11, 12, 13
+PCREL, PAGE, PAGEOFF = 1, 2, 3
+MOVE_X = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 2, 21))
+MOVE_W = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 1, 21))
+IMM12 = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 12, 10))
+REG2 = ((0, 0, 5, 0), (1, 0, 5, 5))
+REG3 = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 5, 16))
+REG4 = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 5, 16), (3, 0, 5, 10))
+SELECT = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 5, 16), (3, 0, 4, 12))
+SCALED = tuple(((0, 0, 5, 0), (1, 0, 5, 5), (2, scale, 12, 10)) for scale in range(4))
+INDEXED = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 9, 12))
+BRANCH26 = ((2, 2, 26, 0),)
+BRANCH19 = ((3, 0, 4, 0), (2, 2, 19, 5))
+COMPARE_BRANCH = ((0, 0, 5, 0), (2, 2, 19, 5))
+PAGE21 = ((0, 0, 5, 0), (2, 12, 2, 29), (2, 14, 19, 5))
+WORD32 = ((2, 0, 32, 0),)
+FORMS = (
+    ("movz x", 0xD2800000, MOVE_X, False, 0),
+    ("movz w", 0x52800000, MOVE_W, False, 0),
+    ("movk x", 0xF2800000, MOVE_X, False, 0),
+    ("movk w", 0x72800000, MOVE_W, False, 0),
+    ("add x imm", 0x91000000, IMM12, False, PAGEOFF),
+    ("add w imm", 0x11000000, IMM12, False, 0),
+    ("sub x imm", 0xD1000000, IMM12, False, 0),
+    ("sub w imm", 0x51000000, IMM12, False, 0),
+    ("subs x imm", 0xF1000000, IMM12, False, 0),
+    ("subs w imm", 0x71000000, IMM12, False, 0),
+    ("add x", 0x8B000000, REG3, False, 0),
+    ("adds x", 0xAB000000, REG3, False, 0),
+    ("sub x", 0xCB000000, REG3, False, 0),
+    ("subs x", 0xEB000000, REG3, False, 0),
+    ("and x", 0x8A000000, REG3, False, 0),
+    ("and w", 0x0A000000, REG3, False, 0),
+    ("orr x", 0xAA000000, REG3, False, 0),
+    ("orr w", 0x2A000000, REG3, False, 0),
+    ("eor x", 0xCA000000, REG3, False, 0),
+    ("orn x", 0xAA200000, REG3, False, 0),
+    ("eor x one", 0xD2400000, REG2, False, 0),
+    ("lslv x", 0x9AC02000, REG3, False, 0),
+    ("lsrv x", 0x9AC02400, REG3, False, 0),
+    ("sdiv x", 0x9AC00C00, REG3, False, 0),
+    ("udiv x", 0x9AC00800, REG3, False, 0),
+    ("mul x", 0x9B007C00, REG3, False, 0),
+    ("msub x", 0x9B008000, REG4, False, 0),
+    ("umulh x", 0x9BC07C00, REG3, False, 0),
+    ("csel x", 0x9A800000, SELECT, False, 0),
+    ("csinc w", 0x1A800400, SELECT, False, 0),
+    ("csneg x", 0xDA800400, SELECT, False, 0),
+    ("ldr x", 0xF9400000, SCALED[3], False, PAGEOFF),
+    ("ldr w", 0xB9400000, SCALED[2], False, PAGEOFF),
+    ("ldrsw x", 0xB9800000, SCALED[2], False, PAGEOFF),
+    ("ldrh w", 0x79400000, SCALED[1], False, PAGEOFF),
+    ("ldrsh x", 0x79800000, SCALED[1], False, PAGEOFF),
+    ("ldrb w", 0x39400000, SCALED[0], False, PAGEOFF),
+    ("str x", 0xF9000000, SCALED[3], False, PAGEOFF),
+    ("str w", 0xB9000000, SCALED[2], False, PAGEOFF),
+    ("strh w", 0x79000000, SCALED[1], False, PAGEOFF),
+    ("strb w", 0x39000000, SCALED[0], False, PAGEOFF),
+    ("ldr x reg", 0xF8607800, REG3, False, 0),
+    ("ldr w reg", 0xB8607800, REG3, False, 0),
+    ("ldrsw x reg", 0xB8A07800, REG3, False, 0),
+    ("ldrh w reg", 0x78607800, REG3, False, 0),
+    ("ldrsh x reg", 0x78A07800, REG3, False, 0),
+    ("ldrb w reg", 0x38606800, REG3, False, 0),
+    ("str x reg", 0xF8207800, REG3, False, 0),
+    ("str w reg", 0xB8207800, REG3, False, 0),
+    ("strh w reg", 0x78207800, REG3, False, 0),
+    ("strb w reg", 0x38206800, REG3, False, 0),
+    ("ldr x post", 0xF8400400, INDEXED, True, 0),
+    ("str x post", 0xF8000400, INDEXED, True, 0),
+    ("str w post", 0xB8000400, INDEXED, True, 0),
+    ("strb w post", 0x38000400, INDEXED, True, 0),
+    ("ldrb w pre", 0x38400C00, INDEXED, True, 0),
+    ("b", 0x14000000, BRANCH26, True, PCREL),
+    ("bl", 0x94000000, BRANCH26, True, PCREL),
+    ("b.cond", 0x54000000, BRANCH19, True, PCREL),
+    ("cbz w", 0x34000000, COMPARE_BRANCH, True, PCREL),
+    ("cbz x", 0xB4000000, COMPARE_BRANCH, True, PCREL),
+    ("cbnz x", 0xB5000000, COMPARE_BRANCH, True, PCREL),
+    ("adrp", 0x90000000, PAGE21, True, PAGE),
+    ("ret", 0xD65F03C0, (), False, 0),
+    ("svc 0x80", 0xD4001001, (), False, 0),
+    ("word", 0x00000000, WORD32, False, 0),
+)
+(
+    MOVZ_X, MOVZ_W, MOVK_X, MOVK_W, ADD_X_IMM, ADD_W_IMM, SUB_X_IMM, SUB_W_IMM, SUBS_X_IMM, SUBS_W_IMM,
+    ADD_X, ADDS_X, SUB_X, SUBS_X, AND_X, AND_W, ORR_X, ORR_W, EOR_X, ORN_X, EOR_X_ONE,
+    LSLV_X, LSRV_X, SDIV_X, UDIV_X, MUL_X, MSUB_X, UMULH_X, CSEL_X, CSINC_W, CSNEG_X,
+    LDR_X, LDR_W, LDRSW_X, LDRH_W, LDRSH_X, LDRB_W, STR_X, STR_W, STRH_W, STRB_W,
+    LDR_X_REG, LDR_W_REG, LDRSW_X_REG, LDRH_W_REG, LDRSH_X_REG, LDRB_W_REG, STR_X_REG, STR_W_REG, STRH_W_REG, STRB_W_REG,
+    LDR_X_POST, STR_X_POST, STR_W_POST, STRB_W_POST, LDRB_W_PRE,
+    B, BL, B_COND, CBZ_W, CBZ_X, CBNZ_X, ADRP, RET, SVC_80, WORD,
+) = range(len(FORMS))
 
 TOKEN_PATTERN = re.compile(
     r"(?P<space>\s+)"
@@ -120,20 +225,19 @@ INTEGER_OPS = {OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_NEG}
 ORDER_OPS = {OP_LT, OP_LE, OP_GT, OP_GE}
 EQUALITY_OPS = {OP_EQ, OP_NE}
 LOGIC_OPS = {OP_AND, OP_OR, OP_XOR, OP_NOT}
-SHIFT_OPS = {OP_SHL: "lsl", OP_SHR: "lsr"}
+SHIFT_OPS = {OP_SHL: LSLV_X, OP_SHR: LSRV_X}
 MONOCHRONOUS_OPS = INTEGER_OPS | ORDER_OPS | EQUALITY_OPS | LOGIC_OPS | set(SHIFT_OPS) | {
     OP_CONVERT, OP_ELEMENT, OP_GATHER, OP_PAIR, OP_NEXT, OP_PREV, OP_ITER, OP_IF, OP_BRANCH, OP_ARG,
 }
 UNARY_OPS = {OP_NEG, OP_NOT, OP_UWHEN, OP_CLOCK, OP_DELAY, OP_CALL, OP_PREV}
-INSTRUCTIONS = {OP_ADD: "add", OP_SUB: "sub", OP_MUL: "mul", OP_AND: "and", OP_OR: "orr", OP_XOR: "eor"}
-SIGNED_CONDITIONS = {OP_EQ: "eq", OP_NE: "ne", OP_LT: "lt", OP_LE: "le", OP_GT: "gt", OP_GE: "ge"}
-UNSIGNED_CONDITIONS = {OP_EQ: "eq", OP_NE: "ne", OP_LT: "lo", OP_LE: "ls", OP_GT: "hi", OP_GE: "hs"}
+INSTRUCTIONS = {OP_ADD: ADD_X, OP_SUB: SUB_X, OP_MUL: MUL_X, OP_AND: AND_X, OP_OR: ORR_X, OP_XOR: EOR_X}
+SIGNED_CONDITIONS = {OP_EQ: CC_EQ, OP_NE: CC_NE, OP_LT: CC_LT, OP_LE: CC_LE, OP_GT: CC_GT, OP_GE: CC_GE}
+UNSIGNED_CONDITIONS = {OP_EQ: CC_EQ, OP_NE: CC_NE, OP_LT: CC_LO, OP_LE: CC_LS, OP_GT: CC_HI, OP_GE: CC_HS}
 LOAD = {
-    (1, False): "ldrb w", (1, True): "ldrsb x", (2, False): "ldrh w", (2, True): "ldrsh x",
-    (4, False): "ldr w", (4, True): "ldrsw x", (8, False): "ldr x", (8, True): "ldr x",
+    (1, False): (LDRB_W, LDRB_W_REG), (2, False): (LDRH_W, LDRH_W_REG), (2, True): (LDRSH_X, LDRSH_X_REG),
+    (4, False): (LDR_W, LDR_W_REG), (4, True): (LDRSW_X, LDRSW_X_REG), (8, False): (LDR_X, LDR_X_REG), (8, True): (LDR_X, LDR_X_REG),
 }
-STORE = {1: "strb w", 2: "strh w", 4: "str w", 8: "str x"}
-DATA_DIRECTIVES = {1: ".byte", 2: ".short", 4: ".long", 8: ".quad"}
+STORE = {1: (STRB_W, STRB_W_REG), 2: (STRH_W, STRH_W_REG), 4: (STR_W, STR_W_REG), 8: (STR_X, STR_X_REG)}
 
 MODEL_CLASSES = ("process", "procedure", "node", "function", "automaton")
 ORDERED_CLASSES = {"procedure", "node", "function", "automaton"}
@@ -2398,75 +2502,112 @@ def schedule(program, rows, clocks, loops):
     return order, loop_orders
 
 
-RUNTIME_ASSEMBLY = """
-    .p2align 2
-_rt_put_int:
-    cmp x0, #0
-    b.ge _rt_put_uint
-    mov w10, #45
-    strb w10, [x20], #1
-    neg x0, x0
-_rt_put_uint:
-    mov x9, x0
-    sub sp, sp, #32
-    mov x11, sp
-    mov x15, sp
-    mov x12, #10
-2:
-    udiv x13, x9, x12
-    msub x14, x13, x12, x9
-    add w14, w14, #48
-    strb w14, [x11], #1
-    mov x9, x13
-    cbnz x9, 2b
-3:
-    ldrb w14, [x11, #-1]!
-    strb w14, [x20], #1
-    cmp x11, x15
-    b.ne 3b
-    add sp, sp, #32
-    ret
-
-    .p2align 2
-_rt_put_bool:
-    cbz w0, 1f
-    mov w9, #0x7274
-    movk w9, #0x6575, lsl #16
-    str w9, [x20], #4
-    ret
-1:
-    mov w9, #0x6166
-    movk w9, #0x736c, lsl #16
-    str w9, [x20], #4
-    mov w9, #101
-    strb w9, [x20], #1
-    ret
-"""
+@dataclass
+class Code:
+    form: list = field(default_factory=list)
+    op0: list = field(default_factory=list)
+    op1: list = field(default_factory=list)
+    op2: list = field(default_factory=list)
+    op3: list = field(default_factory=list)
+    target: list = field(default_factory=list)
+    label_section: list = field(default_factory=list)
+    label_offset: list = field(default_factory=list)
+    data: bytearray = field(default_factory=bytearray)
 
 
-def load(lines, register, symbol, types, type_id):
-    lines.append(f"    adrp x8, {symbol}@PAGE")
-    lines.append(f"    {LOAD[types.bytes[type_id], types.signed[type_id]]}{register}, [x8, {symbol}@PAGEOFF]")
+@dataclass
+class Labels:
+    table: list = field(default_factory=list)
+    window: dict = field(default_factory=dict)
+    mem: dict = field(default_factory=dict)
+    clk: dict = field(default_factory=dict)
+    sig: int = -1
 
 
-def store(lines, register, symbol, types, type_id):
-    lines.append(f"    adrp x8, {symbol}@PAGE")
-    lines.append(f"    {STORE[types.bytes[type_id]]}{register}, [x8, {symbol}@PAGEOFF]")
+def emit(code, form, op0=0, op1=0, op2=0, op3=0, target=-1):
+    code.form.append(form)
+    code.op0.append(op0)
+    code.op1.append(op1)
+    code.op2.append(op2)
+    code.op3.append(op3)
+    code.target.append(target)
 
 
-def load_immediate(lines, register, value):
+def new_label(code):
+    code.label_section.append(-1)
+    code.label_offset.append(0)
+    return len(code.label_section) - 1
+
+
+def place(code, label):
+    code.label_section[label] = TEXT
+    code.label_offset[label] = len(code.form)
+
+
+def data_item(code, alignment, content):
+    code.data += bytes(-len(code.data) % alignment)
+    code.label_section.append(DATA)
+    code.label_offset.append(len(code.data))
+    code.data += content
+    return len(code.label_section) - 1
+
+
+def pack(form, operands):
+    name, base, fields, signed, _ = FORMS[form]
+    word = base
+    rebuilt = [0, 0, 0, 0]
+    top = [0, 0, 0, 0]
+    for slot, low, width, at in fields:
+        bits = (operands[slot] >> low) & ((1 << width) - 1)
+        word |= bits << at
+        rebuilt[slot] |= bits << low
+        top[slot] = max(top[slot], low + width)
+    if signed and rebuilt[2] >> (top[2] - 1):
+        rebuilt[2] -= 1 << top[2]
+    if rebuilt != list(operands):
+        raise CompileError(f"{name} operand out of range: {list(operands)}", 0, 0)
+    return word
+
+
+def encode(code, text_base, data_base):
+    words = bytearray()
+    for index, form in enumerate(code.form):
+        operands = [code.op0[index], code.op1[index], code.op2[index], code.op3[index]]
+        target = code.target[index]
+        if target >= 0:
+            offset = code.label_offset[target]
+            address = {TEXT: text_base + 4 * offset, DATA: data_base + offset}[code.label_section[target]]
+            pc = text_base + 4 * index
+            operands[2] = {PCREL: address - pc, PAGE: (address >> 12 << 12) - (pc >> 12 << 12), PAGEOFF: address & 0xFFF}[FORMS[form][4]]
+        words += pack(form, operands).to_bytes(4, "little")
+    return bytes(words)
+
+
+def load(code, register, label, types, type_id):
+    offset_form, _ = LOAD[types.bytes[type_id], types.signed[type_id]]
+    emit(code, ADRP, 8, target=label)
+    emit(code, offset_form, register, 8, target=label)
+
+
+def store(code, register, label, types, type_id):
+    offset_form, _ = STORE[types.bytes[type_id]]
+    emit(code, ADRP, 8, target=label)
+    emit(code, offset_form, register, 8, target=label)
+
+
+def load_immediate(code, register, value):
     value &= MASK64
-    lines.append(f"    mov x{register}, #{value & 0xFFFF}")
+    emit(code, MOVZ_X, register, 0, value & 0xFFFF)
     for shift in (16, 32, 48):
         if (value >> shift) & 0xFFFF:
-            lines.append(f"    movk x{register}, #{(value >> shift) & 0xFFFF}, lsl #{shift}")
+            emit(code, MOVK_X, register, 0, (value >> shift) & 0xFFFF, shift // 16)
 
 
-def load_operand(lines, register, types, rows, row):
+def load_operand(code, labels, register, types, rows, row):
     if rows.op[row] == OP_CONST:
-        load_immediate(lines, register, rows.value[row])
+        load_immediate(code, register, rows.value[row])
     else:
-        load(lines, register, f"_sig_{row}", types, rows.type[row])
+        load(code, register, labels.sig + row, types, rows.type[row])
 
 
 def storage_key(rows, row):
@@ -2477,27 +2618,30 @@ def storage_key(rows, row):
     return f"t{rows.value[row]}" if rows.op[row] == OP_TABLE else f"a{rows.owner[row]}"
 
 
-def address(lines, register, key):
-    lines.append(f"    adrp x8, _addr_{key}@PAGE")
-    lines.append(f"    ldr x{register}, [x8, _addr_{key}@PAGEOFF]")
+def address(code, labels, register, key):
+    if key[0] == "t":
+        table = labels.table[int(key[1:])]
+        emit(code, ADRP, register, target=table)
+        emit(code, ADD_X_IMM, register, register, target=table)
+    else:
+        window = labels.window[key]
+        emit(code, ADRP, 8, target=window)
+        emit(code, LDR_X, register, 8, target=window)
 
 
-def copy_words(lines, source_key, destination_key, words, label):
-    address(lines, 12, source_key)
-    address(lines, 13, destination_key)
-    load_immediate(lines, 15, words)
-    lines.append(f"{label}:")
-    lines.append("    ldr x9, [x12], #8")
-    lines.append("    str x9, [x13], #8")
-    lines.append("    subs x15, x15, #1")
-    lines.append(f"    b.ne {label}")
+def copy_words(code, labels, source_key, destination_key, words):
+    address(code, labels, 12, source_key)
+    address(code, labels, 13, destination_key)
+    load_immediate(code, 15, words)
+    copy = new_label(code)
+    place(code, copy)
+    emit(code, LDR_X_POST, 9, 12, 8)
+    emit(code, STR_X_POST, 9, 13, 8)
+    emit(code, SUBS_X_IMM, 15, 15, 1)
+    emit(code, B_COND, op3=CC_NE, target=copy)
 
 
-def element_operand(base, index, size):
-    return f"[x{base}, x{index}]" if size == 1 else f"[x{base}, x{index}, lsl #{size.bit_length() - 1}]"
-
-
-def emit_row(lines, program, rows, clocks, row, gated):
+def emit_row(code, labels, program, rows, clocks, row, gated):
     types = program.types
     op = rows.op[row]
     left = rows.left[row]
@@ -2506,15 +2650,16 @@ def emit_row(lines, program, rows, clocks, row, gated):
     if op in (OP_TABLE, OP_PAIR, OP_BRANCH, OP_INPUT, OP_ARG) or op in (OP_COPY, OP_PREV) and types.kind[row_type] == KIND_ARRAY:
         return
     if gated:
-        load(lines, 9, f"_clk_{find(clocks, row)}", types, UINTEGER)
-        lines.append(f"    cbz w9, Lr{row}")
+        skip_row = new_label(code)
+        load(code, 9, labels.clk[find(clocks, row)], types, UINTEGER)
+        emit(code, CBZ_W, 9, target=skip_row)
     effect_kind = rows.effects.kind[rows.value[row]] if op == OP_EFFECT else None
     if op == OP_SEED and types.kind[row_type] == KIND_ARRAY:
         words = -(-types.size[row_type] * types.bytes[types.element[row_type]] // 8)
-        copy_words(lines, storage_key(rows, left), f"a{right}", words, f"Ls{row}")
+        copy_words(code, labels, storage_key(rows, left), f"a{right}", words)
     elif op == OP_SEED:
-        load_operand(lines, 9, types, rows, left)
-        store(lines, 9, f"_sig_{right}", types, row_type)
+        load_operand(code, labels, 9, types, rows, left)
+        store(code, 9, labels.sig + right, types, row_type)
     elif op == OP_EFFECT:
         operands = []
         argument = left
@@ -2523,138 +2668,192 @@ def emit_row(lines, program, rows, clocks, row, gated):
             argument = rows.right[argument]
         param = rows.effects.param[rows.value[row]]
         if effect_kind == "load":
-            load_operand(lines, 9, types, rows, operands[0])
-            lines.append(f"    {LOAD[types.bytes[param], types.signed[param]]}9, [x9]")
+            offset_form, _ = LOAD[types.bytes[param], types.signed[param]]
+            load_operand(code, labels, 9, types, rows, operands[0])
+            emit(code, offset_form, 9, 9, 0)
         elif effect_kind == "store":
-            load_operand(lines, 9, types, rows, operands[0])
-            load_operand(lines, 10, types, rows, operands[1])
-            lines.append(f"    {STORE[types.bytes[param]]}10, [x9]")
+            offset_form, _ = STORE[types.bytes[param]]
+            load_operand(code, labels, 9, types, rows, operands[0])
+            load_operand(code, labels, 10, types, rows, operands[1])
+            emit(code, offset_form, 10, 9, 0)
         elif effect_kind == "syscall":
             for register, operand in enumerate(operands[1:]):
-                load_operand(lines, register, types, rows, operand)
-            load_operand(lines, 16, types, rows, operands[0])
-            lines.append("    svc #0x80")
-            lines.append("    cneg x9, x0, cs")
+                load_operand(code, labels, register, types, rows, operand)
+            load_operand(code, labels, 16, types, rows, operands[0])
+            emit(code, SVC_80)
+            emit(code, CSNEG_X, 9, 0, 0, CC_HS ^ 1)
         else:
-            load_operand(lines, 0, types, rows, operands[0])
-            lines.append(f"    .inst 0x{param:08x}")
-            lines.append("    mov x9, x0")
+            load_operand(code, labels, 0, types, rows, operands[0])
+            emit(code, WORD, op2=param)
+            emit(code, ORR_X, 9, XZR, 0)
     elif op == OP_ITER:
-        element_size = types.bytes[row_type]
-        address(lines, 12, storage_key(rows, left))
-        lines.append(f"    {LOAD[element_size, types.signed[row_type]]}9, {element_operand(12, 23, element_size)}")
+        _, indexed_form = LOAD[types.bytes[row_type], types.signed[row_type]]
+        address(code, labels, 12, storage_key(rows, left))
+        emit(code, indexed_form, 9, 12, 23)
     elif op == OP_PREV:
-        load(lines, 9, f"_sig_{left}", types, row_type)
+        load(code, 9, labels.sig + left, types, row_type)
     elif op == OP_ELEMENT:
-        element_size = types.bytes[row_type]
-        address(lines, 12, storage_key(rows, left))
-        load_operand(lines, 10, types, rows, right)
-        load_immediate(lines, 11, types.size[rows.type[left]])
-        lines.append("    mov x9, #0")
-        lines.append("    cmp x10, x11")
-        lines.append(f"    b.hs Le{row}")
-        lines.append(f"    {LOAD[element_size, types.signed[row_type]]}9, {element_operand(12, 10, element_size)}")
-        lines.append(f"Le{row}:")
+        _, indexed_form = LOAD[types.bytes[row_type], types.signed[row_type]]
+        out_of_range = new_label(code)
+        address(code, labels, 12, storage_key(rows, left))
+        load_operand(code, labels, 10, types, rows, right)
+        load_immediate(code, 11, types.size[rows.type[left]])
+        emit(code, MOVZ_X, 9)
+        emit(code, SUBS_X, XZR, 10, 11)
+        emit(code, B_COND, op3=CC_HS, target=out_of_range)
+        emit(code, indexed_form, 9, 12, 10)
+        place(code, out_of_range)
     elif op == OP_GATHER:
         element = types.element[row_type]
         index_element = types.element[rows.type[right]]
-        address(lines, 12, storage_key(rows, left))
-        address(lines, 13, storage_key(rows, right))
-        address(lines, 14, f"a{rows.owner[row]}")
-        lines.append("    mov x15, #0")
-        lines.append(f"Lg{row}:")
-        lines.append(
-            f"    {LOAD[types.bytes[index_element], types.signed[index_element]]}10, "
-            f"{element_operand(13, 15, types.bytes[index_element])}"
-        )
-        lines.append("    mov x9, #0")
-        load_immediate(lines, 11, types.size[rows.type[left]])
-        lines.append("    cmp x10, x11")
-        lines.append(f"    b.hs Lgs{row}")
-        lines.append(f"    {LOAD[types.bytes[element], types.signed[element]]}9, {element_operand(12, 10, types.bytes[element])}")
-        lines.append(f"Lgs{row}:")
-        lines.append(f"    {STORE[types.bytes[element]]}9, {element_operand(14, 15, types.bytes[element])}")
-        lines.append("    add x15, x15, #1")
-        load_immediate(lines, 17, types.size[row_type])
-        lines.append("    cmp x15, x17")
-        lines.append(f"    b.lo Lg{row}")
+        _, index_form = LOAD[types.bytes[index_element], types.signed[index_element]]
+        _, element_form = LOAD[types.bytes[element], types.signed[element]]
+        _, store_form = STORE[types.bytes[element]]
+        gather = new_label(code)
+        out_of_range = new_label(code)
+        address(code, labels, 12, storage_key(rows, left))
+        address(code, labels, 13, storage_key(rows, right))
+        address(code, labels, 14, f"a{rows.owner[row]}")
+        emit(code, MOVZ_X, 15)
+        place(code, gather)
+        emit(code, index_form, 10, 13, 15)
+        emit(code, MOVZ_X, 9)
+        load_immediate(code, 11, types.size[rows.type[left]])
+        emit(code, SUBS_X, XZR, 10, 11)
+        emit(code, B_COND, op3=CC_HS, target=out_of_range)
+        emit(code, element_form, 9, 12, 10)
+        place(code, out_of_range)
+        emit(code, store_form, 9, 14, 15)
+        emit(code, ADD_X_IMM, 15, 15, 1)
+        load_immediate(code, 17, types.size[row_type])
+        emit(code, SUBS_X, XZR, 15, 17)
+        emit(code, B_COND, op3=CC_LO, target=gather)
     elif op == OP_NEXT:
         element = types.element[row_type]
+        _, store_form = STORE[types.bytes[element]]
+        out_of_range = new_label(code)
         destination = f"a{rows.owner[row]}"
         source = storage_key(rows, left)
         if source != destination:
-            copy_words(lines, source, destination, -(-types.size[row_type] * types.bytes[element] // 8), f"Lc{row}")
-        address(lines, 12, destination)
-        load_operand(lines, 10, types, rows, rows.left[right])
-        load_operand(lines, 9, types, rows, rows.right[right])
-        load_immediate(lines, 11, types.size[row_type])
-        lines.append("    cmp x10, x11")
-        lines.append(f"    b.hs Ln{row}")
-        lines.append(f"    {STORE[types.bytes[element]]}9, {element_operand(12, 10, types.bytes[element])}")
-        lines.append(f"Ln{row}:")
+            copy_words(code, labels, source, destination, -(-types.size[row_type] * types.bytes[element] // 8))
+        address(code, labels, 12, destination)
+        load_operand(code, labels, 10, types, rows, rows.left[right])
+        load_operand(code, labels, 9, types, rows, rows.right[right])
+        load_immediate(code, 11, types.size[row_type])
+        emit(code, SUBS_X, XZR, 10, 11)
+        emit(code, B_COND, op3=CC_HS, target=out_of_range)
+        emit(code, store_form, 9, 12, 10)
+        place(code, out_of_range)
     elif op == OP_CONST:
-        load_operand(lines, 9, types, rows, row)
+        load_operand(code, labels, 9, types, rows, row)
     elif op == OP_DELAY:
-        load(lines, 9, f"_mem_{row}", types, row_type)
+        load(code, 9, labels.mem[row], types, row_type)
     elif op in (OP_UWHEN, OP_CLOCK):
-        lines.append("    mov x9, #1")
+        emit(code, MOVZ_X, 9, 0, 1)
     elif op == OP_IF:
-        load_operand(lines, 9, types, rows, left)
-        load_operand(lines, 10, types, rows, rows.left[right])
-        load_operand(lines, 11, types, rows, rows.right[right])
-        lines.append("    cmp x9, #0")
-        lines.append("    csel x9, x10, x11, ne")
+        load_operand(code, labels, 9, types, rows, left)
+        load_operand(code, labels, 10, types, rows, rows.left[right])
+        load_operand(code, labels, 11, types, rows, rows.right[right])
+        emit(code, SUBS_X_IMM, XZR, 9, 0)
+        emit(code, CSEL_X, 9, 10, 11, CC_NE)
     elif op == OP_DEFAULT and not rows.ctx[left]:
-        load(lines, 11, f"_clk_{find(clocks, left)}", types, UINTEGER)
-        load_operand(lines, 9, types, rows, left)
-        load_operand(lines, 10, types, rows, right)
-        lines.append("    cmp w11, #0")
-        lines.append("    csel x9, x9, x10, ne")
+        load(code, 11, labels.clk[find(clocks, left)], types, UINTEGER)
+        load_operand(code, labels, 9, types, rows, left)
+        load_operand(code, labels, 10, types, rows, right)
+        emit(code, SUBS_W_IMM, XZR, 11, 0)
+        emit(code, CSEL_X, 9, 9, 10, CC_NE)
     else:
-        load_operand(lines, 9, types, rows, left)
+        load_operand(code, labels, 9, types, rows, left)
         if right >= 0 and op not in (OP_WHEN, OP_DEFAULT):
-            load_operand(lines, 10, types, rows, right)
+            load_operand(code, labels, 10, types, rows, right)
             operands_signed = types.signed[lub(types, rows.type[left], rows.type[right])]
         if op == OP_NEG:
-            lines.append("    neg x9, x9")
+            emit(code, SUB_X, 9, XZR, 9)
         elif op == OP_NOT and is_logical(types, row_type):
-            lines.append("    eor x9, x9, #1")
+            emit(code, EOR_X_ONE, 9, 9)
         elif op == OP_NOT:
-            lines.append("    mvn x9, x9")
+            emit(code, ORN_X, 9, XZR, 9)
         elif op in INSTRUCTIONS:
-            lines.append(f"    {INSTRUCTIONS[op]} x9, x9, x10")
+            emit(code, INSTRUCTIONS[op], 9, 9, 10)
         elif op == OP_DIV:
-            lines.append(f"    {'sdiv' if operands_signed else 'udiv'} x9, x9, x10")
+            emit(code, SDIV_X if operands_signed else UDIV_X, 9, 9, 10)
         elif op in SIGNED_CONDITIONS:
-            lines.append("    cmp x9, x10")
-            lines.append(f"    cset w9, {(SIGNED_CONDITIONS if operands_signed else UNSIGNED_CONDITIONS)[op]}")
+            emit(code, SUBS_X, XZR, 9, 10)
+            emit(code, CSINC_W, 9, XZR, XZR, (SIGNED_CONDITIONS if operands_signed else UNSIGNED_CONDITIONS)[op] ^ 1)
         elif op == OP_MOD and operands_signed:
-            lines.append("    sdiv x11, x9, x10")
-            lines.append("    msub x11, x11, x10, x9")
-            lines.append("    cmp x10, #0")
-            lines.append("    cneg x12, x10, lt")
-            lines.append("    add x12, x11, x12")
-            lines.append("    cmp x11, #0")
-            lines.append("    csel x9, x12, x11, lt")
+            emit(code, SDIV_X, 11, 9, 10)
+            emit(code, MSUB_X, 11, 11, 10, 9)
+            emit(code, SUBS_X_IMM, XZR, 10, 0)
+            emit(code, CSNEG_X, 12, 10, 10, CC_LT ^ 1)
+            emit(code, ADD_X, 12, 11, 12)
+            emit(code, SUBS_X_IMM, XZR, 11, 0)
+            emit(code, CSEL_X, 9, 12, 11, CC_LT)
         elif op == OP_MOD:
-            lines.append("    udiv x11, x9, x10")
-            lines.append("    msub x9, x11, x10, x9")
+            emit(code, UDIV_X, 11, 9, 10)
+            emit(code, MSUB_X, 9, 11, 10, 9)
         elif op in SHIFT_OPS:
-            lines.append("    cmp x10, #64")
-            lines.append(f"    {SHIFT_OPS[op]} x11, x9, x10")
-            lines.append("    csel x9, x11, xzr, lo")
+            emit(code, SUBS_X_IMM, XZR, 10, 64)
+            emit(code, SHIFT_OPS[op], 11, 9, 10)
+            emit(code, CSEL_X, 9, 11, XZR, CC_LO)
     if op not in (OP_GATHER, OP_NEXT, OP_SEED) and effect_kind != "store":
-        store(lines, 9, f"_sig_{row}", types, row_type)
+        store(code, 9, labels.sig + row, types, row_type)
     if gated:
-        lines.append(f"Lr{row}:")
+        place(code, skip_row)
 
 
-def emit_assembly(program, rows, clocks, loops, order, loop_orders):
+def emit_runtime(code, put_int, put_uint, put_bool):
+    digits = new_label(code)
+    reverse = new_label(code)
+    put_false = new_label(code)
+    place(code, put_int)
+    emit(code, SUBS_X_IMM, XZR, 0, 0)
+    emit(code, B_COND, op3=CC_GE, target=put_uint)
+    emit(code, MOVZ_W, 10, 0, 45)
+    emit(code, STRB_W_POST, 10, 20, 1)
+    emit(code, SUB_X, 0, XZR, 0)
+    place(code, put_uint)
+    emit(code, ORR_X, 9, XZR, 0)
+    emit(code, SUB_X_IMM, SP, SP, 32)
+    emit(code, ADD_X_IMM, 11, SP, 0)
+    emit(code, ADD_X_IMM, 15, SP, 0)
+    emit(code, MOVZ_X, 12, 0, 10)
+    place(code, digits)
+    emit(code, UDIV_X, 13, 9, 12)
+    emit(code, MSUB_X, 14, 13, 12, 9)
+    emit(code, ADD_W_IMM, 14, 14, 48)
+    emit(code, STRB_W_POST, 14, 11, 1)
+    emit(code, ORR_X, 9, XZR, 13)
+    emit(code, CBNZ_X, 9, target=digits)
+    place(code, reverse)
+    emit(code, LDRB_W_PRE, 14, 11, -1)
+    emit(code, STRB_W_POST, 14, 20, 1)
+    emit(code, SUBS_X, XZR, 11, 15)
+    emit(code, B_COND, op3=CC_NE, target=reverse)
+    emit(code, ADD_X_IMM, SP, SP, 32)
+    emit(code, RET)
+    place(code, put_bool)
+    emit(code, CBZ_W, 0, target=put_false)
+    emit(code, MOVZ_W, 9, 0, 0x7274)
+    emit(code, MOVK_W, 9, 0, 0x6575, 1)
+    emit(code, STR_W_POST, 9, 20, 4)
+    emit(code, RET)
+    place(code, put_false)
+    emit(code, MOVZ_W, 9, 0, 0x6166)
+    emit(code, MOVK_W, 9, 0, 0x736C, 1)
+    emit(code, STR_W_POST, 9, 20, 4)
+    emit(code, MOVZ_W, 9, 0, 101)
+    emit(code, STRB_W_POST, 9, 20, 1)
+    emit(code, RET)
+
+
+def emit_code(program, rows, clocks, loops, order, loop_orders):
     types = program.types
     row_count = len(rows.op)
     root_count = len(clocks.roots)
     inputs = [signal for signal, role in enumerate(program.signal_roles) if role == "input"]
     value_inputs = [signal for signal in inputs if types.kind[rows.type[signal]] != KIND_EVENT]
+    outputs = [i for i, role in enumerate(program.signal_roles) if role == "output"]
+    delays = [row for row in range(row_count) if rows.op[row] == OP_DELAY]
     reads_line = root_count >= 2 or bool(inputs)
     line_capacity = root_count + 22 * len(value_inputs)
     windows = []
@@ -2672,303 +2871,369 @@ def emit_assembly(program, rows, clocks, loops, order, loop_orders):
         reservation_bytes += window_bytes + WINDOW_BYTES
         if reservation_bytes >> 64:
             raise CompileError("arrays need more than 2^64 bytes of address space", rows.line[signal], rows.column[signal])
-    lines = [
-        "    .section __TEXT,__text,regular,pure_instructions",
-        "    .globl _start",
-        "    .p2align 2",
-        "_start:",
-        "    mov x22, #0",
-    ]
-    if windows:
-        lines.append("    mov x0, #0")
-        load_immediate(lines, 1, reservation_bytes)
-        lines.extend([
-            "    mov x2, #0",
-            "    mov x3, #0x1002",
-            "    mov x4, #-1",
-            "    mov x5, #0",
-            "    mov x16, #197",
-            "    svc #0x80",
-            "    b.cs Lreserve_failed",
-            "    mov x24, x0",
-        ])
-        for key, offset, window_bytes in windows:
-            load_immediate(lines, 9, offset)
-            lines.append("    add x0, x24, x9")
-            lines.append(f"    adrp x8, _addr_{key}@PAGE")
-            lines.append(f"    str x0, [x8, _addr_{key}@PAGEOFF]")
-            load_immediate(lines, 1, window_bytes)
-            lines.append("    mov x2, #3")
-            lines.append("    mov x16, #74")
-            lines.append("    svc #0x80")
-            lines.append("    b.cs Lreserve_failed")
-    lines.append("Lstep:")
-    lines.append("    add x22, x22, #1")
+    code = Code()
+    labels = Labels()
+    for table_type, values in zip(program.table_types, program.table_values):
+        element_size = types.bytes[types.element[table_type]]
+        element_mask = (1 << 8 * element_size) - 1
+        labels.table.append(data_item(code, 8, b"".join((value & element_mask).to_bytes(element_size, "little") for value in values)))
+    for key, _, _ in windows:
+        labels.window[key] = data_item(code, 8, bytes(8))
+    for row in range(row_count):
+        signal_label = data_item(code, 8, int(row in inputs and row not in value_inputs).to_bytes(8, "little"))
+        if row == 0:
+            labels.sig = signal_label
+    for row in delays:
+        labels.mem[row] = data_item(code, 8, (rows.value[row] & MASK64).to_bytes(8, "little"))
+    for clock, kind in enumerate(clocks.node_kind):
+        if kind is not None:
+            labels.clk[clock] = data_item(code, 4, bytes(4))
+    in_buffer = data_item(code, 1, bytes(line_capacity + 1))
+    out_buffer = data_item(code, 1, bytes(24 * (len(outputs) + 1)))
     if reads_line:
-        lines.extend([
-            "    adrp x21, _in_buffer@PAGE",
-            "    add x21, x21, _in_buffer@PAGEOFF",
-            "    mov x19, #0",
-            "Lread:",
-            "    mov x0, #0",
-            "    add x1, x21, x19",
-            "    mov x2, #1",
-            "    mov x16, #3",
-            "    svc #0x80",
-            "    b.cs Lmalformed",
-            "    cbnz x0, Lread_byte",
-            "    cbnz x19, Lmalformed",
-            "    mov x0, #0",
-            "    mov x16, #1",
-            "    svc #0x80",
-            "Lread_byte:",
-            "    ldrb w9, [x21, x19]",
-            "    cmp w9, #10",
-            "    b.eq Lread_line",
-            "    add x19, x19, #1",
-        ])
-        load_immediate(lines, 11, line_capacity)
-        lines.extend([
-            "    cmp x19, x11",
-            "    b.ls Lread",
-            "    b Lmalformed",
-            "Lread_line:",
-        ])
-        load_immediate(lines, 11, root_count)
-        lines.extend([
-            "    cmp x19, x11",
-            "    b.lo Lmalformed",
-            "    mov x19, #0",
-            "Lpresence:",
-            "    cmp x19, x11",
-            "    b.eq Lpresence_done",
-            "    ldrb w9, [x21, x19]",
-            "    sub w9, w9, #48",
-            "    cmp w9, #1",
-            "    b.hi Lmalformed",
-            "    add x19, x19, #1",
-            "    b Lpresence",
-            "Lpresence_done:",
-        ])
+        malformed_text = data_item(code, 1, b"presence input malformed at step ")
+    if windows:
+        reserve_text = data_item(code, 1, b"memory reservation failed\n")
+    malformed = new_label(code)
+    reserve_failed = new_label(code)
+    read_value = new_label(code)
+    put_int = new_label(code)
+    put_uint = new_label(code)
+    put_bool = new_label(code)
+    step = new_label(code)
+    emit(code, MOVZ_X, 22)
+    if windows:
+        emit(code, MOVZ_X, 0)
+        load_immediate(code, 1, reservation_bytes)
+        emit(code, MOVZ_X, 2)
+        emit(code, MOVZ_X, 3, 0, 0x1002)
+        emit(code, ORN_X, 4, XZR, XZR)
+        emit(code, MOVZ_X, 5)
+        emit(code, MOVZ_X, 16, 0, 197)
+        emit(code, SVC_80)
+        emit(code, B_COND, op3=CC_HS, target=reserve_failed)
+        emit(code, ORR_X, 24, XZR, 0)
+        for key, offset, window_bytes in windows:
+            load_immediate(code, 9, offset)
+            emit(code, ADD_X, 0, 24, 9)
+            emit(code, ADRP, 8, target=labels.window[key])
+            emit(code, STR_X, 0, 8, target=labels.window[key])
+            load_immediate(code, 1, window_bytes)
+            emit(code, MOVZ_X, 2, 0, 3)
+            emit(code, MOVZ_X, 16, 0, 74)
+            emit(code, SVC_80)
+            emit(code, B_COND, op3=CC_HS, target=reserve_failed)
+    if windows or value_inputs:
+        emit(code, B, target=step)
+    if windows:
+        place(code, reserve_failed)
+        emit(code, MOVZ_X, 0, 0, 2)
+        emit(code, ADRP, 1, target=reserve_text)
+        emit(code, ADD_X_IMM, 1, 1, target=reserve_text)
+        emit(code, MOVZ_X, 2, 0, 26)
+        emit(code, MOVZ_X, 16, 0, 4)
+        emit(code, SVC_80)
+        emit(code, MOVZ_X, 0, 0, 3)
+        emit(code, MOVZ_X, 16, 0, 1)
+        emit(code, SVC_80)
+    if value_inputs:
+        read_digits = new_label(code)
+        read_digit = new_label(code)
+        read_digits_end = new_label(code)
+        read_value_done = new_label(code)
+        place(code, read_value)
+        emit(code, LDRB_W_REG, 9, 21, 19)
+        emit(code, SUBS_W_IMM, XZR, 9, 32)
+        emit(code, B_COND, op3=CC_NE, target=malformed)
+        emit(code, ADD_X_IMM, 19, 19, 1)
+        emit(code, MOVZ_X, 11)
+        emit(code, LDRB_W_REG, 9, 21, 19)
+        emit(code, SUBS_W_IMM, XZR, 9, 45)
+        emit(code, B_COND, op3=CC_NE, target=read_digits)
+        emit(code, MOVZ_X, 11, 0, 1)
+        emit(code, ADD_X_IMM, 19, 19, 1)
+        place(code, read_digits)
+        emit(code, MOVZ_X, 0)
+        emit(code, MOVZ_X, 12)
+        emit(code, MOVZ_X, 13, 0, 10)
+        place(code, read_digit)
+        emit(code, LDRB_W_REG, 9, 21, 19)
+        emit(code, SUB_W_IMM, 9, 9, 48)
+        emit(code, SUBS_W_IMM, XZR, 9, 9)
+        emit(code, B_COND, op3=CC_HI, target=read_digits_end)
+        emit(code, UMULH_X, 14, 0, 13)
+        emit(code, CBNZ_X, 14, target=malformed)
+        emit(code, MUL_X, 0, 0, 13)
+        emit(code, ADDS_X, 0, 0, 9)
+        emit(code, B_COND, op3=CC_HS, target=malformed)
+        emit(code, ADD_X_IMM, 19, 19, 1)
+        emit(code, ADD_X_IMM, 12, 12, 1)
+        emit(code, B, target=read_digit)
+        place(code, read_digits_end)
+        emit(code, CBZ_X, 12, target=malformed)
+        emit(code, SUBS_X_IMM, XZR, 12, 20)
+        emit(code, B_COND, op3=CC_HI, target=malformed)
+        emit(code, CBZ_X, 11, target=read_value_done)
+        emit(code, SUB_X, 0, XZR, 0)
+        place(code, read_value_done)
+        emit(code, RET)
+    place(code, step)
+    emit(code, ADD_X_IMM, 22, 22, 1)
+    if reads_line:
+        read = new_label(code)
+        read_byte = new_label(code)
+        read_line = new_label(code)
+        presence = new_label(code)
+        presence_done = new_label(code)
+        read_done = new_label(code)
+        emit(code, ADRP, 21, target=in_buffer)
+        emit(code, ADD_X_IMM, 21, 21, target=in_buffer)
+        emit(code, MOVZ_X, 19)
+        place(code, read)
+        emit(code, MOVZ_X, 0)
+        emit(code, ADD_X, 1, 21, 19)
+        emit(code, MOVZ_X, 2, 0, 1)
+        emit(code, MOVZ_X, 16, 0, 3)
+        emit(code, SVC_80)
+        emit(code, B_COND, op3=CC_HS, target=malformed)
+        emit(code, CBNZ_X, 0, target=read_byte)
+        emit(code, CBNZ_X, 19, target=malformed)
+        emit(code, MOVZ_X, 0)
+        emit(code, MOVZ_X, 16, 0, 1)
+        emit(code, SVC_80)
+        place(code, read_byte)
+        emit(code, LDRB_W_REG, 9, 21, 19)
+        emit(code, SUBS_W_IMM, XZR, 9, 10)
+        emit(code, B_COND, op3=CC_EQ, target=read_line)
+        emit(code, ADD_X_IMM, 19, 19, 1)
+        load_immediate(code, 11, line_capacity)
+        emit(code, SUBS_X, XZR, 19, 11)
+        emit(code, B_COND, op3=CC_LS, target=read)
+        emit(code, B, target=malformed)
+        place(code, read_line)
+        load_immediate(code, 11, root_count)
+        emit(code, SUBS_X, XZR, 19, 11)
+        emit(code, B_COND, op3=CC_LO, target=malformed)
+        emit(code, MOVZ_X, 19)
+        place(code, presence)
+        emit(code, SUBS_X, XZR, 19, 11)
+        emit(code, B_COND, op3=CC_EQ, target=presence_done)
+        emit(code, LDRB_W_REG, 9, 21, 19)
+        emit(code, SUB_W_IMM, 9, 9, 48)
+        emit(code, SUBS_W_IMM, XZR, 9, 1)
+        emit(code, B_COND, op3=CC_HI, target=malformed)
+        emit(code, ADD_X_IMM, 19, 19, 1)
+        emit(code, B, target=presence)
+        place(code, presence_done)
         for signal in value_inputs:
             input_type = rows.type[signal]
-            lines.append(f"    ldrb w9, [x21, #{clocks.roots.index(clocks.node_root[find(clocks, signal)])}]")
-            lines.append("    cmp w9, #49")
-            lines.append(f"    b.ne Lin{signal}")
-            lines.append("    bl Lread_value")
+            absent_input = new_label(code)
+            load_immediate(code, 10, clocks.roots.index(clocks.node_root[find(clocks, signal)]))
+            emit(code, LDRB_W_REG, 9, 21, 10)
+            emit(code, SUBS_W_IMM, XZR, 9, 49)
+            emit(code, B_COND, op3=CC_NE, target=absent_input)
+            emit(code, BL, target=read_value)
             if types.kind[input_type] in (KIND_BOOLEAN, KIND_ENUM):
-                lines.append("    cbnz x11, Lmalformed")
-                load_immediate(lines, 12, 2 if types.kind[input_type] == KIND_BOOLEAN else len(types.values[input_type]))
-                lines.append("    cmp x0, x12")
-                lines.append("    b.hs Lmalformed")
-            store(lines, 0, f"_sig_{signal}", types, input_type)
-            lines.append(f"Lin{signal}:")
-        lines.extend([
-            "    ldrb w9, [x21, x19]",
-            "    cmp w9, #10",
-            "    b.eq Lread_done",
-            "Lmalformed:",
-            "    mov x0, #2",
-            "    adrp x1, Lmalformed_text@PAGE",
-            "    add x1, x1, Lmalformed_text@PAGEOFF",
-            "    mov x2, #33",
-            "    mov x16, #4",
-            "    svc #0x80",
-            "    adrp x20, _out_buffer@PAGE",
-            "    add x20, x20, _out_buffer@PAGEOFF",
-            "    mov x0, x22",
-            "    bl _rt_put_int",
-            "    mov w10, #10",
-            "    strb w10, [x20], #1",
-            "    mov x0, #2",
-            "    adrp x1, _out_buffer@PAGE",
-            "    add x1, x1, _out_buffer@PAGEOFF",
-            "    sub x2, x20, x1",
-            "    mov x16, #4",
-            "    svc #0x80",
-            "    mov x0, #2",
-            "    mov x16, #1",
-            "    svc #0x80",
-            "Lmalformed_text:",
-            '    .ascii "presence input malformed at step "',
-            "    .p2align 2",
-            "Lread_done:",
-        ])
+                emit(code, CBNZ_X, 11, target=malformed)
+                load_immediate(code, 12, 2 if types.kind[input_type] == KIND_BOOLEAN else len(types.values[input_type]))
+                emit(code, SUBS_X, XZR, 0, 12)
+                emit(code, B_COND, op3=CC_HS, target=malformed)
+            store(code, 0, labels.sig + signal, types, input_type)
+            place(code, absent_input)
+        emit(code, LDRB_W_REG, 9, 21, 19)
+        emit(code, SUBS_W_IMM, XZR, 9, 10)
+        emit(code, B_COND, op3=CC_EQ, target=read_done)
+        place(code, malformed)
+        emit(code, MOVZ_X, 0, 0, 2)
+        emit(code, ADRP, 1, target=malformed_text)
+        emit(code, ADD_X_IMM, 1, 1, target=malformed_text)
+        emit(code, MOVZ_X, 2, 0, 33)
+        emit(code, MOVZ_X, 16, 0, 4)
+        emit(code, SVC_80)
+        emit(code, ADRP, 20, target=out_buffer)
+        emit(code, ADD_X_IMM, 20, 20, target=out_buffer)
+        emit(code, ORR_X, 0, XZR, 22)
+        emit(code, BL, target=put_int)
+        emit(code, MOVZ_W, 10, 0, 10)
+        emit(code, STRB_W_POST, 10, 20, 1)
+        emit(code, MOVZ_X, 0, 0, 2)
+        emit(code, ADRP, 1, target=out_buffer)
+        emit(code, ADD_X_IMM, 1, 1, target=out_buffer)
+        emit(code, SUB_X, 2, 20, 1)
+        emit(code, MOVZ_X, 16, 0, 4)
+        emit(code, SVC_80)
+        emit(code, MOVZ_X, 0, 0, 2)
+        emit(code, MOVZ_X, 16, 0, 1)
+        emit(code, SVC_80)
+        place(code, read_done)
     loop_base = row_count + len(clocks.parent)
     for node in order:
         if node >= loop_base:
             loop = node - loop_base
-            load(lines, 9, f"_clk_{find(clocks, loops.index[loop])}", types, UINTEGER)
-            lines.append(f"    cbz w9, Lloop_end{loop}")
+            loop_start = new_label(code)
+            loop_end = new_label(code)
+            load(code, 9, labels.clk[find(clocks, loops.index[loop])], types, UINTEGER)
+            emit(code, CBZ_W, 9, target=loop_end)
             for row in range(row_count):
                 if rows.op[row] == OP_SEED and rows.loop[row] == loop:
-                    emit_row(lines, program, rows, clocks, row, False)
-            lines.append("    mov x23, #0")
-            lines.append(f"Lloop{loop}:")
+                    emit_row(code, labels, program, rows, clocks, row, False)
+            emit(code, MOVZ_X, 23)
+            place(code, loop_start)
             for signal in loops.snapshots[loop]:
                 signal_type = rows.type[signal]
                 words = -(-types.size[signal_type] * types.bytes[types.element[signal_type]] // 8)
-                copy_words(lines, f"a{signal}", f"p{signal}", words, f"Lp{loop}_{signal}")
+                copy_words(code, labels, f"a{signal}", f"p{signal}", words)
             for row in loop_orders[loop]:
-                emit_row(lines, program, rows, clocks, row, False)
-            lines.append("    add x23, x23, #1")
-            load_immediate(lines, 11, loops.size[loop])
-            lines.append("    cmp x23, x11")
-            lines.append(f"    b.lo Lloop{loop}")
-            lines.append(f"Lloop_end{loop}:")
+                emit_row(code, labels, program, rows, clocks, row, False)
+            emit(code, ADD_X_IMM, 23, 23, 1)
+            load_immediate(code, 11, loops.size[loop])
+            emit(code, SUBS_X, XZR, 23, 11)
+            emit(code, B_COND, op3=CC_LO, target=loop_start)
+            place(code, loop_end)
             continue
         if node >= row_count:
             clock = node - row_count
             kind = clocks.node_kind[clock]
             if kind == ROOT and reads_line:
-                lines.append(f"    ldrb w9, [x21, #{clocks.roots.index(clock)}]")
-                lines.append("    cmp w9, #49")
-                lines.append("    cset w9, eq")
+                load_immediate(code, 10, clocks.roots.index(clock))
+                emit(code, LDRB_W_REG, 9, 21, 10)
+                emit(code, SUBS_W_IMM, XZR, 9, 49)
+                emit(code, CSINC_W, 9, XZR, XZR, CC_EQ ^ 1)
             elif kind == ROOT:
-                lines.append("    mov w9, #1")
+                emit(code, MOVZ_W, 9, 0, 1)
             elif kind == SAMPLE:
-                load(lines, 9, f"_clk_{clocks.node_parent[clock]}", types, UINTEGER)
-                load_operand(lines, 10, types, rows, clocks.node_left[clock])
-                lines.append("    and w9, w9, w10")
+                load(code, 9, labels.clk[clocks.node_parent[clock]], types, UINTEGER)
+                load_operand(code, labels, 10, types, rows, clocks.node_left[clock])
+                emit(code, AND_W, 9, 9, 10)
             else:
-                load(lines, 9, f"_clk_{clocks.node_left[clock]}", types, UINTEGER)
-                load(lines, 10, f"_clk_{clocks.node_right[clock]}", types, UINTEGER)
-                lines.append(f"    {'and' if kind == PRODUCT else 'orr'} w9, w9, w10")
-            store(lines, 9, f"_clk_{clock}", types, UINTEGER)
+                load(code, 9, labels.clk[clocks.node_left[clock]], types, UINTEGER)
+                load(code, 10, labels.clk[clocks.node_right[clock]], types, UINTEGER)
+                emit(code, AND_W if kind == PRODUCT else ORR_W, 9, 9, 10)
+            store(code, 9, labels.clk[clock], types, UINTEGER)
             continue
-        emit_row(lines, program, rows, clocks, node, True)
-    delays = [row for row in range(row_count) if rows.op[row] == OP_DELAY]
+        emit_row(code, labels, program, rows, clocks, node, True)
     for row in delays:
-        load(lines, 9, f"_clk_{find(clocks, row)}", types, UINTEGER)
-        lines.append(f"    cbz w9, Ld{row}")
-        load(lines, 9, f"_sig_{rows.left[row]}", types, rows.type[row])
-        store(lines, 9, f"_mem_{row}", types, rows.type[row])
-        lines.append(f"Ld{row}:")
-    outputs = [i for i, role in enumerate(program.signal_roles) if role == "output"]
+        absent_delay = new_label(code)
+        load(code, 9, labels.clk[find(clocks, row)], types, UINTEGER)
+        emit(code, CBZ_W, 9, target=absent_delay)
+        load(code, 9, labels.sig + rows.left[row], types, rows.type[row])
+        store(code, 9, labels.mem[row], types, rows.type[row])
+        place(code, absent_delay)
     if outputs:
-        lines.append("    adrp x20, _out_buffer@PAGE")
-        lines.append("    add x20, x20, _out_buffer@PAGEOFF")
+        emit(code, ADRP, 20, target=out_buffer)
+        emit(code, ADD_X_IMM, 20, 20, target=out_buffer)
         for position, signal in enumerate(outputs):
+            absent_output = new_label(code)
+            output_done = new_label(code)
             if position:
-                lines.append("    mov w10, #32")
-                lines.append("    strb w10, [x20], #1")
-            load(lines, 9, f"_clk_{find(clocks, signal)}", types, UINTEGER)
-            lines.append(f"    cbz w9, Labsent{signal}")
+                emit(code, MOVZ_W, 10, 0, 32)
+                emit(code, STRB_W_POST, 10, 20, 1)
+            load(code, 9, labels.clk[find(clocks, signal)], types, UINTEGER)
+            emit(code, CBZ_W, 9, target=absent_output)
             signal_type = rows.type[signal]
-            load(lines, 0, f"_sig_{signal}", types, signal_type)
+            load(code, 0, labels.sig + signal, types, signal_type)
             if is_logical(types, signal_type):
-                lines.append("    bl _rt_put_bool")
+                emit(code, BL, target=put_bool)
             else:
-                lines.append(f"    bl {'_rt_put_int' if types.signed[signal_type] else '_rt_put_uint'}")
-            lines.append(f"    b Lput{signal}")
-            lines.append(f"Labsent{signal}:")
-            lines.append("    mov w10, #45")
-            lines.append("    strb w10, [x20], #1")
-            lines.append(f"Lput{signal}:")
-        lines.append("    mov w10, #10")
-        lines.append("    strb w10, [x20], #1")
-        lines.append("    adrp x1, _out_buffer@PAGE")
-        lines.append("    add x1, x1, _out_buffer@PAGEOFF")
-        lines.append("    sub x2, x20, x1")
-        lines.append("    mov x0, #1")
-        lines.append("    mov x16, #4")
-        lines.append("    svc #0x80")
-    lines.append("    b Lstep")
-    if windows:
-        lines.extend([
-            "Lreserve_failed:",
-            "    mov x0, #2",
-            "    adrp x1, Lreserve_text@PAGE",
-            "    add x1, x1, Lreserve_text@PAGEOFF",
-            "    mov x2, #26",
-            "    mov x16, #4",
-            "    svc #0x80",
-            "    mov x0, #3",
-            "    mov x16, #1",
-            "    svc #0x80",
-            "Lreserve_text:",
-            '    .ascii "memory reservation failed\\n"',
-        ])
-    if value_inputs:
-        lines.extend([
-            "    .p2align 2",
-            "Lread_value:",
-            "    ldrb w9, [x21, x19]",
-            "    cmp w9, #32",
-            "    b.ne Lmalformed",
-            "    add x19, x19, #1",
-            "    mov x11, #0",
-            "    ldrb w9, [x21, x19]",
-            "    cmp w9, #45",
-            "    b.ne Lread_digits",
-            "    mov x11, #1",
-            "    add x19, x19, #1",
-            "Lread_digits:",
-            "    mov x0, #0",
-            "    mov x12, #0",
-            "    mov x13, #10",
-            "Lread_digit:",
-            "    ldrb w9, [x21, x19]",
-            "    sub w9, w9, #48",
-            "    cmp w9, #9",
-            "    b.hi Lread_digits_end",
-            "    umulh x14, x0, x13",
-            "    cbnz x14, Lmalformed",
-            "    mul x0, x0, x13",
-            "    adds x0, x0, x9",
-            "    b.cs Lmalformed",
-            "    add x19, x19, #1",
-            "    add x12, x12, #1",
-            "    b Lread_digit",
-            "Lread_digits_end:",
-            "    cbz x12, Lmalformed",
-            "    cmp x12, #20",
-            "    b.hi Lmalformed",
-            "    cbz x11, Lread_value_done",
-            "    neg x0, x0",
-            "Lread_value_done:",
-            "    ret",
-        ])
-    lines.append(RUNTIME_ASSEMBLY)
-    lines.append("    .section __DATA,__data")
-    for table, (table_type, values) in enumerate(zip(program.table_types, program.table_values)):
-        element_size = types.bytes[types.element[table_type]]
-        lines.append("    .p2align 3")
-        lines.append(f"_tab_{table}:")
-        for start in range(0, len(values), 16):
-            chunk = values[start:start + 16]
-            lines.append(f"    {DATA_DIRECTIVES[element_size]} " + ", ".join(str(v & ((1 << 8 * element_size) - 1)) for v in chunk))
-    lines.append("    .p2align 3")
-    for table in range(len(program.table_types)):
-        lines.append(f"_addr_t{table}: .quad _tab_{table}")
-    for key, _, _ in windows:
-        lines.append(f"_addr_{key}: .quad 0")
-    for row in range(row_count):
-        lines.append(f"_sig_{row}: .quad {int(row in inputs and row not in value_inputs)}")
-    for row in delays:
-        lines.append(f"_mem_{row}: .quad {rows.value[row] & MASK64}")
-    for clock, kind in enumerate(clocks.node_kind):
-        if kind is not None:
-            lines.append(f"_clk_{clock}: .long 0")
-    lines.append(f"_in_buffer: .space {line_capacity + 1}")
-    lines.append(f"_out_buffer: .space {24 * (len(outputs) + 1)}")
-    return "\n".join(lines) + "\n"
+                emit(code, BL, target=put_int if types.signed[signal_type] else put_uint)
+            emit(code, B, target=output_done)
+            place(code, absent_output)
+            emit(code, MOVZ_W, 10, 0, 45)
+            emit(code, STRB_W_POST, 10, 20, 1)
+            place(code, output_done)
+        emit(code, MOVZ_W, 10, 0, 10)
+        emit(code, STRB_W_POST, 10, 20, 1)
+        emit(code, ADRP, 1, target=out_buffer)
+        emit(code, ADD_X_IMM, 1, 1, target=out_buffer)
+        emit(code, SUB_X, 2, 20, 1)
+        emit(code, MOVZ_X, 0, 0, 1)
+        emit(code, MOVZ_X, 16, 0, 4)
+        emit(code, SVC_80)
+    emit(code, B, target=step)
+    emit_runtime(code, put_int, put_uint, put_bool)
+    return code
 
 
-def link(assembly, output):
-    object_path = output.with_suffix(".o")
-    assembly_path = output.with_suffix(".s")
-    assembly_path.write_text(assembly)
-    sdk = subprocess.run(["xcrun", "--show-sdk-path"], capture_output=True, text=True, check=True).stdout.strip()
-    steps = [
-        ["as", "-arch", "arm64", str(assembly_path), "-o", str(object_path)],
-        ["ld", "-arch", "arm64", "-e", "_start", "-syslibroot", sdk, "-lSystem", str(object_path), "-o", str(output)],
-    ]
-    for step in steps:
-        result = subprocess.run(step, capture_output=True, text=True)
-        if result.returncode != 0:
-            sys.stderr.write(result.stderr)
-            raise SystemExit(f"{step[0]} failed with exit {result.returncode}")
+def segment(name, vmaddr, vmsize, fileoff, filesize, protection):
+    return struct.pack("<II16sQQQQiiII", 0x19, 72, name, vmaddr, vmsize, fileoff, filesize, protection, protection, 0, 0)
+
+
+def code_signature(image):
+    pages = -(-len(image) // SIGNATURE_PAGE_BYTES)
+    hash_offset = CODE_DIRECTORY_HEADER_BYTES + 1
+    directory_bytes = hash_offset + HASH_BYTES * pages
+    hashes = b"".join(
+        hashlib.sha256(image[page * SIGNATURE_PAGE_BYTES:(page + 1) * SIGNATURE_PAGE_BYTES]).digest() for page in range(pages)
+    )
+    return (
+        struct.pack(">IIIII", 0xFADE0CC0, SUPERBLOB_HEADER_BYTES + directory_bytes, 1, 0, SUPERBLOB_HEADER_BYTES)
+        + struct.pack(
+            ">IIIIIIIIIBBBBII",
+            0xFADE0C02,
+            directory_bytes,
+            0x20100,
+            0x2,
+            hash_offset,
+            CODE_DIRECTORY_HEADER_BYTES,
+            0,
+            pages,
+            len(image),
+            HASH_BYTES,
+            2,
+            0,
+            SIGNATURE_PAGE_BYTES.bit_length() - 1,
+            0,
+            0,
+        )
+        + b"\0"
+        + hashes
+    )
+
+
+def write_executable(code, output):
+    text_bytes = -(-(TEXT_OFFSET + 4 * len(code.form)) // SEGMENT_BYTES) * SEGMENT_BYTES
+    data_bytes = -(-len(code.data) // SEGMENT_BYTES) * SEGMENT_BYTES
+    signed_bytes = text_bytes + data_bytes
+    signature_bytes = SUPERBLOB_HEADER_BYTES + CODE_DIRECTORY_HEADER_BYTES + 1 + HASH_BYTES * (signed_bytes // SIGNATURE_PAGE_BYTES)
+    image = bytearray(
+        struct.pack("<IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 2, 7, COMMAND_BYTES, 0x00200004, 0)
+        + segment(b"__PAGEZERO", 0, MACHO_BASE, 0, 0, 0)
+        + segment(b"__TEXT", MACHO_BASE, text_bytes, 0, text_bytes, 5)
+        + segment(b"__DATA", MACHO_BASE + text_bytes, data_bytes, text_bytes, data_bytes, 3)
+        + segment(
+            b"__LINKEDIT",
+            MACHO_BASE + signed_bytes,
+            -(-signature_bytes // SEGMENT_BYTES) * SEGMENT_BYTES,
+            signed_bytes,
+            signature_bytes,
+            1,
+        )
+        + struct.pack("<III20s", 0xE, 32, 12, b"/usr/lib/dyld")
+        + struct.pack("<IIQQ", 0x80000028, 24, TEXT_OFFSET, 0)
+        + struct.pack("<IIII", 0x1D, 16, signed_bytes, signature_bytes)
+    )
+    image += encode(code, MACHO_BASE + TEXT_OFFSET, MACHO_BASE + text_bytes)
+    image += bytes(text_bytes - len(image))
+    image += code.data
+    image += bytes(signed_bytes - len(image))
+    staged = output.with_name(f".{output.name}.{os.getpid()}")
+    try:
+        staged.write_bytes(bytes(image) + code_signature(bytes(image)))
+        staged.chmod(0o755)
+        staged.replace(output)
+    except OSError as error:
+        staged.unlink(missing_ok=True)
+        raise OSError(error.errno, error.strerror, str(output)) from error
+
+
+def compile_source(text):
+    program = instantiate(Parser(lex(text)).parse_program())
+    rows, loops = lower(program)
+    clocks = clock_calculus(rows, program, loops)
+    order, loop_orders = schedule(program, rows, clocks, loops)
+    code = emit_code(program, rows, clocks, loops, order, loop_orders)
+    root_names = [clock_name(clocks, rows, program, root) for root in clocks.roots] if len(clocks.roots) >= 2 else []
+    return code, root_names
 
 
 def main():
@@ -2977,14 +3242,10 @@ def main():
     arguments.add_argument("-o", "--output", type=Path, required=True)
     options = arguments.parse_args()
     try:
-        program = instantiate(Parser(lex(options.source.read_text())).parse_program())
-        rows, loops = lower(program)
-        clocks = clock_calculus(rows, program, loops)
-        order, loop_orders = schedule(program, rows, clocks, loops)
-        assembly = emit_assembly(program, rows, clocks, loops, order, loop_orders)
-        link(assembly, options.output)
-        if len(clocks.roots) >= 2:
-            print("presence inputs: " + ", ".join(clock_name(clocks, rows, program, root) for root in clocks.roots))
+        code, root_names = compile_source(options.source.read_text())
+        write_executable(code, options.output)
+        if root_names:
+            print("presence inputs: " + ", ".join(root_names))
     except CompileError as error:
         sys.stderr.write(f"{options.source}:{error.line}:{error.column}: error: {error}\n")
         return 1

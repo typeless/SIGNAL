@@ -19,6 +19,7 @@ def compile_case(source, executable):
         capture_output=True,
         text=True,
         timeout=COMPILE_TIMEOUT_SECONDS,
+        env={"PATH": ""},
     )
 
 
