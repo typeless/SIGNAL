@@ -1,0 +1,1 @@
+effect_in_if.sig:5:46: error: load cannot be inside an if; gate it by its clock or its inputs

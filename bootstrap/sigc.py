@@ -1795,6 +1795,18 @@ def flatten(rows, program, indices, ops, args, owner, line, column, loop, loops)
                 if not is_logical(types, left_type):
                     raise CompileError("the condition of if must be boolean", line, column)
                 row_type = right_type
+                arm_rows = [right]
+                while arm_rows:
+                    arm_row = arm_rows.pop()
+                    if arm_row < len(program.signal_names):
+                        continue
+                    if rows.op[arm_row] == OP_EFFECT:
+                        raise CompileError(
+                            f"{rows.effects.kind[rows.value[arm_row]]} cannot be inside an if; gate it by its clock or its inputs",
+                            rows.line[arm_row],
+                            rows.column[arm_row],
+                        )
+                    arm_rows.extend(operand for operand in (rows.left[arm_row], rows.right[arm_row]) if operand >= 0)
             elif op == OP_CALL:
                 op = OP_CONVERT
                 row_type = types.name.index(arg[2])
@@ -2043,7 +2055,7 @@ def lower(program):
         for reader in range(len(rows.op)):
             if reader != writer and previous in (rows.left[reader], rows.right[reader]):
                 rows.war.append((reader, writer, signal))
-    ranges = {signal for signal in range(len(names)) if rows.op[rows.left[signal]] == OP_RANGE}
+    ranges = {signal for signal in range(len(names)) if rows.left[signal] >= 0 and rows.op[rows.left[signal]] == OP_RANGE}
     for row, op in enumerate(rows.op):
         if op != OP_ITER and (rows.left[row] in ranges or rows.right[row] in ranges):
             raise CompileError("a range can only be the index of iterate", rows.line[row], rows.column[row])
@@ -3131,10 +3143,10 @@ def emit_code(program, rows, clocks, loops, order, loop_orders):
             count = loops.count[loop]
             if count >= 0:
                 load_operand(code, labels, 11, types, rows, count)
-                emit(code, ADD_X_IMM, 11, 11, 1)
-                load_immediate(code, 12, loops.size[loop])
+                load_immediate(code, 12, loops.size[loop] - 1)
                 emit(code, SUBS_X, XZR, 11, 12)
-                emit(code, CSEL_X, 11, 11, 12, CC_LT)
+                emit(code, CSEL_X, 11, 11, 12, CC_LT if types.signed[rows.type[count]] else CC_LO)
+                emit(code, ADD_X_IMM, 11, 11, 1)
                 emit(code, SUBS_X, XZR, 23, 11)
                 emit(code, B_COND, op3=CC_GE, target=loop_end)
             place(code, loop_start)
@@ -3147,10 +3159,10 @@ def emit_code(program, rows, clocks, loops, order, loop_orders):
             emit(code, ADD_X_IMM, 23, 23, 1)
             if count >= 0:
                 load_operand(code, labels, 11, types, rows, count)
-                emit(code, ADD_X_IMM, 11, 11, 1)
-                load_immediate(code, 12, loops.size[loop])
+                load_immediate(code, 12, loops.size[loop] - 1)
                 emit(code, SUBS_X, XZR, 11, 12)
-                emit(code, CSEL_X, 11, 11, 12, CC_LT)
+                emit(code, CSEL_X, 11, 11, 12, CC_LT if types.signed[rows.type[count]] else CC_LO)
+                emit(code, ADD_X_IMM, 11, 11, 1)
             else:
                 load_immediate(code, 11, loops.size[loop])
             emit(code, SUBS_X, XZR, 23, 11)
