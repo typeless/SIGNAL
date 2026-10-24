@@ -8,7 +8,7 @@ CASES = ROOT / "tests" / "cases"
 DUMP = ROOT / "tests" / "dump.py"
 STAGE0 = ROOT / "bootstrap" / "sigc.py"
 BUILD = ROOT / "build" / "m4"
-PASS_NUMBERS = {"tokens": 1}
+PASS_NUMBERS = {"tokens": 1, "program": 2}
 DUMP_PASS_LINE = "constant integer DUMP_PASS = 0;"
 COMPILE_TIMEOUT_SECONDS = 60
 
