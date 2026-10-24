@@ -1,0 +1,1 @@
+string_count.sig:6:24: error: constant WORD has type [3] ubyte but its definition has 4 elements

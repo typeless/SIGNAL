@@ -149,7 +149,8 @@ TOKEN_PATTERN = re.compile(
     r"|(?P<comment>%[^%]*%)"
     r"|(?P<number>\d+)"
     r"|(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
-    r"|(?P<symbol>\(\||\|\)|-->|::|:=|\^=|/=|<=|>=|[|$+\-*/()=;,?!<>^#\[\]:{}])",
+    r'|(?P<string>"[^"\n]*")'
+    r"|(?P<symbol>\(\||\|\)|-->|::|:=|\^=|/=|<=|>=|\.\.|[|$+\-*/()=;,?!<>^#\[\]:{}])",
     re.ASCII,
 )
 
@@ -196,6 +197,7 @@ OP_IF = "IF"
 OP_BRANCH = "BRANCH"
 OP_EFFECT = "EFFECT"
 OP_ARG = "ARG"
+OP_RANGE = "RANGE"
 DEFINE = "DEFINE"
 SEED = "SEED"
 
@@ -203,13 +205,13 @@ BINARY_OPS = {
     "default": OP_DEFAULT, "when": OP_WHEN, "xor": OP_XOR, "or": OP_OR, "and": OP_AND,
     "=": OP_EQ, "/=": OP_NE, "<": OP_LT, "<=": OP_LE, ">": OP_GT, ">=": OP_GE,
     "+": OP_ADD, "-": OP_SUB, "*": OP_MUL, "/": OP_DIV, "modulo": OP_MOD, "shl": OP_SHL, "shr": OP_SHR,
-    "next": OP_NEXT, ":": OP_PAIR,
+    "next": OP_NEXT, ":": OP_PAIR, "..": OP_RANGE,
 }
 BINARY_PRECEDENCE = {
     "default": 3, "when": 4, "xor": 11, "or": 12, "and": 13,
     "=": 16, "/=": 16, "<": 16, "<=": 16, ">": 16, ">=": 16,
     "+": 17, "-": 17, "*": 18, "/": 18, "modulo": 18, "shl": 18, "shr": 18,
-    "next": 1, ":": 2,
+    "next": 1, ":": 2, "..": 1,
 }
 OPENERS = {"(", "[", OP_CALL, "if", "then"}
 MISSING_KEYWORD = {"if": "expected 'then'", "then": "expected 'else'"}
@@ -228,7 +230,7 @@ EQUALITY_OPS = {OP_EQ, OP_NE}
 LOGIC_OPS = {OP_AND, OP_OR, OP_XOR, OP_NOT}
 SHIFT_OPS = {OP_SHL: LSLV_X, OP_SHR: LSRV_X}
 MONOCHRONOUS_OPS = INTEGER_OPS | ORDER_OPS | EQUALITY_OPS | LOGIC_OPS | set(SHIFT_OPS) | {
-    OP_CONVERT, OP_ELEMENT, OP_GATHER, OP_PAIR, OP_NEXT, OP_PREV, OP_ITER, OP_IF, OP_BRANCH, OP_ARG,
+    OP_CONVERT, OP_ELEMENT, OP_GATHER, OP_PAIR, OP_NEXT, OP_PREV, OP_ITER, OP_IF, OP_BRANCH, OP_ARG, OP_RANGE,
 }
 UNARY_OPS = {OP_NEG, OP_NOT, OP_UWHEN, OP_CLOCK, OP_DELAY, OP_CALL, OP_PREV}
 INSTRUCTIONS = {OP_ADD: ADD_X, OP_SUB: SUB_X, OP_MUL: MUL_X, OP_AND: AND_X, OP_OR: ORR_X, OP_XOR: EOR_X}
@@ -449,6 +451,7 @@ class Loops:
     size: list = field(default_factory=list)
     defined: list = field(default_factory=list)
     snapshots: list = field(default_factory=list)
+    count: list = field(default_factory=list)
 
 
 @dataclass
@@ -1007,7 +1010,12 @@ class Parser:
             if self.is_declared(name) or name in program.signal_names or any(name in labels for labels in program.models.labels):
                 raise self.clash("constant", name, line, column)
             self.expect("=")
-            if self.peek() == "[":
+            if self.tokens.kinds[self.index] == "string":
+                if not is_array or types.element[constant_type] != UBYTE:
+                    raise CompileError(f"constant {name} has type {type_text} but its definition is a string", line, column)
+                values = self.peek()[1:-1].encode()
+                self.index += 1
+            elif self.peek() == "[":
                 if not is_array:
                     raise CompileError(f"constant {name} has type {type_text} but its definition is a list", line, column)
                 self.index += 1
@@ -1026,13 +1034,6 @@ class Parser:
                         break
                     self.index += 1
                 self.expect("]")
-                if len(values) != types.size[constant_type]:
-                    raise CompileError(
-                        f"constant {name} has type {type_text} but its definition has {len(values)} elements", line, column
-                    )
-                constant_value = len(program.table_types)
-                program.table_types.append(constant_type)
-                program.table_values.append(tuple(values))
             else:
                 constant_value, value_type = self.parse_integer_constant()
                 if is_array or not subtype(types, value_type, constant_type):
@@ -1041,6 +1042,14 @@ class Parser:
                         line,
                         column,
                     )
+            if is_array:
+                if len(values) != types.size[constant_type]:
+                    raise CompileError(
+                        f"constant {name} has type {type_text} but its definition has {len(values)} elements", line, column
+                    )
+                constant_value = len(program.table_types)
+                program.table_types.append(constant_type)
+                program.table_values.append(tuple(values))
             program.constant_names.append(name)
             program.constant_types.append(constant_type)
             program.constant_values.append(constant_value)
@@ -1158,7 +1167,7 @@ class Parser:
         program = self.program
         line, column = self.position()
         follower = self.tokens.texts[self.index + 1] if self.tokens.kinds[self.index] == "name" else None
-        if loop >= 0 and follower != ":=":
+        if loop >= 0 and follower != ":=" and not (kind == DEFINE and follower in ("{", "(")):
             self.fail("only definitions are allowed inside iterate")
         if follower == "-->":
             previous = (self.expect_name(), line, column)
@@ -1428,6 +1437,7 @@ def instantiate(source):
                 args = source.equation_args[item]
                 target = source.equation_targets[item]
                 loop = source.equation_loops[item]
+                seed = source.equation_kinds[item] == SEED
                 labels = instance_labels[instance] + tuple(prefix + label for label in source.equation_labels[item])
                 guards = instance_guards[instance] + tuple(
                     prefix + source.guard_signals[guard] for guard in source.equation_guards[item]
@@ -1438,6 +1448,7 @@ def instantiate(source):
                 ops, args = source.constraint_groups[item][member]
                 target = ""
                 loop = -1
+                seed = False
                 labels = instance_labels[instance]
                 guards = instance_guards[instance] + tuple(
                     prefix + source.guard_signals[guard] for guard in source.constraint_guards[item]
@@ -1472,7 +1483,7 @@ def instantiate(source):
                             raise CompileError(message, line, column)
                     elif name in BUILTINS:
                         _, input_count, has_output = BUILTINS[name]
-                        if loop >= 0:
+                        if loop >= 0 and (seed or name not in ("load", "store")):
                             raise CompileError("model calls are not allowed inside iterate", line, column)
                         if count != input_count:
                             raise CompileError(
@@ -1700,12 +1711,12 @@ def flatten(rows, program, indices, ops, args, owner, line, column, loop, loops)
                 left = stack.pop()
             left_type = rows.type[left]
             right_type = rows.type[right] if right >= 0 else left_type
-            if loop >= 0 and op in (OP_WHEN, OP_UWHEN, OP_DEFAULT, OP_DELAY, OP_CLOCK):
+            if loop >= 0 and op in (OP_WHEN, OP_UWHEN, OP_DEFAULT, OP_DELAY, OP_CLOCK, OP_RANGE):
                 raise CompileError(f"operator {OP_TEXT[op]} is not allowed inside iterate", line, column)
             for operand in (left, right):
                 if operand >= 0 and rows.op[operand] == OP_PAIR and not (op == OP_NEXT and operand == right):
                     raise CompileError("':' is supported only as the right operand of next", rows.line[operand], rows.column[operand])
-                if operand >= 0 and rows.op[operand] in (OP_GATHER, OP_NEXT):
+                if operand >= 0 and rows.op[operand] in (OP_GATHER, OP_NEXT, OP_RANGE):
                     raise CompileError("an array value can only be the whole definition of a signal", line, column)
             array_operand = KIND_ARRAY in (types.kind[left_type], types.kind[right_type])
             if op == OP_PREV:
@@ -1734,7 +1745,13 @@ def flatten(rows, program, indices, ops, args, owner, line, column, loop, loops)
                 continue
             if op in (OP_INDEX, OP_NEXT) and types.kind[left_type] != KIND_ARRAY:
                 raise CompileError("indexing a value that is not an array", line, column)
-            if op == OP_PREV:
+            if op == OP_RANGE:
+                if rows.op[left] != OP_CONST or rows.value[left] != 0 or not is_integer(types, left_type):
+                    raise CompileError("a range must start at 0", line, column)
+                if not is_integer(types, right_type):
+                    raise CompileError("the bound of a range must be an integer", line, column)
+                row_type = left_type
+            elif op == OP_PREV:
                 row_type = left_type
             elif op == OP_INDEX and types.kind[right_type] == KIND_ARRAY:
                 if not is_integer(types, types.element[right_type]):
@@ -1900,7 +1917,7 @@ def lower(program):
         loops.defined.append(set())
     for equation, target in enumerate(program.equation_targets):
         loop = program.equation_loops[equation]
-        if loop < 0 or program.equation_kinds[equation] != DEFINE:
+        if loop < 0 or program.equation_kinds[equation] != DEFINE or target is None:
             continue
         line, column = program.equation_positions[equation]
         if target == program.loop_names[loop]:
@@ -1957,6 +1974,10 @@ def lower(program):
             if rows.left[signal] >= 0:
                 raise CompileError(f"signal {target} is defined twice", line, column)
             top = flatten(rows, program, indices, ops, args, signal, line, column, loop, loops)
+            if rows.op[top] == OP_RANGE:
+                if program.types.kind[types[signal]] != KIND_ARRAY or not is_integer(program.types, program.types.element[types[signal]]):
+                    raise CompileError("a range defines an array of integers", line, column)
+                rows.type[top] = types[signal]
             if not subtype(program.types, rows.type[top], types[signal]):
                 raise CompileError(
                     f"signal {target} has type {program.types.name[types[signal]]} "
@@ -1964,7 +1985,7 @@ def lower(program):
                     line,
                     column,
                 )
-            if program.types.kind[types[signal]] == KIND_ARRAY and rows.op[top] not in (OP_TABLE, OP_GATHER, OP_NEXT):
+            if program.types.kind[types[signal]] == KIND_ARRAY and rows.op[top] not in (OP_TABLE, OP_GATHER, OP_NEXT, OP_RANGE):
                 raise CompileError("an array signal must be defined by a constant, indices, a gather, or next", line, column)
             rows.left[signal] = top
             rows.line[signal] = line
@@ -1985,7 +2006,7 @@ def lower(program):
     for group, (line, column), guards in zip(program.constraint_groups, program.constraint_positions, program.constraint_guards):
         members = [flatten(rows, program, indices, ops, args, -1, line, column, -1, loops) for ops, args in group]
         rows.guard.extend([indices[guards[-1]] if guards else -1] * (len(rows.op) - len(rows.guard)))
-        if any(rows.op[member] in (OP_GATHER, OP_NEXT) for member in members):
+        if any(rows.op[member] in (OP_GATHER, OP_NEXT, OP_RANGE) for member in members):
             raise CompileError("an array value can only be the whole definition of a signal", line, column)
         rows.groups.append(members)
         rows.group_positions.append((line, column))
@@ -2022,6 +2043,12 @@ def lower(program):
         for reader in range(len(rows.op)):
             if reader != writer and previous in (rows.left[reader], rows.right[reader]):
                 rows.war.append((reader, writer, signal))
+    ranges = {signal for signal in range(len(names)) if rows.op[rows.left[signal]] == OP_RANGE}
+    for row, op in enumerate(rows.op):
+        if op != OP_ITER and (rows.left[row] in ranges or rows.right[row] in ranges):
+            raise CompileError("a range can only be the index of iterate", rows.line[row], rows.column[row])
+    for index in loops.index:
+        loops.count.append(rows.right[rows.left[index]] if index in ranges else -1)
     return rows, loops
 
 
@@ -2446,6 +2473,7 @@ def schedule(program, rows, clocks, loops):
     super_node = [loop_base + rows.loop[row] if rows.loop[row] >= 0 else row for row in range(row_count)]
     super_node.extend(range(row_count, loop_base + len(loops.index)))
     outer_edges = [(super_node[a], super_node[b]) for a, b in edges if a == b or super_node[a] != super_node[b]]
+    outer_edges.extend((index, loop_base + loop) for loop, index in enumerate(loops.index) if loops.count[loop] >= 0)
     present = [loop < 0 for loop in rows.loop] + [kind is not None for kind in clocks.node_kind] + [True] * len(loops.index)
     order = kahn(program, rows, present, outer_edges, super_node)
     loop_orders = []
@@ -2485,6 +2513,20 @@ def schedule(program, rows, clocks, loops):
                     seen.add(successor)
                     pending.append(successor)
         reached[row] = seen
+    outer_successors = {}
+    for source, destination in outer_edges:
+        outer_successors.setdefault(source, []).append(destination)
+    outer_reached = {}
+    for node in {super_node[row] for row in effect_rows}:
+        seen = {node}
+        pending = [node]
+        while pending:
+            current = pending.pop()
+            for successor in outer_successors.get(current, ()):
+                if successor not in seen:
+                    seen.add(successor)
+                    pending.append(successor)
+        outer_reached[node] = seen
     for position, first in enumerate(effect_rows):
         for second in effect_rows[position + 1:]:
             first_effect = rows.value[first]
@@ -2492,6 +2534,9 @@ def schedule(program, rows, clocks, loops):
             if effects.resource[first_effect] != effects.resource[second_effect]:
                 continue
             if second in reached[first] or first in reached[second]:
+                continue
+            first_node, second_node = super_node[first], super_node[second]
+            if first_node != second_node and (second_node in outer_reached[first_node] or first_node in outer_reached[second_node]):
                 continue
             raise CompileError(
                 f"effects {effects.kind[first_effect]} at {rows.line[first]}:{rows.column[first]} and "
@@ -2648,7 +2693,7 @@ def emit_row(code, labels, program, rows, clocks, row, gated):
     left = rows.left[row]
     right = rows.right[row]
     row_type = rows.type[row]
-    if op in (OP_TABLE, OP_PAIR, OP_BRANCH, OP_INPUT, OP_ARG) or op in (OP_COPY, OP_PREV) and types.kind[row_type] == KIND_ARRAY:
+    if op in (OP_TABLE, OP_PAIR, OP_BRANCH, OP_INPUT, OP_ARG, OP_RANGE) or op in (OP_COPY, OP_PREV) and types.kind[row_type] == KIND_ARRAY:
         return
     if gated:
         skip_row = new_label(code)
@@ -2687,6 +2732,8 @@ def emit_row(code, labels, program, rows, clocks, row, gated):
             load_operand(code, labels, 0, types, rows, operands[0])
             emit(code, WORD, op2=param)
             emit(code, ORR_X, 9, XZR, 0)
+    elif op == OP_ITER and rows.op[rows.left[left]] == OP_RANGE:
+        emit(code, ORR_X, 9, XZR, 23)
     elif op == OP_ITER:
         _, indexed_form = LOAD[types.bytes[row_type], types.signed[row_type]]
         address(code, labels, 12, storage_key(rows, left))
@@ -2902,6 +2949,8 @@ def emit_code(program, rows, clocks, loops, order, loop_orders):
     put_uint = new_label(code)
     put_bool = new_label(code)
     step = new_label(code)
+    emit(code, ORR_X, 25, XZR, 0)
+    emit(code, ORR_X, 26, XZR, 1)
     emit(code, MOVZ_X, 22)
     if windows:
         emit(code, MOVZ_X, 0)
@@ -3079,6 +3128,15 @@ def emit_code(program, rows, clocks, loops, order, loop_orders):
                 if rows.op[row] == OP_SEED and rows.loop[row] == loop:
                     emit_row(code, labels, program, rows, clocks, row, False)
             emit(code, MOVZ_X, 23)
+            count = loops.count[loop]
+            if count >= 0:
+                load_operand(code, labels, 11, types, rows, count)
+                emit(code, ADD_X_IMM, 11, 11, 1)
+                load_immediate(code, 12, loops.size[loop])
+                emit(code, SUBS_X, XZR, 11, 12)
+                emit(code, CSEL_X, 11, 11, 12, CC_LT)
+                emit(code, SUBS_X, XZR, 23, 11)
+                emit(code, B_COND, op3=CC_GE, target=loop_end)
             place(code, loop_start)
             for signal in loops.snapshots[loop]:
                 signal_type = rows.type[signal]
@@ -3087,7 +3145,14 @@ def emit_code(program, rows, clocks, loops, order, loop_orders):
             for row in loop_orders[loop]:
                 emit_row(code, labels, program, rows, clocks, row, False)
             emit(code, ADD_X_IMM, 23, 23, 1)
-            load_immediate(code, 11, loops.size[loop])
+            if count >= 0:
+                load_operand(code, labels, 11, types, rows, count)
+                emit(code, ADD_X_IMM, 11, 11, 1)
+                load_immediate(code, 12, loops.size[loop])
+                emit(code, SUBS_X, XZR, 11, 12)
+                emit(code, CSEL_X, 11, 11, 12, CC_LT)
+            else:
+                load_immediate(code, 11, loops.size[loop])
             emit(code, SUBS_X, XZR, 23, 11)
             emit(code, B_COND, op3=CC_LO, target=loop_start)
             place(code, loop_end)

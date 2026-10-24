@@ -1,0 +1,1 @@
+syscall_iterate.sig:4:24: error: model calls are not allowed inside iterate

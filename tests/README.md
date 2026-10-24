@@ -13,4 +13,15 @@ A trace case may also have `name.exit`: its first line is the exit status the pr
 
 The compiler is run with an empty PATH, so it can invoke no external tool.
 
+`python3 tests/run.py --compiler PATH [<name-fragment>...]` runs the same cases with the native compiler executable at PATH in place of `python3 bootstrap/sigc.py`, with the same empty PATH and timeouts.
+
+`tests/cases/m4/` holds the cases for the extensions the self-hosted compiler (M4, D13) needs: `argc` (the runtime keeps argc in `x25` and argv in `x26`; the case has no arguments, so it prints 1), `load` and `store` inside `iterate` (`load_*`, `store_*`, `syscall_iterate`), the run-time count `X := 0 .. E` (`range_*`), and string constants (`string_*`).
+
+`python3 tests/dump.py PASS SOURCE` prints `sigc.py`'s table after pass PASS for SOURCE: per column, a line `COLUMN COUNT` and then one value per line. A compile error in the pass ends the output with `error LINE COLUMN MESSAGE`. The only pass so far is `tokens` (columns `kinds`, `texts`, `lines`, `columns`); since the lexer builds no partial table, a lex error prints only the error line.
+
+`tests/diff.py` compiles every case in `tests/cases/` and prints one `DIFF` line per differing case, then `N cases, K differ`; it exits 1 when any case differs. A compiler argument is either a `.py` file, run with Python, or a native executable; compilers run with an empty PATH.
+
+- `python3 tests/diff.py dump PASS COMPILER` compares `dump.py PASS SOURCE` with the file `COMPILER SOURCE -o OUT` writes. COMPILER is the SIGNAL compiler built with its `DUMP_PASS` constant set to the pass, which writes the dump to OUT instead of an executable. Until that compiler exists the mode is exercised with a stub script that runs `dump.py`.
+- `python3 tests/diff.py image OLD NEW` compiles every case with both compilers and compares exit statuses and executables byte for byte.
+
 `tests/backend.py` holds the backend checks, run with `python3 tests/backend.py [encoder|programs|executables]...` (all parts by default): `encoder` checks the instruction encoder against Apple `as` (a differential property with fixed seed 0 and 300 cases per form, plus field-range checks), `programs` checks every trace case's encoded `__text` and `__data` against `as` and `ld`, and `executables` compiles `m0/counter.sig` with an empty PATH and checks that `codesign --verify --strict` accepts it, that it prints its first step, and that the compiler leaves no other file beside it. It is the only script that invokes `as`, `ld`, `xcrun` or `codesign`, and it is retired with the bootstrap.

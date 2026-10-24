@@ -13,9 +13,9 @@ COMPILE_TIMEOUT_SECONDS = 60
 RUN_TIMEOUT_SECONDS = 5
 
 
-def compile_case(source, executable):
+def compile_case(compiler, source, executable):
     return subprocess.run(
-        [sys.executable, str(COMPILER), str(source), "-o", str(executable)],
+        [*compiler, str(source), "-o", str(executable)],
         capture_output=True,
         text=True,
         timeout=COMPILE_TIMEOUT_SECONDS,
@@ -59,11 +59,11 @@ def run_to_exit(executable, input_path):
     return finished.stdout.decode(errors="replace").splitlines(), finished.returncode, finished.stderr.decode(errors="replace")
 
 
-def run_trace_case(source, expected_path):
+def run_trace_case(compiler, source, expected_path):
     expected = expected_path.read_text().splitlines()
     executable = BUILD / source.relative_to(CASES).with_suffix("")
     executable.parent.mkdir(parents=True, exist_ok=True)
-    compiled = compile_case(source, executable)
+    compiled = compile_case(compiler, source, executable)
     if compiled.returncode != 0:
         return [f"compile failed (exit {compiled.returncode}):", compiled.stderr.rstrip()]
     exit_path = source.with_suffix(".exit")
@@ -91,9 +91,9 @@ def run_trace_case(source, expected_path):
     return report
 
 
-def run_error_case(source, expected_path):
+def run_error_case(compiler, source, expected_path):
     expected = expected_path.read_text().strip()
-    compiled = compile_case(source, BUILD / "rejected")
+    compiled = compile_case(compiler, source, BUILD / "rejected")
     if compiled.returncode == 0:
         return [f"expected rejection containing {expected!r}, but compilation succeeded"]
     if expected not in compiled.stderr:
@@ -104,6 +104,14 @@ def run_error_case(source, expected_path):
 def main():
     BUILD.mkdir(parents=True, exist_ok=True)
     selected = sys.argv[1:]
+    compiler = [sys.executable, str(COMPILER)]
+    if "--compiler" in selected:
+        position = selected.index("--compiler")
+        if position + 1 == len(selected):
+            print("--compiler requires a path")
+            return 2
+        compiler = [str(Path(selected[position + 1]).resolve())]
+        del selected[position:position + 2]
     sources = sorted(CASES.rglob("*.sig"))
     if selected:
         sources = [s for s in sources if any(name in str(s.relative_to(CASES)) for name in selected)]
@@ -113,9 +121,9 @@ def main():
         trace_path = source.with_suffix(".out")
         error_path = source.with_suffix(".err")
         if trace_path.exists():
-            report = run_trace_case(source, trace_path)
+            report = run_trace_case(compiler, source, trace_path)
         elif error_path.exists():
-            report = run_error_case(source, error_path)
+            report = run_error_case(compiler, source, error_path)
         else:
             report = ["no .out or .err file"]
         if report:

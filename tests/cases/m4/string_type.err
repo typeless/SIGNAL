@@ -1,0 +1,1 @@
+string_type.sig:6:26: error: constant WORD has type [4] integer but its definition is a string
