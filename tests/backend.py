@@ -1,3 +1,4 @@
+import os
 import random
 import subprocess
 import struct
@@ -295,6 +296,23 @@ def check_recompile_over_running():
     return report
 
 
+def check_planted_staging_link():
+    source = CASES / "m0" / "counter.sig"
+    code, _ = sigc.compile_source(source.read_text())
+    with tempfile.TemporaryDirectory() as directory:
+        victim = Path(directory) / "victim"
+        victim.write_text("untouched")
+        executable = Path(directory) / "counter"
+        (Path(directory) / f".counter.{os.getpid()}").symlink_to(victim)
+        try:
+            sigc.write_executable(code, executable)
+        except OSError:
+            pass
+        if victim.read_text(errors="replace") != "untouched":
+            return ["write_executable wrote through a link planted at its staging name"]
+    return []
+
+
 PARTS = {
     "encoder": (
         ("encoder coverage", check_coverage),
@@ -308,6 +326,7 @@ PARTS = {
     "executables": (
         ("executable compiled with an empty PATH", check_executable),
         ("recompile over a running executable", check_recompile_over_running),
+        ("planted link at the staging name", check_planted_staging_link),
     ),
 }
 

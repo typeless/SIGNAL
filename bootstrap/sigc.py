@@ -4,6 +4,7 @@ import os
 import re
 import struct
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -3216,10 +3217,15 @@ def write_executable(code, output):
     image += bytes(text_bytes - len(image))
     image += code.data
     image += bytes(signed_bytes - len(image))
-    staged = output.with_name(f".{output.name}.{os.getpid()}")
     try:
-        staged.write_bytes(bytes(image) + code_signature(bytes(image)))
-        staged.chmod(0o755)
+        descriptor, staged_name = tempfile.mkstemp(dir=output.parent, prefix=f".{output.name}.")
+    except OSError as error:
+        raise OSError(error.errno, error.strerror, str(output)) from error
+    staged = Path(staged_name)
+    try:
+        with os.fdopen(descriptor, "wb") as staged_file:
+            staged_file.write(bytes(image) + code_signature(bytes(image)))
+            os.fchmod(staged_file.fileno(), 0o755)
         staged.replace(output)
     except OSError as error:
         staged.unlink(missing_ok=True)
