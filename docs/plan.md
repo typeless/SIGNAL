@@ -27,9 +27,9 @@ Every milestone ends with test programs that run on this Mac; a milestone is don
 - D2 built-in effects: load/store, syscall, raw instruction, each with a resource; the same-resource ordering check.
 - Rejection of an unsafe effect called from an `automaton`, `node`, or `function` (S1 XI–1, D3).
 - Exit check: a file-copy program and a program that maps a Mach-O file with `mmap` and prints its load commands (R2, linker-shaped), both written only in SIGNAL; an unordered pair of effects on one resource and an effect inside an automaton are each rejected.
-- Carried from M1, both observable only once arrays can hold data from outside the program:
-  - A gather from the array's own previous iteration (`Z := Z[?][R]` inside `iterate`) runs in place, so it can read elements this iteration already overwrote. It must gather into scratch storage, with a test that fails first.
-  - Two body arrays that each read the other's previous iteration are rejected as a causality cycle, an artifact of in-place storage (S1 IX–13 accepts them). Accept them by double-buffering, or reject them with a message that names the storage limit.
+- Carried from M1, both resolved by per-iteration snapshots (D11):
+  - A gather from the array's own previous iteration (`Z := Z[?][R]` inside `iterate`) reads a copy taken at the start of the iteration, not elements this iteration already overwrote.
+  - Two body arrays that each read the other's previous iteration are accepted (S1 IX–13): each is copied at the start of the iteration.
 
 ## M3 — Own assembler and Mach-O writer
 

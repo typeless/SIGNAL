@@ -1,0 +1,1 @@
+signal COPY#1.X has type integer but its definition has type long

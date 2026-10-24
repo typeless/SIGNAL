@@ -8,7 +8,8 @@ from pathlib import Path
 KEYWORDS = {
     "process", "where", "end", "init", "integer", "boolean", "event", "true", "false",
     "when", "default", "and", "or", "xor", "not", "modulo", "short", "long", "shl", "shr", "type", "enum",
-    "constant", "next", "iterate", "of", "with", "if", "then", "else",
+    "constant", "next", "iterate", "of", "with", "if", "then", "else", "procedure", "node", "function", "automaton", "label", "on",
+    "external",
 }
 
 KIND_EVENT = "EVENT"
@@ -17,6 +18,7 @@ KIND_INT = "INT"
 KIND_POINTER = "POINTER"
 KIND_ENUM = "ENUM"
 KIND_ARRAY = "ARRAY"
+KIND_EXTERNAL = "EXTERNAL"
 ENUM_BYTES = 4
 BUILTIN_TYPES = (
     ("event", KIND_EVENT, 1, False),
@@ -41,13 +43,14 @@ TOKEN_PATTERN = re.compile(
     r"|(?P<comment>%[^%]*%)"
     r"|(?P<number>\d+)"
     r"|(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
-    r"|(?P<symbol>\(\||\|\)|-->|:=|\^=|/=|<=|>=|[|$+\-*/()=;,?!<>^#\[\]:])",
+    r"|(?P<symbol>\(\||\|\)|-->|::|:=|\^=|/=|<=|>=|[|$+\-*/()=;,?!<>^#\[\]:{}])",
     re.ASCII,
 )
 
 OP_CONST = "CONST"
 OP_SIGNAL = "SIGNAL"
 OP_COPY = "COPY"
+OP_INPUT = "INPUT"
 OP_NEG = "NEG"
 OP_NOT = "NOT"
 OP_ADD = "ADD"
@@ -85,6 +88,8 @@ OP_ITER = "ITER"
 OP_SEED = "SEED"
 OP_IF = "IF"
 OP_BRANCH = "BRANCH"
+OP_EFFECT = "EFFECT"
+OP_ARG = "ARG"
 DEFINE = "DEFINE"
 SEED = "SEED"
 
@@ -106,7 +111,7 @@ CONDITION_PRECEDENCE = 9
 PREFIX_OPS = {"when": OP_UWHEN, "not": OP_NOT, "-": OP_NEG, "^": OP_CLOCK}
 PREFIX_PRECEDENCE = {"when": 8, "not": 14, "-": 20, "^": 24}
 DELAY_PRECEDENCE = 21
-EXPRESSION_TERMINATORS = {"|", "|)", ";", "^=", "with", "end"}
+EXPRESSION_TERMINATORS = {"|", "|)", ";", "^=", "with", "end", "::"}
 OP_TEXT = {**{op: text for text, op in BINARY_OPS.items()}, **{op: text for text, op in PREFIX_OPS.items()}, OP_DELAY: "$",
     OP_IF: "if", OP_BRANCH: "if",
 }
@@ -117,7 +122,7 @@ EQUALITY_OPS = {OP_EQ, OP_NE}
 LOGIC_OPS = {OP_AND, OP_OR, OP_XOR, OP_NOT}
 SHIFT_OPS = {OP_SHL: "lsl", OP_SHR: "lsr"}
 MONOCHRONOUS_OPS = INTEGER_OPS | ORDER_OPS | EQUALITY_OPS | LOGIC_OPS | set(SHIFT_OPS) | {
-    OP_CONVERT, OP_ELEMENT, OP_GATHER, OP_PAIR, OP_NEXT, OP_PREV, OP_ITER, OP_IF, OP_BRANCH,
+    OP_CONVERT, OP_ELEMENT, OP_GATHER, OP_PAIR, OP_NEXT, OP_PREV, OP_ITER, OP_IF, OP_BRANCH, OP_ARG,
 }
 UNARY_OPS = {OP_NEG, OP_NOT, OP_UWHEN, OP_CLOCK, OP_DELAY, OP_CALL, OP_PREV}
 INSTRUCTIONS = {OP_ADD: "add", OP_SUB: "sub", OP_MUL: "mul", OP_AND: "and", OP_OR: "orr", OP_XOR: "eor"}
@@ -129,6 +134,17 @@ LOAD = {
 }
 STORE = {1: "strb w", 2: "strh w", 4: "str w", 8: "str x"}
 DATA_DIRECTIVES = {1: ".byte", 2: ".short", 4: ".long", 8: ".quad"}
+
+MODEL_CLASSES = ("process", "procedure", "node", "function", "automaton")
+ORDERED_CLASSES = {"procedure", "node", "function", "automaton"}
+PURE_CLASSES = {"automaton", "node", "function"}
+AUTOMATON_INTRINSICS = {"Automaton_Initial_State": 1, "Automaton_Transition": 3, "Automaton_IsIn": 1}
+BUILTINS = {
+    "load": (("type",), 1, True),
+    "store": (("type",), 2, False),
+    "syscall": ((), 7, True),
+    "instruction": (("word",), 1, True),
+}
 
 ROOT = "ROOT"
 SAMPLE = "SAMPLE"
@@ -237,12 +253,25 @@ def resolve_enum(types, type_name, value_name, line, column):
 
 
 @dataclass
+class Models:
+    name: list = field(default_factory=list)
+    kind: list = field(default_factory=list)
+    parent: list = field(default_factory=list)
+    line: list = field(default_factory=list)
+    column: list = field(default_factory=list)
+    labels: list = field(default_factory=list)
+
+
+@dataclass
 class Program:
     name: str = ""
     types: Types = field(default_factory=builtin_types)
+    models: Models = field(default_factory=Models)
     signal_names: list = field(default_factory=list)
     signal_roles: list = field(default_factory=list)
     signal_types: list = field(default_factory=list)
+    signal_models: list = field(default_factory=list)
+    signal_positions: list = field(default_factory=list)
     constant_names: list = field(default_factory=list)
     constant_types: list = field(default_factory=list)
     constant_values: list = field(default_factory=list)
@@ -254,13 +283,37 @@ class Program:
     equation_positions: list = field(default_factory=list)
     equation_loops: list = field(default_factory=list)
     equation_kinds: list = field(default_factory=list)
+    equation_models: list = field(default_factory=list)
+    equation_labels: list = field(default_factory=list)
+    equation_guards: list = field(default_factory=list)
+    guard_models: list = field(default_factory=list)
+    guard_ops: list = field(default_factory=list)
+    guard_args: list = field(default_factory=list)
+    guard_positions: list = field(default_factory=list)
+    guard_context: list = field(default_factory=list)
+    guard_labels: list = field(default_factory=list)
+    guard_signals: list = field(default_factory=list)
+    label_names: list = field(default_factory=list)
+    label_uses: list = field(default_factory=list)
     loop_names: list = field(default_factory=list)
     loop_positions: list = field(default_factory=list)
+    loop_models: list = field(default_factory=list)
     constraint_groups: list = field(default_factory=list)
     constraint_positions: list = field(default_factory=list)
+    constraint_models: list = field(default_factory=list)
+    constraint_guards: list = field(default_factory=list)
     dependence_from: list = field(default_factory=list)
     dependence_to: list = field(default_factory=list)
     dependence_positions: list = field(default_factory=list)
+    dependence_models: list = field(default_factory=list)
+    dependence_guards: list = field(default_factory=list)
+
+
+@dataclass
+class Effects:
+    kind: list = field(default_factory=list)
+    resource: list = field(default_factory=list)
+    param: list = field(default_factory=list)
 
 
 @dataclass
@@ -275,10 +328,14 @@ class Rows:
     column: list = field(default_factory=list)
     owner: list = field(default_factory=list)
     loop: list = field(default_factory=list)
+    guard: list = field(default_factory=list)
     groups: list = field(default_factory=list)
     group_positions: list = field(default_factory=list)
     dependence_from: list = field(default_factory=list)
     dependence_to: list = field(default_factory=list)
+    war: list = field(default_factory=list)
+    snapshotted: set = field(default_factory=set)
+    effects: Effects = field(default_factory=Effects)
 
 
 @dataclass
@@ -286,6 +343,7 @@ class Loops:
     index: list = field(default_factory=list)
     size: list = field(default_factory=list)
     defined: list = field(default_factory=list)
+    snapshots: list = field(default_factory=list)
 
 
 @dataclass
@@ -348,6 +406,7 @@ class Parser:
         self.tokens = tokens
         self.index = 0
         self.program = Program()
+        self.model_stack = []
 
     def peek(self):
         return self.tokens.texts[self.index]
@@ -372,7 +431,23 @@ class Parser:
 
     def is_declared(self, name):
         program = self.program
-        return name in program.signal_names or name in program.constant_names or name in program.types.name[len(BUILTIN_TYPES):]
+        model = self.model_stack[-1]
+        return (
+            any(owner == model and signal == name for signal, owner in zip(program.signal_names, program.signal_models))
+            or name in program.models.labels[model]
+            or name in program.constant_names
+            or name in program.types.name[len(BUILTIN_TYPES):]
+            or name in program.models.name
+            or name in AUTOMATON_INTRINSICS
+            or name in BUILTINS
+        )
+
+    def clash(self, role, name, line, column):
+        if name in BUILTINS or name in AUTOMATON_INTRINSICS:
+            return CompileError(f"{name} is a reserved name", line, column)
+        if name in self.program.models.name and role != "model":
+            return CompileError(f"{name} is the name of a model", line, column)
+        return CompileError(f"{role} {name} is declared twice", line, column)
 
     def integer_literal_value(self):
         text = self.peek()
@@ -415,20 +490,93 @@ class Parser:
             line, column = self.position()
             name = self.expect_name()
             if self.is_declared(name):
-                raise CompileError(f"signal {name} is declared twice", line, column)
-            if role != "local" and types.kind[signal_type] == KIND_ARRAY:
+                raise self.clash("signal", name, line, column)
+            base_type = types.element[signal_type] if types.kind[signal_type] == KIND_ARRAY else signal_type
+            if types.kind[base_type] == KIND_EXTERNAL:
+                raise CompileError(f"type {types.name[base_type]} is external; signals cannot have that type", line, column)
+            if role == "input" and types.kind[signal_type] == KIND_ARRAY and self.model_stack[-1] == 0:
+                raise CompileError(f"input signal {name} must be a scalar", line, column)
+            if role == "input" and types.kind[signal_type] == KIND_ARRAY:
+                raise CompileError("arrays cannot be passed to models", line, column)
+            if role == "output" and types.kind[signal_type] == KIND_ARRAY:
                 raise CompileError(f"{role} {name} has an array type; {role}s must be scalar", line, column)
             self.program.signal_names.append(name)
             self.program.signal_roles.append(role)
             self.program.signal_types.append(signal_type)
+            self.program.signal_models.append(self.model_stack[-1])
+            self.program.signal_positions.append((line, column))
             if self.peek() != ",":
                 break
             self.index += 1
         self.expect(";")
 
     def parse_program(self):
-        self.expect("process")
-        self.program.name = self.expect_name()
+        for index, (kind, text) in enumerate(zip(self.tokens.kinds, self.tokens.texts)):
+            if kind == "keyword" and text == "type":
+                self.index = index
+                self.parse_type_declaration()
+        self.index = 0
+        self.parse_model()
+        while self.model_stack:
+            if self.peek() in MODEL_CLASSES and self.tokens.kinds[self.index] == "keyword":
+                self.parse_model()
+            elif self.peek() == "end":
+                self.index += 1
+                self.expect(";")
+                self.finish_model(self.model_stack.pop())
+            elif self.peek() == "type":
+                self.index += 1
+                line, column = self.position()
+                name = self.peek()
+                if (
+                    name in self.program.signal_names
+                    or any(name in labels for labels in self.program.models.labels)
+                    or name in self.program.constant_names
+                    or name in self.program.models.name
+                ):
+                    raise self.clash("type", name, line, column)
+                while self.peek() != ";":
+                    self.index += 1
+                self.index += 1
+            elif self.peek() == "constant":
+                self.parse_constant()
+            elif self.peek() == "label":
+                self.parse_label_declaration()
+            else:
+                self.declare("local")
+        if self.tokens.kinds[self.index] != "eof":
+            self.fail(f"unexpected {self.peek()!r} after the process model")
+        return self.program
+
+    def parse_model(self):
+        program = self.program
+        models = program.models
+        if self.model_stack:
+            kind = self.peek()
+            self.index += 1
+        else:
+            self.expect("process")
+            kind = "process"
+        line, column = self.position()
+        name = self.expect_name()
+        if (
+            name in models.name
+            or name in program.signal_names
+            or any(name in labels for labels in models.labels)
+            or name in program.constant_names
+            or name in program.types.name[len(BUILTIN_TYPES):]
+            or name in BUILTINS
+        ):
+            raise self.clash("model", name, line, column)
+        if not models.name:
+            program.name = name
+        models.name.append(name)
+        models.kind.append(kind)
+        models.parent.append(self.model_stack[-1] if self.model_stack else -1)
+        models.line.append(line)
+        models.column.append(column)
+        models.labels.append([])
+        self.model_stack.append(len(models.name) - 1)
         self.expect("=")
         self.expect("(")
         if self.peek() == "?":
@@ -442,47 +590,300 @@ class Parser:
         self.expect(")")
         if self.peek() != "(|":
             self.expect("(|")
-        self.parse_process(-1, DEFINE)
+        self.parse_process()
         if self.peek() == "where":
             self.index += 1
-            while self.peek() != "end":
-                if self.peek() == "type":
-                    self.parse_type_declaration()
-                elif self.peek() == "constant":
-                    self.parse_constant()
+        else:
+            self.expect(";")
+            self.finish_model(self.model_stack.pop())
+
+    def finish_model(self, model):
+        program = self.program
+        for owner, name, line, column in program.label_uses:
+            if owner == model and name not in program.models.labels[model]:
+                raise CompileError(f"label {name} is not declared", line, column)
+        models = program.models
+        model_name = models.name[model]
+        model_position = (models.line[model], models.column[model])
+        is_automaton = models.kind[model] == "automaton"
+        states = []
+        transitions = []
+        if is_automaton:
+            inputs = [
+                name
+                for name, role, owner in zip(program.signal_names, program.signal_roles, program.signal_models)
+                if owner == model and role == "input"
+            ]
+            if not inputs:
+                raise CompileError(
+                    f"automaton {model_name} has no input; its control clock is the upper bound of its inputs", *model_position
+                )
+            statements = [
+                equation
+                for equation, (owner, target, ops, args) in enumerate(
+                    zip(program.equation_models, program.equation_targets, program.equation_ops, program.equation_args)
+                )
+                if owner == model
+                and target is None
+                and ops[-1] == OP_CALL
+                and args[-1][2] in ("Automaton_Initial_State", "Automaton_Transition")
+            ]
+            initials = []
+            for equation in statements:
+                ops = program.equation_ops[equation]
+                args = program.equation_args[equation]
+                line, column, intrinsic, _, count = args[-1]
+                if count != AUTOMATON_INTRINSICS[intrinsic]:
+                    raise CompileError(
+                        f"wrong number of arguments for {intrinsic}: expected {AUTOMATON_INTRINSICS[intrinsic]}, found {count}",
+                        line,
+                        column,
+                    )
+                if program.equation_labels[equation]:
+                    raise CompileError(
+                        f"label {program.equation_labels[equation][-1]} cannot be placed on {intrinsic}", line, column
+                    )
+                guards = program.equation_guards[equation]
+                if guards and intrinsic == "Automaton_Initial_State":
+                    raise CompileError(f"{intrinsic} cannot be guarded", line, column)
+                state_count = 1 if intrinsic == "Automaton_Initial_State" else 2
+                trigger_start = call_segments(ops, args)[-2] if count == 3 else len(ops) - 1
+                if trigger_start != state_count or any(op != OP_SIGNAL for op in ops[:state_count]):
+                    raise CompileError(f"{intrinsic} expects a state name of automaton {model_name}", line, column)
+                for state, state_line, state_column in args[:state_count]:
+                    if state not in models.labels[model]:
+                        raise CompileError(f"{state} is not a label of automaton {model_name}", state_line, state_column)
+                    if state not in states:
+                        states.append(state)
+                if count == 1:
+                    if initials:
+                        raise CompileError(f"automaton {model_name} needs exactly one Automaton_Initial_State", line, column)
+                    initials.append(args[0][0])
                 else:
-                    self.declare("local")
-            self.expect("end")
-        self.expect(";")
-        if self.tokens.kinds[self.index] != "eof":
-            self.fail(f"unexpected {self.peek()!r} after the process model")
-        return self.program
+                    trigger_ops = ops[2:-1]
+                    trigger_args = args[2:-1]
+                    if guards:
+                        number = [g for g, owner in enumerate(program.guard_models) if owner == model].index(guards[-1]) + 1
+                        trigger_ops += [OP_SIGNAL, OP_WHEN]
+                        trigger_args += [(f"on'{number}", line, column), (line, column)]
+                    transitions.append((args[0][0], args[1][0], trigger_ops, trigger_args, line, column))
+            if not initials:
+                raise CompileError(f"automaton {model_name} needs exactly one Automaton_Initial_State", *model_position)
+            for equation in reversed(statements):
+                for column_list in (
+                    program.equation_targets,
+                    program.equation_ops,
+                    program.equation_args,
+                    program.equation_positions,
+                    program.equation_loops,
+                    program.equation_kinds,
+                    program.equation_models,
+                    program.equation_labels,
+                    program.equation_guards,
+                ):
+                    del column_list[equation]
+            types = program.types
+            state_type = len(types.name)
+            types.name.append(f"{model_name}'state")
+            types.kind.append(KIND_ENUM)
+            types.bytes.append(ENUM_BYTES)
+            types.signed.append(False)
+            types.values.append(())
+            types.element.append(-1)
+            types.size.append(0)
+        postfixes = [
+            (program.equation_ops[equation], program.equation_args[equation], program.equation_targets[equation] is None)
+            for equation, owner in enumerate(program.equation_models)
+            if owner == model
+        ]
+        postfixes.extend(
+            (ops, args, False)
+            for group, owner in enumerate(program.constraint_models)
+            if owner == model
+            for ops, args in program.constraint_groups[group]
+        )
+        postfixes.extend(
+            (ops, args, False)
+            for ops, args, owner in zip(program.guard_ops, program.guard_args, program.guard_models)
+            if owner == model
+        )
+        postfixes.extend((trigger_ops, trigger_args, False) for _, _, trigger_ops, trigger_args, _, _ in transitions)
+        for ops, args, statement in postfixes:
+            out_ops = []
+            out_args = []
+            for index, (op, arg) in enumerate(zip(ops, args)):
+                if op != OP_CALL or arg[2] not in AUTOMATON_INTRINSICS:
+                    out_ops.append(op)
+                    out_args.append(arg)
+                    continue
+                line, column, intrinsic, _, count = arg
+                if not is_automaton:
+                    raise CompileError(f"{intrinsic} is allowed only in an automaton", line, column)
+                if intrinsic != "Automaton_IsIn":
+                    raise CompileError(f"model {intrinsic} has no output and cannot be used in an expression", line, column)
+                if statement and index == len(ops) - 1:
+                    raise CompileError(f"model {intrinsic} has an output and cannot be called as a process", line, column)
+                if count != 1:
+                    raise CompileError(f"wrong number of arguments for {intrinsic}: expected 1, found {count}", line, column)
+                if out_ops[-1] != OP_SIGNAL:
+                    raise CompileError(f"{intrinsic} expects a state name of automaton {model_name}", line, column)
+                if out_args[-1][0] not in states:
+                    raise CompileError(f"{out_args[-1][0]} is not a state of automaton {model_name}", *out_args[-1][1:])
+                out_ops[-1:] = [OP_SIGNAL, OP_CONST, OP_EQ]
+                out_args[-1:] = [("state'", line, column), (states.index(out_args[-1][0]), state_type), (line, column)]
+            ops[:] = out_ops
+            args[:] = out_args
+        if is_automaton:
+            line, column = model_position
+            clock_ops = []
+            clock_args = []
+            for position, name in enumerate(inputs):
+                clock_ops.extend([OP_SIGNAL, OP_CLOCK] + [OP_DEFAULT] * (position > 0))
+                clock_args.extend([(name, line, column), (line, column)] + [(line, column)] * (position > 0))
+            next_ops = []
+            next_args = []
+            for position, (source, destination, trigger_ops, trigger_args, call_line, call_column) in enumerate(transitions):
+                next_ops.extend([OP_CONST, OP_SIGNAL, OP_CONST, OP_EQ, OP_WHEN, *trigger_ops, OP_WHEN])
+                next_args.extend(
+                    [
+                        (states.index(destination), state_type),
+                        ("state'", call_line, call_column),
+                        (states.index(source), state_type),
+                        (call_line, call_column),
+                        (call_line, call_column),
+                        *trigger_args,
+                        (call_line, call_column),
+                    ]
+                )
+                if position > 0:
+                    next_ops.append(OP_DEFAULT)
+                    next_args.append((call_line, call_column))
+            next_ops.append(OP_SIGNAL)
+            next_args.append(("state'", line, column))
+            if transitions:
+                next_ops.append(OP_DEFAULT)
+                next_args.append((line, column))
+            initial = (OP_CONST, (states.index(initials[0]), state_type))
+            for target, signal_type, ops, args in (
+                ("clock'", EVENT, clock_ops, clock_args),
+                ("state'", state_type, [OP_SIGNAL, OP_DELAY], [("cur'", line, column), (line, column, initial)]),
+                ("cur'", state_type, next_ops, next_args),
+            ):
+                self.define_local(model, target, signal_type, ops, args, model_position, (), ())
+            program.constraint_groups.append(
+                [([OP_SIGNAL], [("cur'", line, column)]), ([OP_SIGNAL], [("clock'", line, column)])]
+            )
+            program.constraint_positions.append(model_position)
+            program.constraint_models.append(model)
+            program.constraint_guards.append(())
+        own_types = {
+            name: signal_type
+            for name, signal_type, owner in zip(program.signal_names, program.signal_types, program.signal_models)
+            if owner == model
+        }
+        own_guards = [guard for guard, owner in enumerate(program.guard_models) if owner == model]
+        for number, guard in reversed(list(enumerate(own_guards, 1))):
+            equations = [
+                equation
+                for equation, (owner, chain) in enumerate(zip(program.equation_models, program.equation_guards))
+                if owner == model and guard in chain
+            ]
+            constraints = [
+                group
+                for group, (owner, chain) in enumerate(zip(program.constraint_models, program.constraint_guards))
+                if owner == model and guard in chain
+            ]
+            dependences = [
+                dependence
+                for dependence, (owner, chain) in enumerate(zip(program.dependence_models, program.dependence_guards))
+                if owner == model and guard in chain
+            ]
+            postfixes = [(program.equation_ops[e], program.equation_args[e]) for e in equations]
+            postfixes.extend(member for group in constraints for member in program.constraint_groups[group])
+            reads = [arg[0] for ops, args in postfixes for op, arg in zip(ops, args) if op == OP_SIGNAL]
+            reads.extend(end[0] for d in dependences for end in (program.dependence_from[d], program.dependence_to[d]))
+            defined = {program.equation_targets[e] for e in equations}
+            inputs = [name for name in dict.fromkeys(reads) if name in own_types and name not in defined]
+            renamed = {name: f"{name}'{number}" for name in inputs}
+            for e in equations:
+                program.equation_args[e] = [
+                    (renamed.get(arg[0], arg[0]), *arg[1:]) if op == OP_SIGNAL else arg
+                    for op, arg in zip(program.equation_ops[e], program.equation_args[e])
+                ]
+            for group in constraints:
+                program.constraint_groups[group] = [
+                    (ops, [(renamed.get(arg[0], arg[0]), *arg[1:]) if op == OP_SIGNAL else arg for op, arg in zip(ops, args)])
+                    for ops, args in program.constraint_groups[group]
+                ]
+            for d in dependences:
+                for ends in (program.dependence_from, program.dependence_to):
+                    ends[d] = (renamed.get(ends[d][0], ends[d][0]), *ends[d][1:])
+            clock_signal = f"on'{number}"
+            program.guard_signals[guard] = clock_signal
+            line, column = program.guard_positions[guard]
+            filters = [(clock_signal, EVENT, program.guard_ops[guard], program.guard_args[guard])]
+            filters.extend(
+                (
+                    renamed[name],
+                    own_types[name],
+                    [OP_SIGNAL, OP_SIGNAL, OP_WHEN],
+                    [(name, line, column), (clock_signal, line, column), (line, column)],
+                )
+                for name in inputs
+            )
+            for target, signal_type, ops, args in filters:
+                own_types[target] = signal_type
+                self.define_local(
+                    model, target, signal_type, ops, args, (line, column), program.guard_labels[guard], program.guard_context[guard]
+                )
+
+    def define_local(self, model, target, signal_type, ops, args, position, labels, guards):
+        program = self.program
+        program.signal_names.append(target)
+        program.signal_roles.append("local")
+        program.signal_types.append(signal_type)
+        program.signal_models.append(model)
+        program.signal_positions.append(position)
+        program.equation_targets.append(target)
+        program.equation_ops.append(ops)
+        program.equation_args.append(args)
+        program.equation_positions.append(position)
+        program.equation_loops.append(-1)
+        program.equation_kinds.append(DEFINE)
+        program.equation_models.append(model)
+        program.equation_labels.append(labels)
+        program.equation_guards.append(guards)
 
     def parse_type_declaration(self):
         types = self.program.types
         self.expect("type")
         line, column = self.position()
         name = self.expect_name()
-        if name in types.name or self.is_declared(name):
-            raise CompileError(f"type {name} is declared twice", line, column)
+        if name in types.name or name in BUILTINS or name in AUTOMATON_INTRINSICS:
+            raise self.clash("type", name, line, column)
         self.expect("=")
-        self.expect("enum")
-        self.expect("(")
         values = []
-        while True:
-            line, column = self.position()
-            value = self.expect_name()
-            if value in values:
-                raise CompileError(f"enumerated value {value} is declared twice", line, column)
-            values.append(value)
-            if self.peek() != ",":
-                break
+        kind = KIND_EXTERNAL
+        if self.peek() == "external":
             self.index += 1
-        self.expect(")")
+        else:
+            kind = KIND_ENUM
+            self.expect("enum")
+            self.expect("(")
+            while True:
+                line, column = self.position()
+                value = self.expect_name()
+                if value in values:
+                    raise CompileError(f"enumerated value {value} is declared twice", line, column)
+                values.append(value)
+                if self.peek() != ",":
+                    break
+                self.index += 1
+            self.expect(")")
         self.expect(";")
         types.name.append(name)
-        types.kind.append(KIND_ENUM)
-        types.bytes.append(ENUM_BYTES)
+        types.kind.append(kind)
+        types.bytes.append(ENUM_BYTES if kind == KIND_ENUM else 0)
         types.signed.append(False)
         types.values.append(tuple(values))
         types.element.append(-1)
@@ -498,8 +899,8 @@ class Parser:
         while True:
             line, column = self.position()
             name = self.expect_name()
-            if self.is_declared(name):
-                raise CompileError(f"constant {name} is declared twice", line, column)
+            if self.is_declared(name) or name in program.signal_names or any(name in labels for labels in program.models.labels):
+                raise self.clash("constant", name, line, column)
             self.expect("=")
             if self.peek() == "[":
                 if not is_array:
@@ -543,6 +944,20 @@ class Parser:
             self.index += 1
         self.expect(";")
 
+    def parse_label_declaration(self):
+        labels = self.program.models.labels[self.model_stack[-1]]
+        self.expect("label")
+        while True:
+            line, column = self.position()
+            name = self.expect_name()
+            if self.is_declared(name):
+                raise self.clash("label", name, line, column)
+            labels.append(name)
+            if self.peek() != ",":
+                break
+            self.index += 1
+        self.expect(";")
+
     def parse_integer_constant(self):
         types = self.program.types
         target = -1
@@ -566,50 +981,81 @@ class Parser:
             value -= 1 << bits
         return value, target
 
-    def parse_process(self, loop, kind):
-        if self.peek() != "(|":
-            self.parse_equation(loop, kind)
-            return
-        self.index += 1
+    def parse_process(self):
+        program = self.program
+        frames = []
         while True:
-            self.parse_equation(loop, kind)
-            if self.peek() == "|)":
-                break
-            self.expect("|")
-            if self.peek() == "|)":
-                break
-        self.expect("|)")
+            loop, kind = next(((frame[1], frame[2]) for frame in reversed(frames) if frame[0] == "iterate"), (-1, DEFINE))
+            if self.peek() == "(|":
+                frames.append(("compose",))
+                self.index += 1
+                continue
+            if self.tokens.kinds[self.index] == "name" and self.tokens.texts[self.index + 1] == "::":
+                if loop >= 0:
+                    self.fail("only definitions are allowed inside iterate")
+                program.label_uses.append((self.model_stack[-1], self.peek(), *self.position()))
+                frames.append(("label", self.peek()))
+                self.index += 2
+                continue
+            labels = tuple(frame[1] for frame in frames if frame[0] == "label")
+            guards = tuple(frame[1] for frame in frames if frame[0] == "guard")
+            if self.peek() == "on" and self.tokens.kinds[self.index] == "keyword":
+                if loop >= 0:
+                    self.fail("only definitions are allowed inside iterate")
+                program.guard_positions.append(self.position())
+                self.index += 1
+                ops, args = self.parse_expression()
+                self.expect("::")
+                program.guard_models.append(self.model_stack[-1])
+                program.guard_ops.append(ops)
+                program.guard_args.append(args)
+                program.guard_context.append(guards)
+                program.guard_labels.append(labels)
+                program.guard_signals.append(None)
+                frames.append(("guard", len(program.guard_models) - 1))
+                continue
+            if self.peek() == "iterate" and self.tokens.kinds[self.index] == "keyword":
+                if loop >= 0:
+                    self.fail("iterate cannot be nested")
+                if guards:
+                    self.fail("iterate is not allowed inside a guarded process")
+                self.index += 1
+                name_position = self.position()
+                program.loop_names.append(self.expect_name())
+                program.loop_positions.append(name_position)
+                program.loop_models.append(self.model_stack[-1])
+                self.expect("of")
+                frames.append(["iterate", len(program.loop_names) - 1, DEFINE])
+                continue
+            self.parse_equation(loop, kind, labels, guards)
+            while frames:
+                frame = frames[-1]
+                if frame[0] in ("label", "guard"):
+                    frames.pop()
+                elif frame[0] == "compose" and self.peek() == "|" and self.tokens.texts[self.index + 1] != "|)":
+                    self.index += 1
+                    break
+                elif frame[0] == "compose":
+                    self.index += self.peek() == "|"
+                    self.expect("|)")
+                    frames.pop()
+                elif frame[2] == DEFINE and self.peek() == "with":
+                    self.index += 1
+                    frame[2] = SEED
+                    break
+                else:
+                    self.expect("end")
+                    frames.pop()
+            if not frames:
+                return
 
-    def parse_equation(self, loop, kind):
+    def parse_equation(self, loop, kind, labels, guards):
         program = self.program
         line, column = self.position()
         follower = self.tokens.texts[self.index + 1] if self.tokens.kinds[self.index] == "name" else None
-        if self.peek() == "iterate" and self.tokens.kinds[self.index] == "keyword":
-            if loop >= 0:
-                self.fail("iterate cannot be nested")
-            self.index += 1
-            name_position = self.position()
-            program.loop_names.append(self.expect_name())
-            program.loop_positions.append(name_position)
-            self.expect("of")
-            self.parse_process(len(program.loop_names) - 1, DEFINE)
-            if self.peek() == "with":
-                self.index += 1
-                self.parse_process(len(program.loop_names) - 1, SEED)
-            self.expect("end")
-        elif follower == ":=":
-            target = self.expect_name()
-            self.expect(":=")
-            ops, args = self.parse_expression()
-            program.equation_targets.append(target)
-            program.equation_ops.append(ops)
-            program.equation_args.append(args)
-            program.equation_positions.append((line, column))
-            program.equation_loops.append(loop)
-            program.equation_kinds.append(kind)
-        elif loop >= 0:
+        if loop >= 0 and follower != ":=":
             self.fail("only definitions are allowed inside iterate")
-        elif follower == "-->":
+        if follower == "-->":
             previous = (self.expect_name(), line, column)
             while self.peek() == "-->":
                 self.index += 1
@@ -617,21 +1063,41 @@ class Parser:
                     self.fail("--> requires signal names")
                 current = (self.peek(), *self.position())
                 self.index += 1
-                self.program.dependence_from.append(previous)
-                self.program.dependence_to.append(current)
-                self.program.dependence_positions.append((line, column))
+                program.dependence_from.append(previous)
+                program.dependence_to.append(current)
+                program.dependence_positions.append((line, column))
+                program.dependence_models.append(self.model_stack[-1])
+                program.dependence_guards.append(guards)
                 previous = current
             if self.peek() not in ("|", "|)"):
                 self.fail("--> requires signal names")
-        else:
-            group = [self.parse_expression()]
+            return
+        target = None
+        if follower == ":=":
+            target = self.expect_name()
+            self.expect(":=")
+        ops, args = self.parse_expression()
+        if target is None and (self.peek() == "^=" or ops[-1] != OP_CALL):
             if self.peek() != "^=":
                 self.fail(f"expected ':=' or '^=', found {self.peek() or 'end of file'!r}")
+            group = [(ops, args)]
             while self.peek() == "^=":
                 self.index += 1
                 group.append(self.parse_expression())
-            self.program.constraint_groups.append(group)
-            self.program.constraint_positions.append((line, column))
+            program.constraint_groups.append(group)
+            program.constraint_positions.append((line, column))
+            program.constraint_models.append(self.model_stack[-1])
+            program.constraint_guards.append(guards)
+            return
+        program.equation_targets.append(target)
+        program.equation_ops.append(ops)
+        program.equation_args.append(args)
+        program.equation_positions.append((line, column))
+        program.equation_loops.append(loop)
+        program.equation_kinds.append(kind)
+        program.equation_models.append(self.model_stack[-1])
+        program.equation_labels.append(labels)
+        program.equation_guards.append(guards)
 
     def parse_literal(self):
         text = self.peek()
@@ -663,15 +1129,34 @@ class Parser:
             kind = self.tokens.kinds[self.index]
             position = self.position()
             if expect_operand:
+                if text == ")" and pending and pending[-1][0] == OP_CALL and self.tokens.texts[self.index - 1] == "(":
+                    self.reduce(pending.pop(), ops, args)
+                    self.index += 1
+                    expect_operand = False
+                    continue
                 literal = self.parse_literal()
                 if literal is not None:
                     ops.append(literal[0])
                     args.append(literal[1])
                     expect_operand = False
                     continue
-                if (kind == "name" or text in TYPE_NAMES) and self.tokens.texts[self.index + 1] == "(":
-                    pending.append((OP_CALL, 0, (*position, text)))
+                if (kind == "name" or text in TYPE_NAMES) and self.tokens.texts[self.index + 1] in ("(", "{"):
                     self.index += 1
+                    params = []
+                    if self.peek() == "{":
+                        self.index += 1
+                        while True:
+                            if self.tokens.kinds[self.index] not in ("name", "keyword", "number"):
+                                self.fail(f"expected a static parameter, found {self.peek() or 'end of file'!r}")
+                            params.append((self.peek(), self.tokens.kinds[self.index], *self.position()))
+                            self.index += 1
+                            if self.peek() != ",":
+                                break
+                            self.index += 1
+                        self.expect("}")
+                        if self.peek() != "(":
+                            self.expect("(")
+                    pending.append((OP_CALL, 0, (*position, text, tuple(params), 0)))
                 elif kind == "name":
                     ops.append(OP_SIGNAL)
                     args.append((text, *position))
@@ -741,10 +1226,17 @@ class Parser:
                 if (opener[0] == "[") != (text == "]"):
                     self.fail("unbalanced parenthesis")
                 if opener[0] == OP_CALL:
-                    self.reduce(opener, ops, args)
+                    self.reduce((OP_CALL, 0, (*opener[2][:4], opener[2][4] + 1)), ops, args)
                 elif opener[0] == "[":
                     self.reduce((OP_INDEX, 0, opener[2]), ops, args)
                 self.index += 1
+            elif text == "," and [entry[0] for entry in pending if entry[0] in OPENERS][-1:] == [OP_CALL]:
+                while pending[-1][0] != OP_CALL:
+                    self.reduce(pending.pop(), ops, args)
+                call = pending.pop()
+                pending.append((OP_CALL, 0, (*call[2][:4], call[2][4] + 1)))
+                self.index += 1
+                expect_operand = True
             elif text in EXPRESSION_TERMINATORS or text == ")":
                 while pending:
                     if pending[-1][0] in OPENERS:
@@ -761,6 +1253,239 @@ class Parser:
         op, _, position = entry
         ops.append(op)
         args.append(position)
+
+
+def call_segments(ops, args):
+    starts = []
+    open_starts = []
+    for index, (op, arg) in enumerate(zip(ops, args)):
+        arity = 0 if op in (OP_SIGNAL, OP_CONST, OP_ENUMCONST) else arg[4] if op == OP_CALL else 1 if op in UNARY_OPS else 2
+        start = open_starts[-arity] if arity else index
+        del open_starts[len(open_starts) - arity:]
+        open_starts.append(start)
+        starts.append(start)
+    return starts
+
+
+def instantiate(source):
+    models = source.models
+    flat = Program(
+        name=source.name,
+        types=source.types,
+        constant_names=source.constant_names,
+        constant_types=source.constant_types,
+        constant_values=source.constant_values,
+        table_types=source.table_types,
+        table_values=source.table_values,
+    )
+    instance_models = [0]
+    instance_parents = [-1]
+    instance_prefixes = [""]
+    instance_labels = [()]
+    instance_guards = [()]
+    instance_counts = [0] * len(models.name)
+    instance = 0
+    while instance < len(instance_models):
+        model = instance_models[instance]
+        prefix = instance_prefixes[instance]
+        own_labels = models.labels[model]
+        flat.label_names.extend(prefix + label for label in own_labels)
+        own = set()
+        for name, role, signal_type, owner, position in zip(
+            source.signal_names, source.signal_roles, source.signal_types, source.signal_models, source.signal_positions
+        ):
+            if owner == model:
+                own.add(name)
+                flat.signal_names.append(prefix + name)
+                flat.signal_roles.append(role if instance == 0 else "local")
+                flat.signal_types.append(signal_type)
+                flat.signal_positions.append(position)
+        flat_loops = {}
+        for loop, owner in enumerate(source.loop_models):
+            if owner != model:
+                continue
+            name = source.loop_names[loop]
+            if name not in own:
+                raise CompileError(f"signal {name} is not declared", *source.loop_positions[loop])
+            flat_loops[loop] = len(flat.loop_names)
+            flat.loop_names.append(prefix + name)
+            flat.loop_positions.append(source.loop_positions[loop])
+        postfixes = [(equation, -1) for equation, owner in enumerate(source.equation_models) if owner == model]
+        postfixes.extend(
+            (group, member)
+            for group, owner in enumerate(source.constraint_models)
+            if owner == model
+            for member in range(len(source.constraint_groups[group]))
+        )
+        for item, member in postfixes:
+            if member < 0:
+                ops = source.equation_ops[item]
+                args = source.equation_args[item]
+                target = source.equation_targets[item]
+                loop = source.equation_loops[item]
+                labels = instance_labels[instance] + tuple(prefix + label for label in source.equation_labels[item])
+                guards = instance_guards[instance] + tuple(
+                    prefix + source.guard_signals[guard] for guard in source.equation_guards[item]
+                )
+                if target is not None and target not in own and source.equation_kinds[item] == DEFINE:
+                    raise CompileError(f"signal {target} is not declared", *source.equation_positions[item])
+            else:
+                ops, args = source.constraint_groups[item][member]
+                target = ""
+                loop = -1
+                labels = instance_labels[instance]
+                guards = instance_guards[instance] + tuple(
+                    prefix + source.guard_signals[guard] for guard in source.constraint_guards[item]
+                )
+            out_ops = []
+            out_args = []
+            starts = []
+            for index, (op, arg) in enumerate(zip(ops, args)):
+                if op in (OP_SIGNAL, OP_CONST, OP_ENUMCONST):
+                    if op == OP_SIGNAL and arg[0] in own:
+                        arg = (prefix + arg[0], arg[1], arg[2])
+                    elif op == OP_SIGNAL and arg[0] in own_labels:
+                        raise CompileError(f"label {arg[0]} cannot be used as a signal", arg[1], arg[2])
+                    elif op == OP_SIGNAL and arg[0] not in source.constant_names:
+                        raise CompileError(f"signal {arg[0]} is not declared", arg[1], arg[2])
+                    starts.append(len(out_ops))
+                    out_ops.append(op)
+                    out_args.append(arg)
+                    continue
+                arity = arg[4] if op == OP_CALL else 1 if op in UNARY_OPS else 2
+                operand_starts = starts[len(starts) - arity:]
+                del starts[len(starts) - arity:]
+                start = operand_starts[0] if operand_starts else len(out_ops)
+                if op == OP_CALL:
+                    line, column, name, params, count = arg
+                    called_as_process = target is None and index == len(ops) - 1
+                    if name in source.types.name or name == "indices":
+                        if called_as_process:
+                            raise CompileError(f"model {name} has an output and cannot be called as a process", line, column)
+                        if count != 1 or params:
+                            message = f"conversion to {name} expects one argument" if name != "indices" else "indices expects a positive constant"
+                            raise CompileError(message, line, column)
+                    elif name in BUILTINS:
+                        _, input_count, has_output = BUILTINS[name]
+                        if loop >= 0:
+                            raise CompileError("model calls are not allowed inside iterate", line, column)
+                        if count != input_count:
+                            raise CompileError(
+                                f"wrong number of arguments for {name}: expected {input_count}, found {count}", line, column
+                            )
+                        if called_as_process and has_output:
+                            raise CompileError(f"model {name} has an output and cannot be called as a process", line, column)
+                        if not called_as_process and not has_output:
+                            raise CompileError(f"model {name} has no output and cannot be used in an expression", line, column)
+                        caller = instance
+                        while caller >= 0 and models.kind[instance_models[caller]] not in PURE_CLASSES:
+                            caller = instance_parents[caller]
+                        if caller >= 0:
+                            pure_model = instance_models[caller]
+                            raise CompileError(
+                                f"unsafe model {name} is called from {models.kind[pure_model]} {models.name[pure_model]}",
+                                line,
+                                column,
+                            )
+                        op = OP_EFFECT
+                    else:
+                        if name not in models.name:
+                            raise CompileError(f"model {name} is not declared", line, column)
+                        callee = models.name.index(name)
+                        if params:
+                            raise CompileError(f"model {name} takes no static parameters", line, column)
+                        if loop >= 0:
+                            raise CompileError("model calls are not allowed inside iterate", line, column)
+                        caller = instance
+                        while caller >= 0:
+                            if instance_models[caller] == callee:
+                                raise CompileError(f"model {name} calls itself", line, column)
+                            caller = instance_parents[caller]
+                        interface = [
+                            (signal, role)
+                            for signal, role, owner in zip(source.signal_names, source.signal_roles, source.signal_models)
+                            if owner == callee and role != "local"
+                        ]
+                        inputs = [signal for signal, role in interface if role == "input"]
+                        outputs = [signal for signal, role in interface if role == "output"]
+                        if count != len(inputs):
+                            raise CompileError(
+                                f"wrong number of arguments for {name}: expected {len(inputs)}, found {count}", line, column
+                            )
+                        if len(outputs) >= 2:
+                            raise CompileError(
+                                f"model {name} has {len(outputs)} outputs; only models with at most one output can be called",
+                                line,
+                                column,
+                            )
+                        if called_as_process and outputs:
+                            raise CompileError(f"model {name} has an output and cannot be called as a process", line, column)
+                        if not called_as_process and not outputs:
+                            raise CompileError(f"model {name} has no output and cannot be used in an expression", line, column)
+                        instance_counts[callee] += 1
+                        callee_prefix = f"{name}#{instance_counts[callee]}."
+                        instance_models.append(callee)
+                        instance_parents.append(instance)
+                        instance_prefixes.append(callee_prefix)
+                        instance_guards.append(guards)
+                        if member < 0 and target is not None and source.equation_kinds[item] == DEFINE:
+                            flat.label_names.append(f"{prefix}{target}'call")
+                            instance_labels.append((*labels, f"{prefix}{target}'call"))
+                        else:
+                            instance_labels.append(labels)
+                        bounds = operand_starts + [len(out_ops)]
+                        for position, signal in enumerate(inputs):
+                            flat.equation_targets.append(callee_prefix + signal)
+                            flat.equation_ops.append(out_ops[bounds[position]:bounds[position + 1]])
+                            flat.equation_args.append(out_args[bounds[position]:bounds[position + 1]])
+                            flat.equation_positions.append((line, column))
+                            flat.equation_loops.append(-1)
+                            flat.equation_kinds.append(DEFINE)
+                            flat.equation_labels.append(labels)
+                            flat.equation_guards.append(guards)
+                        if models.kind[callee] in ORDERED_CLASSES:
+                            for signal in inputs:
+                                for result in outputs:
+                                    flat.dependence_from.append((callee_prefix + signal, line, column))
+                                    flat.dependence_to.append((callee_prefix + result, line, column))
+                                    flat.dependence_positions.append((line, column))
+                        del out_ops[start:]
+                        del out_args[start:]
+                        if not outputs:
+                            continue
+                        op = OP_SIGNAL
+                        arg = (callee_prefix + outputs[0], line, column)
+                starts.append(start)
+                out_ops.append(op)
+                out_args.append(arg)
+            if member >= 0:
+                if member == 0:
+                    flat.constraint_groups.append([])
+                    flat.constraint_positions.append(source.constraint_positions[item])
+                    flat.constraint_guards.append(guards)
+                flat.constraint_groups[-1].append((out_ops, out_args))
+            elif out_ops:
+                flat.equation_targets.append(None if target is None else prefix + target)
+                flat.equation_ops.append(out_ops)
+                flat.equation_args.append(out_args)
+                flat.equation_positions.append(source.equation_positions[item])
+                flat.equation_loops.append(flat_loops[loop] if loop >= 0 else -1)
+                flat.equation_kinds.append(source.equation_kinds[item])
+                flat.equation_labels.append(labels)
+                flat.equation_guards.append(guards)
+        for source_end, destination_end, position, owner in zip(
+            source.dependence_from, source.dependence_to, source.dependence_positions, source.dependence_models
+        ):
+            if owner != model:
+                continue
+            for name, line, column in (source_end, destination_end):
+                if name not in own and name not in own_labels:
+                    raise CompileError(f"signal {name} is not declared", line, column)
+            flat.dependence_from.append((prefix + source_end[0], source_end[1], source_end[2]))
+            flat.dependence_to.append((prefix + destination_end[0], destination_end[1], destination_end[2]))
+            flat.dependence_positions.append(position)
+        instance += 1
+    return flat
 
 
 def flatten(rows, program, indices, ops, args, owner, line, column, loop, loops):
@@ -789,6 +1514,78 @@ def flatten(rows, program, indices, ops, args, owner, line, column, loop, loops)
             arg = resolve_enum(types, *arg)
         if op in (OP_CONST, OP_TABLE):
             value, row_type = arg
+        elif op == OP_EFFECT:
+            line, column, name, params, count = arg
+            parameter_kinds = ("resource", *BUILTINS[name][0])
+            if len(params) != len(parameter_kinds):
+                raise CompileError(
+                    f"{name} expects {len(parameter_kinds)} static parameters, found {len(params)}", line, column
+                )
+            resource = param = -1
+            for (text, token_kind, param_line, param_column), param_kind in zip(params, parameter_kinds):
+                constant = program.constant_names.index(text) if text in program.constant_names else -1
+                if param_kind == "word" and token_kind == "number":
+                    param = int(text)
+                elif param_kind == "word" and constant >= 0 and is_integer(types, program.constant_types[constant]):
+                    param = program.constant_values[constant]
+                elif param_kind == "word":
+                    raise CompileError(f"the word of {name} must be an integer constant", param_line, param_column)
+                elif text not in types.name:
+                    raise CompileError(f"type {text} is not declared", param_line, param_column)
+                elif param_kind == "resource" and types.kind[types.name.index(text)] != KIND_EXTERNAL:
+                    raise CompileError(f"the resource of {name} must be an external type", param_line, param_column)
+                elif param_kind == "resource":
+                    resource = types.name.index(text)
+                elif types.kind[types.name.index(text)] not in (KIND_INT, KIND_POINTER):
+                    raise CompileError(f"{name} accesses an integer or pointer type, found {text}", param_line, param_column)
+                else:
+                    param = types.name.index(text)
+                if param_kind == "word" and not 0 <= param < 1 << 32:
+                    raise CompileError(f"the word of {name} must fit in 32 bits", param_line, param_column)
+            operands = stack[len(stack) - count:]
+            del stack[len(stack) - count:]
+            operand_types = [types.name[rows.type[operand]] for operand in operands]
+            for operand in operands:
+                if rows.op[operand] == OP_PAIR:
+                    raise CompileError("':' is supported only as the right operand of next", rows.line[operand], rows.column[operand])
+            if name in ("load", "store") and rows.type[operands[0]] != POINTER:
+                raise CompileError(f"input 1 of {name} must be a pointer, found {operand_types[0]}", line, column)
+            if name == "store" and not subtype(types, rows.type[operands[1]], param):
+                raise CompileError(
+                    f"input 2 of store must have type {types.name[param]}, found {operand_types[1]}", line, column
+                )
+            for position, operand in enumerate(operands, 1):
+                if name == "syscall" and types.kind[rows.type[operand]] not in (KIND_INT, KIND_POINTER):
+                    raise CompileError(
+                        f"input {position} of syscall must be an integer or a pointer, found {operand_types[position - 1]}",
+                        line,
+                        column,
+                    )
+            if name == "instruction" and not subtype(types, rows.type[operands[0]], ULONG):
+                raise CompileError(f"input 1 of instruction must have type ulong, found {operand_types[0]}", line, column)
+            row_type = {"load": param, "store": EVENT, "syscall": LONG, "instruction": ULONG}[name]
+            for operand in reversed(operands):
+                for column_list, cell in zip(
+                    (rows.op, rows.left, rows.right, rows.value, rows.type, rows.ctx, rows.line, rows.column, rows.owner, rows.loop),
+                    (
+                        OP_ARG,
+                        operand,
+                        left,
+                        0,
+                        rows.type[operand],
+                        rows.ctx[operand] and (left < 0 or rows.ctx[left]),
+                        line,
+                        column,
+                        owner,
+                        loop,
+                    ),
+                ):
+                    column_list.append(cell)
+                left = len(rows.op) - 1
+            value = len(rows.effects.kind)
+            rows.effects.kind.append(name)
+            rows.effects.resource.append(resource)
+            rows.effects.param.append(param)
         elif op != OP_ITER:
             line, column = arg[0], arg[1]
             if op in UNARY_OPS:
@@ -877,8 +1674,6 @@ def flatten(rows, program, indices, ops, args, owner, line, column, loop, loops)
                     raise CompileError("the condition of if must be boolean", line, column)
                 row_type = right_type
             elif op == OP_CALL:
-                if arg[2] not in types.name:
-                    raise CompileError("process instances are not supported", line, column)
                 op = OP_CONVERT
                 row_type = types.name.index(arg[2])
                 if not (
@@ -975,12 +1770,9 @@ def lower(program):
     names = program.signal_names
     types = program.signal_types
     indices = {name: i for i, name in enumerate(names)}
-    for name, role in zip(names, program.signal_roles):
-        if role == "input":
-            raise CompileError(f"input signal {name} is not supported yet", 1, 1)
     rows = Rows()
-    for signal in range(len(names)):
-        rows.op.append(OP_COPY)
+    for signal, role in enumerate(program.signal_roles):
+        rows.op.append(OP_INPUT if role == "input" else OP_COPY)
         rows.left.append(-1)
         rows.right.append(-1)
         rows.value.append(0)
@@ -990,6 +1782,7 @@ def lower(program):
         rows.column.append(1)
         rows.owner.append(signal)
         rows.loop.append(-1)
+        rows.guard.append(-1)
     loops = Loops()
     for name, (line, column) in zip(program.loop_names, program.loop_positions):
         if name not in indices:
@@ -1011,20 +1804,25 @@ def lower(program):
             raise CompileError(f"signal {target} is not declared", line, column)
         loops.defined[loop].add(indices[target])
         rows.loop[indices[target]] = loop
+    def_range = [(-1, -1)] * len(names)
+    label_rows = {label: [] for label in program.label_names}
     for equation, target in enumerate(program.equation_targets):
         line, column = program.equation_positions[equation]
         loop = program.equation_loops[equation]
         ops = program.equation_ops[equation]
         args = program.equation_args[equation]
+        start = len(rows.op)
         if program.equation_kinds[equation] == SEED:
             signal = indices.get(target, -1)
             if signal not in loops.defined[loop]:
                 raise CompileError(f"signal {target} in with is not defined by the iterate body", line, column)
-            if program.types.kind[types[signal]] == KIND_ARRAY:
-                raise CompileError("with can only initialize scalars", line, column)
             if any(op == OP_SIGNAL and indices.get(arg[0], -1) in loops.defined[loop] for op, arg in zip(ops, args)):
                 raise CompileError(f"the initial value of {target} cannot read a signal the iterate defines", line, column)
             top = flatten(rows, program, indices, ops, args, signal, line, column, -1, loops)
+            if program.types.kind[types[signal]] == KIND_ARRAY and not (
+                rows.op[top] == OP_TABLE or top < len(names) and rows.type[top] == types[signal]
+            ):
+                raise CompileError("with initializes an array only from an array constant or an array signal", line, column)
             if not subtype(program.types, rows.type[top], types[signal]):
                 raise CompileError(
                     f"signal {target} has type {program.types.name[types[signal]]} "
@@ -1042,40 +1840,71 @@ def lower(program):
             rows.column.append(column)
             rows.owner.append(signal)
             rows.loop.append(loop)
-            continue
-        if target not in indices:
-            raise CompileError(f"signal {target} is not declared", line, column)
-        signal = indices[target]
-        if rows.left[signal] >= 0:
-            raise CompileError(f"signal {target} is defined twice", line, column)
-        top = flatten(rows, program, indices, ops, args, signal, line, column, loop, loops)
-        if not subtype(program.types, rows.type[top], types[signal]):
-            raise CompileError(
-                f"signal {target} has type {program.types.name[types[signal]]} "
-                f"but its definition has type {program.types.name[rows.type[top]]}",
-                line,
-                column,
-            )
-        if program.types.kind[types[signal]] == KIND_ARRAY and rows.op[top] not in (OP_TABLE, OP_GATHER, OP_NEXT):
-            raise CompileError("an array signal must be defined by a constant, indices, a gather, or next", line, column)
-        rows.left[signal] = top
-        rows.line[signal] = line
-        rows.column[signal] = column
+        elif target is None:
+            signal = -1
+            flatten(rows, program, indices, ops, args, signal, line, column, loop, loops)
+        else:
+            if target not in indices:
+                raise CompileError(f"signal {target} is not declared", line, column)
+            signal = indices[target]
+            if rows.op[signal] == OP_INPUT:
+                raise CompileError(f"input signal {target} cannot be defined", line, column)
+            if rows.left[signal] >= 0:
+                raise CompileError(f"signal {target} is defined twice", line, column)
+            top = flatten(rows, program, indices, ops, args, signal, line, column, loop, loops)
+            if not subtype(program.types, rows.type[top], types[signal]):
+                raise CompileError(
+                    f"signal {target} has type {program.types.name[types[signal]]} "
+                    f"but its definition has type {program.types.name[rows.type[top]]}",
+                    line,
+                    column,
+                )
+            if program.types.kind[types[signal]] == KIND_ARRAY and rows.op[top] not in (OP_TABLE, OP_GATHER, OP_NEXT):
+                raise CompileError("an array signal must be defined by a constant, indices, a gather, or next", line, column)
+            rows.left[signal] = top
+            rows.line[signal] = line
+            rows.column[signal] = column
+            def_range[signal] = (start, len(rows.op))
+        guards = program.equation_guards[equation]
+        guard = indices[guards[-1]] if guards else -1
+        rows.guard.extend([guard] * (len(rows.op) - len(rows.guard)))
+        if signal >= 0 and program.equation_kinds[equation] == DEFINE:
+            rows.guard[signal] = guard
+        for label in program.equation_labels[equation]:
+            label_rows[label].extend(range(start, len(rows.op)))
+            if signal >= 0:
+                label_rows[label].append(signal)
     for signal, name in enumerate(names):
-        if rows.left[signal] < 0:
+        if rows.left[signal] < 0 and rows.op[signal] != OP_INPUT:
             raise CompileError(f"signal {name} is never defined", 1, 1)
-    for group, (line, column) in zip(program.constraint_groups, program.constraint_positions):
+    for group, (line, column), guards in zip(program.constraint_groups, program.constraint_positions, program.constraint_guards):
         members = [flatten(rows, program, indices, ops, args, -1, line, column, -1, loops) for ops, args in group]
+        rows.guard.extend([indices[guards[-1]] if guards else -1] * (len(rows.op) - len(rows.guard)))
         if any(rows.op[member] in (OP_GATHER, OP_NEXT) for member in members):
             raise CompileError("an array value can only be the whole definition of a signal", line, column)
         rows.groups.append(members)
         rows.group_positions.append((line, column))
     for source, destination in zip(program.dependence_from, program.dependence_to):
         for name, line, column in (source, destination):
-            if name not in indices:
+            if name not in indices and name not in label_rows:
                 raise CompileError(f"signal {name} is not declared", line, column)
-        rows.dependence_from.append(indices[source[0]])
-        rows.dependence_to.append(indices[destination[0]])
+        source_rows = (
+            [indices[source[0]], *label_rows.get(f"{source[0]}'call", ())]
+            if source[0] in indices
+            else label_rows[source[0]]
+        )
+        destination_rows = (
+            [
+                indices[destination[0]],
+                *range(*def_range[indices[destination[0]]]),
+                *label_rows.get(f"{destination[0]}'call", ()),
+            ]
+            if destination[0] in indices
+            else label_rows[destination[0]]
+        )
+        for source_row in source_rows:
+            rows.dependence_from.extend([source_row] * len(destination_rows))
+            rows.dependence_to.extend(destination_rows)
     for previous, op in enumerate(rows.op):
         if op != OP_PREV:
             continue
@@ -1087,8 +1916,7 @@ def lower(program):
             continue
         for reader in range(len(rows.op)):
             if reader != writer and previous in (rows.left[reader], rows.right[reader]):
-                rows.dependence_from.append(reader)
-                rows.dependence_to.append(writer)
+                rows.war.append((reader, writer, signal))
     return rows, loops
 
 
@@ -1189,7 +2017,7 @@ def clock_calculus(rows, program, loops):
                 sample = sample_of_row[condition]
         if rows.loop[row] >= 0:
             union(clocks, row, loops.index[rows.loop[row]])
-        if op in (OP_COPY, OP_SEED) or op in MONOCHRONOUS_OPS:
+        if op in (OP_COPY, OP_SEED, OP_EFFECT) or op in MONOCHRONOUS_OPS:
             union(clocks, row, left)
             if right >= 0:
                 union(clocks, row, right)
@@ -1255,8 +2083,18 @@ def clock_calculus(rows, program, loops):
     while progress:
         progress = False
         targets = {find(clocks, clocks.def_target[d]) for d in definitions if clocks.def_pending[d]}
+        class_guards = {}
+        for row in range(row_count):
+            if rows.guard[row] >= 0:
+                class_guards.setdefault(find(clocks, row), rows.guard[row])
         for clock in range(total):
             if find(clocks, clock) == clock and clocks.node_kind[clock] is None and clock not in targets:
+                guard_clock = find(clocks, class_guards.get(clock, clock))
+                if guard_clock != clock:
+                    if clocks.node_kind[guard_clock] is not None:
+                        clocks.parent[clock] = guard_clock
+                        progress = True
+                    continue
                 clocks.node_kind[clock] = ROOT
                 clocks.node_root[clock] = clock
                 progress = True
@@ -1350,6 +2188,16 @@ def clock_calculus(rows, program, loops):
             clocks.def_line[stalled[0]],
             clocks.def_column[stalled[0]],
         )
+    waiting_guards = sorted(
+        {rows.guard[row] for row in range(row_count) if clocks.node_kind[find(clocks, row)] is None and rows.guard[row] >= 0},
+        key=lambda guard: (rows.line[guard], rows.column[guard], program.signal_names[guard]),
+    )
+    if waiting_guards:
+        raise CompileError(
+            f"the clocks of guards {', '.join(program.signal_names[guard] for guard in waiting_guards)} depend on each other",
+            rows.line[waiting_guards[0]],
+            rows.column[waiting_guards[0]],
+        )
 
     for o in range(len(clocks.ob_small)):
         big = find(clocks, clocks.ob_big[o])
@@ -1408,11 +2256,16 @@ def clock_calculus(rows, program, loops):
                 line,
                 column,
             )
+    for signal, role in enumerate(program.signal_roles):
+        if role == "input" and clocks.node_kind[find(clocks, signal)] != ROOT:
+            raise CompileError(
+                f"input signal {program.signal_names[signal]} must have a root of its own", *program.signal_positions[signal]
+            )
     clocks.roots = root_order(clocks, len(program.signal_names))
     return clocks
 
 
-def kahn(program, rows, present, edges, super_node):
+def kahn(program, rows, present, edges, super_node, cyclic_ok=False):
     node_count = len(present)
     row_count = len(rows.op)
     successors = [[] for _ in range(node_count)]
@@ -1430,6 +2283,8 @@ def kahn(program, rows, present, edges, super_node):
             if unmet[successor] == 0:
                 ready.append(successor)
     if len(order) < sum(present):
+        if cyclic_ok:
+            return None
         core = {node for node in range(node_count) if present[node] and unmet[node] > 0}
         while True:
             sinks = {node for node in core if not any(successor in core for successor in successors[node])}
@@ -1437,6 +2292,21 @@ def kahn(program, rows, present, edges, super_node):
                 break
             core -= sinks
         owners = {rows.owner[row] for row in range(row_count) if super_node[row] in core and rows.owner[row] >= 0}
+        if not owners:
+            positions = sorted(
+                (rows.line[row], rows.column[row])
+                for row in range(row_count)
+                if super_node[row] in core and rows.op[row] == OP_EFFECT
+            )
+            if not positions:
+                raise CompileError(
+                    "causality cycle between clocks",
+                    *min(((rows.line[row], rows.column[row]) for row in range(row_count) if super_node[row] in core), default=(1, 1)),
+                )
+            raise CompileError(
+                f"causality cycle between effects at {', '.join(f'{line}:{column}' for line, column in positions)}",
+                *positions[0],
+            )
         names = sorted(program.signal_names[owner] for owner in owners)
         line, column = min((rows.line[owner], rows.column[owner]) for owner in owners)
         raise CompileError(f"causality cycle between signals {', '.join(names)}", line, column)
@@ -1456,7 +2326,7 @@ def schedule(program, rows, clocks, loops):
             edges.append((left, row))
             edges.append((row, right))
             continue
-        if op != OP_PREV and (op == OP_COPY or op in MONOCHRONOUS_OPS or op in (OP_WHEN, OP_DEFAULT)):
+        if op != OP_PREV and (op in (OP_COPY, OP_EFFECT) or op in MONOCHRONOUS_OPS or op in (OP_WHEN, OP_DEFAULT)):
             edges.append((left, row))
         if right >= 0 and (op in MONOCHRONOUS_OPS or op == OP_DEFAULT and not rows.ctx[left]):
             edges.append((right, row))
@@ -1470,14 +2340,61 @@ def schedule(program, rows, clocks, loops):
     edges.extend(zip(rows.dependence_from, rows.dependence_to))
     super_node = [loop_base + rows.loop[row] if rows.loop[row] >= 0 else row for row in range(row_count)]
     super_node.extend(range(row_count, loop_base + len(loops.index)))
-    outer_edges = [(super_node[a], super_node[b]) for a, b in edges if super_node[a] != super_node[b]]
+    outer_edges = [(super_node[a], super_node[b]) for a, b in edges if a == b or super_node[a] != super_node[b]]
     present = [loop < 0 for loop in rows.loop] + [kind is not None for kind in clocks.node_kind] + [True] * len(loops.index)
     order = kahn(program, rows, present, outer_edges, super_node)
     loop_orders = []
     for loop in range(len(loops.index)):
         members = [rows.loop[row] == loop and rows.op[row] != OP_SEED for row in range(row_count)]
         inner_edges = [(a, b) for a, b in edges if a < row_count and b < row_count and members[a] and members[b]]
-        loop_orders.append(kahn(program, rows, members, inner_edges, range(row_count)))
+        snapshots = {
+            rows.owner[row]
+            for row in range(row_count)
+            if members[row]
+            and rows.op[row] == OP_GATHER
+            and rows.op[rows.left[row]] == OP_PREV
+            and rows.left[rows.left[row]] == rows.owner[row]
+        }
+        loop_war = [(reader, writer, signal) for reader, writer, signal in rows.war if members[reader]]
+        war_kept = [(reader, writer) for reader, writer, signal in loop_war if signal not in snapshots]
+        loop_order = kahn(program, rows, members, inner_edges + war_kept, range(row_count), cyclic_ok=True)
+        if loop_order is None:
+            loop_order = kahn(program, rows, members, inner_edges, range(row_count))
+            snapshots |= {signal for _, _, signal in loop_war}
+        loops.snapshots.append(sorted(snapshots))
+        rows.snapshotted |= snapshots
+        loop_orders.append(loop_order)
+    successors = [[] for _ in range(loop_base)]
+    for source, destination in edges:
+        successors[source].append(destination)
+    effects = rows.effects
+    effect_rows = [row for row in range(row_count) if rows.op[row] == OP_EFFECT]
+    reached = {}
+    for row in effect_rows:
+        seen = {row}
+        pending = [row]
+        while pending:
+            node = pending.pop()
+            for successor in successors[node]:
+                if successor not in seen:
+                    seen.add(successor)
+                    pending.append(successor)
+        reached[row] = seen
+    for position, first in enumerate(effect_rows):
+        for second in effect_rows[position + 1:]:
+            first_effect = rows.value[first]
+            second_effect = rows.value[second]
+            if effects.resource[first_effect] != effects.resource[second_effect]:
+                continue
+            if second in reached[first] or first in reached[second]:
+                continue
+            raise CompileError(
+                f"effects {effects.kind[first_effect]} at {rows.line[first]}:{rows.column[first]} and "
+                f"{effects.kind[second_effect]} at {rows.line[second]}:{rows.column[second]} on resource "
+                f"{program.types.name[effects.resource[first_effect]]} have no order between them; order them with -->",
+                rows.line[second],
+                rows.column[second],
+            )
     return order, loop_orders
 
 
@@ -1554,6 +2471,8 @@ def load_operand(lines, register, types, rows, row):
 
 def storage_key(rows, row):
     while rows.op[row] in (OP_COPY, OP_PREV):
+        if rows.op[row] == OP_PREV and rows.left[row] in rows.snapshotted:
+            return f"p{rows.left[row]}"
         row = rows.left[row]
     return f"t{rows.value[row]}" if rows.op[row] == OP_TABLE else f"a{rows.owner[row]}"
 
@@ -1561,6 +2480,17 @@ def storage_key(rows, row):
 def address(lines, register, key):
     lines.append(f"    adrp x8, _addr_{key}@PAGE")
     lines.append(f"    ldr x{register}, [x8, _addr_{key}@PAGEOFF]")
+
+
+def copy_words(lines, source_key, destination_key, words, label):
+    address(lines, 12, source_key)
+    address(lines, 13, destination_key)
+    load_immediate(lines, 15, words)
+    lines.append(f"{label}:")
+    lines.append("    ldr x9, [x12], #8")
+    lines.append("    str x9, [x13], #8")
+    lines.append("    subs x15, x15, #1")
+    lines.append(f"    b.ne {label}")
 
 
 def element_operand(base, index, size):
@@ -1573,14 +2503,42 @@ def emit_row(lines, program, rows, clocks, row, gated):
     left = rows.left[row]
     right = rows.right[row]
     row_type = rows.type[row]
-    if op in (OP_TABLE, OP_PAIR, OP_BRANCH) or op in (OP_COPY, OP_PREV) and types.kind[row_type] == KIND_ARRAY:
+    if op in (OP_TABLE, OP_PAIR, OP_BRANCH, OP_INPUT, OP_ARG) or op in (OP_COPY, OP_PREV) and types.kind[row_type] == KIND_ARRAY:
         return
     if gated:
         load(lines, 9, f"_clk_{find(clocks, row)}", types, UINTEGER)
         lines.append(f"    cbz w9, Lr{row}")
-    if op == OP_SEED:
+    effect_kind = rows.effects.kind[rows.value[row]] if op == OP_EFFECT else None
+    if op == OP_SEED and types.kind[row_type] == KIND_ARRAY:
+        words = -(-types.size[row_type] * types.bytes[types.element[row_type]] // 8)
+        copy_words(lines, storage_key(rows, left), f"a{right}", words, f"Ls{row}")
+    elif op == OP_SEED:
         load_operand(lines, 9, types, rows, left)
         store(lines, 9, f"_sig_{right}", types, row_type)
+    elif op == OP_EFFECT:
+        operands = []
+        argument = left
+        while argument >= 0:
+            operands.append(rows.left[argument])
+            argument = rows.right[argument]
+        param = rows.effects.param[rows.value[row]]
+        if effect_kind == "load":
+            load_operand(lines, 9, types, rows, operands[0])
+            lines.append(f"    {LOAD[types.bytes[param], types.signed[param]]}9, [x9]")
+        elif effect_kind == "store":
+            load_operand(lines, 9, types, rows, operands[0])
+            load_operand(lines, 10, types, rows, operands[1])
+            lines.append(f"    {STORE[types.bytes[param]]}10, [x9]")
+        elif effect_kind == "syscall":
+            for register, operand in enumerate(operands[1:]):
+                load_operand(lines, register, types, rows, operand)
+            load_operand(lines, 16, types, rows, operands[0])
+            lines.append("    svc #0x80")
+            lines.append("    cneg x9, x0, cs")
+        else:
+            load_operand(lines, 0, types, rows, operands[0])
+            lines.append(f"    .inst 0x{param:08x}")
+            lines.append("    mov x9, x0")
     elif op == OP_ITER:
         element_size = types.bytes[row_type]
         address(lines, 12, storage_key(rows, left))
@@ -1625,14 +2583,7 @@ def emit_row(lines, program, rows, clocks, row, gated):
         destination = f"a{rows.owner[row]}"
         source = storage_key(rows, left)
         if source != destination:
-            address(lines, 12, source)
-            address(lines, 13, destination)
-            load_immediate(lines, 15, -(-types.size[row_type] * types.bytes[element] // 8))
-            lines.append(f"Lc{row}:")
-            lines.append("    ldr x9, [x12], #8")
-            lines.append("    str x9, [x13], #8")
-            lines.append("    subs x15, x15, #1")
-            lines.append(f"    b.ne Lc{row}")
+            copy_words(lines, source, destination, -(-types.size[row_type] * types.bytes[element] // 8), f"Lc{row}")
         address(lines, 12, destination)
         load_operand(lines, 10, types, rows, rows.left[right])
         load_operand(lines, 9, types, rows, rows.right[right])
@@ -1692,7 +2643,7 @@ def emit_row(lines, program, rows, clocks, row, gated):
             lines.append("    cmp x10, #64")
             lines.append(f"    {SHIFT_OPS[op]} x11, x9, x10")
             lines.append("    csel x9, x11, xzr, lo")
-    if op not in (OP_GATHER, OP_NEXT, OP_SEED):
+    if op not in (OP_GATHER, OP_NEXT, OP_SEED) and effect_kind != "store":
         store(lines, 9, f"_sig_{row}", types, row_type)
     if gated:
         lines.append(f"Lr{row}:")
@@ -1702,17 +2653,25 @@ def emit_assembly(program, rows, clocks, loops, order, loop_orders):
     types = program.types
     row_count = len(rows.op)
     root_count = len(clocks.roots)
+    inputs = [signal for signal, role in enumerate(program.signal_roles) if role == "input"]
+    value_inputs = [signal for signal in inputs if types.kind[rows.type[signal]] != KIND_EVENT]
+    reads_line = root_count >= 2 or bool(inputs)
+    line_capacity = root_count + 22 * len(value_inputs)
     windows = []
     reservation_bytes = 0
-    for signal in range(len(program.signal_names)):
-        if rows.op[rows.left[signal]] in (OP_GATHER, OP_NEXT):
-            signal_type = rows.type[signal]
-            used_bytes = -(-types.size[signal_type] * types.bytes[types.element[signal_type]] // 8) * 8
-            window_bytes = -(-used_bytes // WINDOW_BYTES) * WINDOW_BYTES
-            windows.append((f"a{signal}", reservation_bytes, window_bytes))
-            reservation_bytes += window_bytes + WINDOW_BYTES
-            if reservation_bytes >> 64:
-                raise CompileError("arrays need more than 2^64 bytes of address space", rows.line[signal], rows.column[signal])
+    arrays = [
+        signal
+        for signal in range(len(program.signal_names))
+        if rows.op[signal] == OP_COPY and rows.op[rows.left[signal]] in (OP_GATHER, OP_NEXT)
+    ]
+    for key, signal in [(f"a{signal}", signal) for signal in arrays] + [(f"p{signal}", signal) for signal in sorted(rows.snapshotted)]:
+        signal_type = rows.type[signal]
+        used_bytes = -(-types.size[signal_type] * types.bytes[types.element[signal_type]] // 8) * 8
+        window_bytes = -(-used_bytes // WINDOW_BYTES) * WINDOW_BYTES
+        windows.append((key, reservation_bytes, window_bytes))
+        reservation_bytes += window_bytes + WINDOW_BYTES
+        if reservation_bytes >> 64:
+            raise CompileError("arrays need more than 2^64 bytes of address space", rows.line[signal], rows.column[signal])
     lines = [
         "    .section __TEXT,__text,regular,pure_instructions",
         "    .globl _start",
@@ -1745,7 +2704,7 @@ def emit_assembly(program, rows, clocks, loops, order, loop_orders):
             lines.append("    b.cs Lreserve_failed")
     lines.append("Lstep:")
     lines.append("    add x22, x22, #1")
-    if root_count >= 2:
+    if reads_line:
         lines.extend([
             "    adrp x21, _in_buffer@PAGE",
             "    add x21, x21, _in_buffer@PAGEOFF",
@@ -1766,15 +2725,47 @@ def emit_assembly(program, rows, clocks, loops, order, loop_orders):
             "    ldrb w9, [x21, x19]",
             "    cmp w9, #10",
             "    b.eq Lread_line",
-            f"    cmp x19, #{root_count}",
-            "    b.ge Lmalformed",
+            "    add x19, x19, #1",
+        ])
+        load_immediate(lines, 11, line_capacity)
+        lines.extend([
+            "    cmp x19, x11",
+            "    b.ls Lread",
+            "    b Lmalformed",
+            "Lread_line:",
+        ])
+        load_immediate(lines, 11, root_count)
+        lines.extend([
+            "    cmp x19, x11",
+            "    b.lo Lmalformed",
+            "    mov x19, #0",
+            "Lpresence:",
+            "    cmp x19, x11",
+            "    b.eq Lpresence_done",
+            "    ldrb w9, [x21, x19]",
             "    sub w9, w9, #48",
             "    cmp w9, #1",
             "    b.hi Lmalformed",
             "    add x19, x19, #1",
-            "    b Lread",
-            "Lread_line:",
-            f"    cmp x19, #{root_count}",
+            "    b Lpresence",
+            "Lpresence_done:",
+        ])
+        for signal in value_inputs:
+            input_type = rows.type[signal]
+            lines.append(f"    ldrb w9, [x21, #{clocks.roots.index(clocks.node_root[find(clocks, signal)])}]")
+            lines.append("    cmp w9, #49")
+            lines.append(f"    b.ne Lin{signal}")
+            lines.append("    bl Lread_value")
+            if types.kind[input_type] in (KIND_BOOLEAN, KIND_ENUM):
+                lines.append("    cbnz x11, Lmalformed")
+                load_immediate(lines, 12, 2 if types.kind[input_type] == KIND_BOOLEAN else len(types.values[input_type]))
+                lines.append("    cmp x0, x12")
+                lines.append("    b.hs Lmalformed")
+            store(lines, 0, f"_sig_{signal}", types, input_type)
+            lines.append(f"Lin{signal}:")
+        lines.extend([
+            "    ldrb w9, [x21, x19]",
+            "    cmp w9, #10",
             "    b.eq Lread_done",
             "Lmalformed:",
             "    mov x0, #2",
@@ -1814,6 +2805,10 @@ def emit_assembly(program, rows, clocks, loops, order, loop_orders):
                     emit_row(lines, program, rows, clocks, row, False)
             lines.append("    mov x23, #0")
             lines.append(f"Lloop{loop}:")
+            for signal in loops.snapshots[loop]:
+                signal_type = rows.type[signal]
+                words = -(-types.size[signal_type] * types.bytes[types.element[signal_type]] // 8)
+                copy_words(lines, f"a{signal}", f"p{signal}", words, f"Lp{loop}_{signal}")
             for row in loop_orders[loop]:
                 emit_row(lines, program, rows, clocks, row, False)
             lines.append("    add x23, x23, #1")
@@ -1825,7 +2820,7 @@ def emit_assembly(program, rows, clocks, loops, order, loop_orders):
         if node >= row_count:
             clock = node - row_count
             kind = clocks.node_kind[clock]
-            if kind == ROOT and root_count >= 2:
+            if kind == ROOT and reads_line:
                 lines.append(f"    ldrb w9, [x21, #{clocks.roots.index(clock)}]")
                 lines.append("    cmp w9, #49")
                 lines.append("    cset w9, eq")
@@ -1849,34 +2844,35 @@ def emit_assembly(program, rows, clocks, loops, order, loop_orders):
         load(lines, 9, f"_sig_{rows.left[row]}", types, rows.type[row])
         store(lines, 9, f"_mem_{row}", types, rows.type[row])
         lines.append(f"Ld{row}:")
-    lines.append("    adrp x20, _out_buffer@PAGE")
-    lines.append("    add x20, x20, _out_buffer@PAGEOFF")
     outputs = [i for i, role in enumerate(program.signal_roles) if role == "output"]
-    for position, signal in enumerate(outputs):
-        if position:
-            lines.append("    mov w10, #32")
+    if outputs:
+        lines.append("    adrp x20, _out_buffer@PAGE")
+        lines.append("    add x20, x20, _out_buffer@PAGEOFF")
+        for position, signal in enumerate(outputs):
+            if position:
+                lines.append("    mov w10, #32")
+                lines.append("    strb w10, [x20], #1")
+            load(lines, 9, f"_clk_{find(clocks, signal)}", types, UINTEGER)
+            lines.append(f"    cbz w9, Labsent{signal}")
+            signal_type = rows.type[signal]
+            load(lines, 0, f"_sig_{signal}", types, signal_type)
+            if is_logical(types, signal_type):
+                lines.append("    bl _rt_put_bool")
+            else:
+                lines.append(f"    bl {'_rt_put_int' if types.signed[signal_type] else '_rt_put_uint'}")
+            lines.append(f"    b Lput{signal}")
+            lines.append(f"Labsent{signal}:")
+            lines.append("    mov w10, #45")
             lines.append("    strb w10, [x20], #1")
-        load(lines, 9, f"_clk_{find(clocks, signal)}", types, UINTEGER)
-        lines.append(f"    cbz w9, Labsent{signal}")
-        signal_type = rows.type[signal]
-        load(lines, 0, f"_sig_{signal}", types, signal_type)
-        if is_logical(types, signal_type):
-            lines.append("    bl _rt_put_bool")
-        else:
-            lines.append(f"    bl {'_rt_put_int' if types.signed[signal_type] else '_rt_put_uint'}")
-        lines.append(f"    b Lput{signal}")
-        lines.append(f"Labsent{signal}:")
-        lines.append("    mov w10, #45")
+            lines.append(f"Lput{signal}:")
+        lines.append("    mov w10, #10")
         lines.append("    strb w10, [x20], #1")
-        lines.append(f"Lput{signal}:")
-    lines.append("    mov w10, #10")
-    lines.append("    strb w10, [x20], #1")
-    lines.append("    adrp x1, _out_buffer@PAGE")
-    lines.append("    add x1, x1, _out_buffer@PAGEOFF")
-    lines.append("    sub x2, x20, x1")
-    lines.append("    mov x0, #1")
-    lines.append("    mov x16, #4")
-    lines.append("    svc #0x80")
+        lines.append("    adrp x1, _out_buffer@PAGE")
+        lines.append("    add x1, x1, _out_buffer@PAGEOFF")
+        lines.append("    sub x2, x20, x1")
+        lines.append("    mov x0, #1")
+        lines.append("    mov x16, #4")
+        lines.append("    svc #0x80")
     lines.append("    b Lstep")
     if windows:
         lines.extend([
@@ -1893,6 +2889,46 @@ def emit_assembly(program, rows, clocks, loops, order, loop_orders):
             "Lreserve_text:",
             '    .ascii "memory reservation failed\\n"',
         ])
+    if value_inputs:
+        lines.extend([
+            "    .p2align 2",
+            "Lread_value:",
+            "    ldrb w9, [x21, x19]",
+            "    cmp w9, #32",
+            "    b.ne Lmalformed",
+            "    add x19, x19, #1",
+            "    mov x11, #0",
+            "    ldrb w9, [x21, x19]",
+            "    cmp w9, #45",
+            "    b.ne Lread_digits",
+            "    mov x11, #1",
+            "    add x19, x19, #1",
+            "Lread_digits:",
+            "    mov x0, #0",
+            "    mov x12, #0",
+            "    mov x13, #10",
+            "Lread_digit:",
+            "    ldrb w9, [x21, x19]",
+            "    sub w9, w9, #48",
+            "    cmp w9, #9",
+            "    b.hi Lread_digits_end",
+            "    umulh x14, x0, x13",
+            "    cbnz x14, Lmalformed",
+            "    mul x0, x0, x13",
+            "    adds x0, x0, x9",
+            "    b.cs Lmalformed",
+            "    add x19, x19, #1",
+            "    add x12, x12, #1",
+            "    b Lread_digit",
+            "Lread_digits_end:",
+            "    cbz x12, Lmalformed",
+            "    cmp x12, #20",
+            "    b.hi Lmalformed",
+            "    cbz x11, Lread_value_done",
+            "    neg x0, x0",
+            "Lread_value_done:",
+            "    ret",
+        ])
     lines.append(RUNTIME_ASSEMBLY)
     lines.append("    .section __DATA,__data")
     for table, (table_type, values) in enumerate(zip(program.table_types, program.table_values)):
@@ -1908,13 +2944,13 @@ def emit_assembly(program, rows, clocks, loops, order, loop_orders):
     for key, _, _ in windows:
         lines.append(f"_addr_{key}: .quad 0")
     for row in range(row_count):
-        lines.append(f"_sig_{row}: .quad 0")
+        lines.append(f"_sig_{row}: .quad {int(row in inputs and row not in value_inputs)}")
     for row in delays:
         lines.append(f"_mem_{row}: .quad {rows.value[row] & MASK64}")
     for clock, kind in enumerate(clocks.node_kind):
         if kind is not None:
             lines.append(f"_clk_{clock}: .long 0")
-    lines.append(f"_in_buffer: .space {root_count + 1}")
+    lines.append(f"_in_buffer: .space {line_capacity + 1}")
     lines.append(f"_out_buffer: .space {24 * (len(outputs) + 1)}")
     return "\n".join(lines) + "\n"
 
@@ -1941,7 +2977,7 @@ def main():
     arguments.add_argument("-o", "--output", type=Path, required=True)
     options = arguments.parse_args()
     try:
-        program = Parser(lex(options.source.read_text())).parse_program()
+        program = instantiate(Parser(lex(options.source.read_text())).parse_program())
         rows, loops = lower(program)
         clocks = clock_calculus(rows, program, loops)
         order, loop_orders = schedule(program, rows, clocks, loops)

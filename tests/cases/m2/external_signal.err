@@ -1,0 +1,1 @@
+type MEM is external; signals cannot have that type
