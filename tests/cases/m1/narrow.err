@@ -1,0 +1,1 @@
+signal S has type short but its definition has type integer

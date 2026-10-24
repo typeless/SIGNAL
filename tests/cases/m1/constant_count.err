@@ -1,0 +1,1 @@
+constant A has type [3] integer but its definition has 4 elements

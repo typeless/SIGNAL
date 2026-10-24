@@ -1,1 +1,1 @@
-integer literal 4294967296 does not fit in 32 bits
+signal A has type integer but its definition has type long
