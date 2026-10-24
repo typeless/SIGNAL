@@ -6,6 +6,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CASES = ROOT / "tests" / "cases"
 DUMP = ROOT / "tests" / "dump.py"
+STAGE0 = ROOT / "bootstrap" / "sigc.py"
+BUILD = ROOT / "build" / "m4"
+PASS_NUMBERS = {"tokens": 1}
+DUMP_PASS_LINE = "constant integer DUMP_PASS = 0;"
 COMPILE_TIMEOUT_SECONDS = 60
 
 
@@ -66,11 +70,30 @@ def image_differences(old, new, source, scratch):
 MODES = {"dump": dump_differences, "image": image_differences}
 
 
+def build_dump_compiler(pass_name, source):
+    text = Path(source).read_text()
+    if DUMP_PASS_LINE not in text or pass_name not in PASS_NUMBERS:
+        return None, f"{source} has no line {DUMP_PASS_LINE!r} or {pass_name} has no pass number"
+    BUILD.mkdir(parents=True, exist_ok=True)
+    patched = BUILD / f"sigc_{pass_name}.sig"
+    patched.write_text(text.replace(DUMP_PASS_LINE, f"constant integer DUMP_PASS = {PASS_NUMBERS[pass_name]};", 1))
+    executable = BUILD / f"sigc_{pass_name}"
+    status = compile_case(STAGE0, patched, executable)
+    if status != 0:
+        return None, f"stage 0 exit {status} on {patched}"
+    return executable, None
+
+
 def main():
     if len(sys.argv) != 4 or sys.argv[1] not in MODES:
         print("usage: diff.py dump PASS COMPILER | diff.py image OLD NEW", file=sys.stderr)
         return 2
     mode, first, second = sys.argv[1:]
+    if mode == "dump" and Path(second).suffix == ".sig":
+        second, failure = build_dump_compiler(first, second)
+        if failure:
+            print(failure, file=sys.stderr)
+            return 2
     sources = sorted(CASES.rglob("*.sig"))
     differing = 0
     with tempfile.TemporaryDirectory() as scratch:
