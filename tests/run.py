@@ -48,6 +48,16 @@ def read_trace(executable, line_count, input_path):
     return lines, timed_out, process.returncode
 
 
+def run_to_exit(executable, input_path):
+    stdin = open(input_path, "rb") if input_path.exists() else subprocess.DEVNULL
+    try:
+        finished = subprocess.run([str(executable)], stdin=stdin, capture_output=True, timeout=RUN_TIMEOUT_SECONDS)
+    finally:
+        if stdin is not subprocess.DEVNULL:
+            stdin.close()
+    return finished.stdout.decode(errors="replace").splitlines(), finished.returncode, finished.stderr.decode(errors="replace")
+
+
 def run_trace_case(source, expected_path):
     expected = expected_path.read_text().splitlines()
     executable = BUILD / source.relative_to(CASES).with_suffix("")
@@ -55,11 +65,26 @@ def run_trace_case(source, expected_path):
     compiled = compile_case(source, executable)
     if compiled.returncode != 0:
         return [f"compile failed (exit {compiled.returncode}):", compiled.stderr.rstrip()]
-    actual, timed_out, returncode = read_trace(executable, len(expected), source.with_suffix(".in"))
-    if actual == expected:
+    exit_path = source.with_suffix(".exit")
+    if exit_path.exists():
+        expected_status, _, expected_stderr = exit_path.read_text().partition("\n")
+        try:
+            actual, returncode, stderr = run_to_exit(executable, source.with_suffix(".in"))
+        except subprocess.TimeoutExpired:
+            return [f"expected exit {expected_status}, but the program did not exit"]
+        report = []
+        if returncode != int(expected_status):
+            report.append(f"expected exit {expected_status}, got {returncode}")
+        if expected_stderr.strip() not in stderr:
+            report.append(f"expected stderr containing {expected_stderr.strip()!r}, got {stderr.strip()!r}")
+        timed_out = False
+    else:
+        actual, timed_out, returncode = read_trace(executable, len(expected), source.with_suffix(".in"))
+        report = []
+    if actual == expected and not report:
         return []
-    report = [f"trace mismatch (exit {returncode}{', timed out' if timed_out else ''}):"]
-    for step, (want, got) in enumerate(zip(expected, actual + [None] * len(expected))):
+    report.insert(0, f"trace mismatch (exit {returncode}{', timed out' if timed_out else ''}):")
+    for step, (want, got) in enumerate(zip(expected + [None] * len(actual), actual + [None] * len(expected))):
         if want != got:
             report.append(f"  step {step}: expected {want!r}, got {got!r}")
     return report

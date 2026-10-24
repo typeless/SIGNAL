@@ -396,11 +396,11 @@ def flatten(rows, indices, ops, args, owner, line, column):
             left_type = rows.type[left]
             right_type = rows.type[right] if right >= 0 else None
             text = OP_TEXT[op]
-            if op in INTEGER_OPS or op in ORDER_OPS:
+            if op in INTEGER_OPS:
                 if left_type != "integer" or right >= 0 and right_type != "integer":
                     raise CompileError(f"operator {text} expects integer operands", line, column)
-                row_type = "integer" if op in INTEGER_OPS else "boolean"
-            elif op in EQUALITY_OPS:
+                row_type = "integer"
+            elif op in EQUALITY_OPS or op in ORDER_OPS:
                 if (left_type == "integer") != (right_type == "integer"):
                     raise CompileError(f"operator {text} expects operands of one type", line, column)
                 row_type = "boolean"
@@ -619,6 +619,25 @@ def clock_calculus(rows, program):
             raise CompileError("a constant has no clock", line, column)
         for member in group[1:]:
             union(clocks, group[0], member)
+    for d in range(len(clocks.def_kind)):
+        merged = clocks.def_target[d]
+        if clocks.def_kind[d] != SUM or rows.op[rows.left[merged]] != OP_WHEN or rows.op[rows.right[merged]] != OP_WHEN:
+            continue
+        first, second = rows.right[rows.left[merged]], rows.right[rows.right[merged]]
+        if rows.op[second] == OP_NOT and rows.left[second] == first:
+            condition = first
+        elif rows.op[first] == OP_NOT and rows.left[first] == second:
+            condition = second
+        else:
+            continue
+        values = rows.left[rows.left[merged]], rows.left[rows.right[merged]]
+        if rows.ctx[values[0]] and rows.ctx[values[1]]:
+            union(clocks, merged, condition)
+            clocks.def_pending[d] = False
+        elif not rows.ctx[values[0]] and not rows.ctx[values[1]] and find(clocks, values[0]) == find(clocks, values[1]):
+            clocks.def_kind[d] = PRODUCT
+            clocks.def_left[d] = values[0]
+            clocks.def_right[d] = condition
 
     total = len(clocks.parent)
     clocks.node_kind = [None] * total
@@ -913,15 +932,14 @@ def emit_assembly(program, rows, clocks, order):
         "    .globl _start",
         "    .p2align 2",
         "_start:",
+        "    mov x22, #0",
         "Lstep:",
+        "    add x22, x22, #1",
     ]
     if root_count >= 2:
-        lines.append("    adrp x21, _in_buffer@PAGE")
-        lines.append("    add x21, x21, _in_buffer@PAGEOFF")
-        lines.append("    mov w9, #48")
-        for root in range(root_count):
-            lines.append(f"    strb w9, [x21, #{root}]")
         lines.extend([
+            "    adrp x21, _in_buffer@PAGE",
+            "    add x21, x21, _in_buffer@PAGEOFF",
             "    mov x19, #0",
             "Lread:",
             "    mov x0, #0",
@@ -929,20 +947,51 @@ def emit_assembly(program, rows, clocks, order):
             "    mov x2, #1",
             "    mov x16, #3",
             "    svc #0x80",
-            "    b.cs Lexit",
-            "    cmp x0, #1",
-            "    b.ne Lexit",
-            "    ldrb w9, [x21, x19]",
-            "    cmp w9, #10",
-            "    b.eq Lread_done",
-            f"    cmp x19, #{root_count}",
-            "    b.ge Lread",
-            "    add x19, x19, #1",
-            "    b Lread",
-            "Lexit:",
+            "    b.cs Lmalformed",
+            "    cbnz x0, Lread_byte",
+            "    cbnz x19, Lmalformed",
             "    mov x0, #0",
             "    mov x16, #1",
             "    svc #0x80",
+            "Lread_byte:",
+            "    ldrb w9, [x21, x19]",
+            "    cmp w9, #10",
+            "    b.eq Lread_line",
+            f"    cmp x19, #{root_count}",
+            "    b.ge Lmalformed",
+            "    sub w9, w9, #48",
+            "    cmp w9, #1",
+            "    b.hi Lmalformed",
+            "    add x19, x19, #1",
+            "    b Lread",
+            "Lread_line:",
+            f"    cmp x19, #{root_count}",
+            "    b.eq Lread_done",
+            "Lmalformed:",
+            "    mov x0, #2",
+            "    adrp x1, Lmalformed_text@PAGE",
+            "    add x1, x1, Lmalformed_text@PAGEOFF",
+            "    mov x2, #33",
+            "    mov x16, #4",
+            "    svc #0x80",
+            "    adrp x20, _out_buffer@PAGE",
+            "    add x20, x20, _out_buffer@PAGEOFF",
+            "    mov x0, x22",
+            "    bl _rt_put_int",
+            "    mov w10, #10",
+            "    strb w10, [x20], #1",
+            "    mov x0, #2",
+            "    adrp x1, _out_buffer@PAGE",
+            "    add x1, x1, _out_buffer@PAGEOFF",
+            "    sub x2, x20, x1",
+            "    mov x16, #4",
+            "    svc #0x80",
+            "    mov x0, #2",
+            "    mov x16, #1",
+            "    svc #0x80",
+            "Lmalformed_text:",
+            '    .ascii "presence input malformed at step "',
+            "    .p2align 2",
             "Lread_done:",
         ])
     for node in order:
@@ -999,7 +1048,9 @@ def emit_assembly(program, rows, clocks, order):
             elif op == OP_MOD:
                 lines.append("    sdiv w11, w9, w10")
                 lines.append("    msub w11, w11, w10, w9")
-                lines.append("    add w12, w11, w10")
+                lines.append("    cmp w10, #0")
+                lines.append("    cneg w12, w10, lt")
+                lines.append("    add w12, w11, w12")
                 lines.append("    cmp w11, #0")
                 lines.append("    csel w9, w12, w11, lt")
         store(lines, "w9", f"_sig_{row}")
@@ -1079,6 +1130,8 @@ def main():
         order = schedule(program, rows, clocks)
         assembly = emit_assembly(program, rows, clocks, order)
         link(assembly, options.output)
+        if len(clocks.roots) >= 2:
+            print("presence inputs: " + ", ".join(clock_name(clocks, rows, program, root) for root in clocks.roots))
     except CompileError as error:
         sys.stderr.write(f"{options.source}:{error.line}:{error.column}: error: {error}\n")
         return 1
