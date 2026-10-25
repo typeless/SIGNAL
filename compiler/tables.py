@@ -1,4 +1,6 @@
+import math
 import re
+import struct
 import sys
 from pathlib import Path
 
@@ -248,12 +250,15 @@ NAMED_FRAGMENTS = [
     ("STATE_SUFFIX", "'state"), ("DEFINE", "DEFINE"), ("SEED", "SEED"),
     ("HASH", "#"), ("DOT", "."), ("CALL_SUFFIX", "'call"), ("EXPRESSION_AT", "[expression at "),
     ("AT", " at "), ("OUTPUT_FULL", "error 1 1 program exceeds compiler capacity: OUTPUT"),
+    ("ENCODE_POSITION", ":0:0: error: "), ("OUT_OF_RANGE", " operand out of range: ["), ("LIST_SEPARATOR", ", "),
+    ("PRESENCE_PREFIX", "presence inputs: "),
 ]
 ROLE_WORDS = ["signal", "type", "model", "constant", "label"]
 
-LAYOUTS = ["NONE", "OS", "COMPILE", "DUMP_ERROR", "DUMP_TOKENS", "DUMP_PROGRAM", "DUMP_CODE"]
-SLICES = ["NONE", "PATH"]
-NUMBERS = ["NONE", "ERROR_LINE", "ERROR_COLUMN", "ERRNO"]
+LAYOUTS = ["NONE", "OS", "COMPILE", "DUMP_ERROR", "DUMP_TOKENS", "DUMP_PROGRAM", "DUMP_CODE", "ENCODE", "OS_OUTPUT", "PRESENCE"]
+SLICES = ["NONE", "PATH", "OUTPUT_PATH", "CLOCK"]
+NUMBERS = ["NONE", "ERROR_LINE", "ERROR_COLUMN", "ERRNO", "ENCODE_OP0", "ENCODE_OP1", "ENCODE_OP2", "ENCODE_OP3", "OUTPUT_ERRNO"]
+ROW_PREFIX_FORM_NAME = -1
 MESSAGE_SLOTS = 10
 LAYOUT_ROWS = {
     "OS": [("ERRNO_PREFIX", "NONE", "ERRNO", "ERRNO_SUFFIX", 0, -1), ("", "PATH", "NONE", "", 1, -1)],
@@ -270,6 +275,16 @@ LAYOUT_ROWS = {
         *[("", "NONE", "NONE", "", 0, slot) for slot in range(MESSAGE_SLOTS)],
         ("", "NONE", "NONE", "", 1, -1),
     ],
+    "ENCODE": [
+        ("", "PATH", "NONE", "ENCODE_POSITION", 0, -1),
+        ("FORM_NAME", "NONE", "NONE", "OUT_OF_RANGE", 0, -1),
+        ("", "NONE", "ENCODE_OP0", "LIST_SEPARATOR", 0, -1),
+        ("", "NONE", "ENCODE_OP1", "LIST_SEPARATOR", 0, -1),
+        ("", "NONE", "ENCODE_OP2", "LIST_SEPARATOR", 0, -1),
+        ("", "NONE", "ENCODE_OP3", "CLOSE", 1, -1),
+    ],
+    "OS_OUTPUT": [("ERRNO_PREFIX", "NONE", "OUTPUT_ERRNO", "ERRNO_SUFFIX", 0, -1), ("", "OUTPUT_PATH", "NONE", "", 1, -1)],
+    "PRESENCE": [("PRESENCE_PREFIX", "CLOCK", "NONE", "", 1, -1)],
 }
 
 POWERS = [10 ** k for k in range(20)]
@@ -367,6 +382,100 @@ FORMS = [
     "STRH_W_REG", "STRB_W_REG", "LDR_X_POST", "STR_X_POST", "STR_W_POST", "STRB_W_POST", "LDRB_W_PRE",
     "B", "BL", "B_COND", "CBZ_W", "CBZ_X", "CBNZ_X", "ADRP", "RET", "SVC_80", "WORD",
 ]
+MOVE_X = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 2, 21))
+MOVE_W = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 1, 21))
+IMM12 = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 12, 10))
+REG2 = ((0, 0, 5, 0), (1, 0, 5, 5))
+REG3 = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 5, 16))
+REG4 = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 5, 16), (3, 0, 5, 10))
+SELECT = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 5, 16), (3, 0, 4, 12))
+SCALED = tuple(((0, 0, 5, 0), (1, 0, 5, 5), (2, scale, 12, 10)) for scale in range(4))
+INDEXED = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 9, 12))
+BRANCH26 = ((2, 2, 26, 0),)
+BRANCH19 = ((3, 0, 4, 0), (2, 2, 19, 5))
+COMPARE_BRANCH = ((0, 0, 5, 0), (2, 2, 19, 5))
+PAGE21 = ((0, 0, 5, 0), (2, 12, 2, 29), (2, 14, 19, 5))
+WORD32 = ((2, 0, 32, 0),)
+FIELD_KINDS = ["NONE", "PCREL", "PAGE", "PAGEOFF"]
+FORM_SPECS = [
+    ("movz x", 0xD2800000, MOVE_X, False, "NONE"),
+    ("movz w", 0x52800000, MOVE_W, False, "NONE"),
+    ("movk x", 0xF2800000, MOVE_X, False, "NONE"),
+    ("movk w", 0x72800000, MOVE_W, False, "NONE"),
+    ("add x imm", 0x91000000, IMM12, False, "PAGEOFF"),
+    ("add w imm", 0x11000000, IMM12, False, "NONE"),
+    ("sub x imm", 0xD1000000, IMM12, False, "NONE"),
+    ("sub w imm", 0x51000000, IMM12, False, "NONE"),
+    ("subs x imm", 0xF1000000, IMM12, False, "NONE"),
+    ("subs w imm", 0x71000000, IMM12, False, "NONE"),
+    ("add x", 0x8B000000, REG3, False, "NONE"),
+    ("adds x", 0xAB000000, REG3, False, "NONE"),
+    ("sub x", 0xCB000000, REG3, False, "NONE"),
+    ("subs x", 0xEB000000, REG3, False, "NONE"),
+    ("and x", 0x8A000000, REG3, False, "NONE"),
+    ("and w", 0x0A000000, REG3, False, "NONE"),
+    ("orr x", 0xAA000000, REG3, False, "NONE"),
+    ("orr w", 0x2A000000, REG3, False, "NONE"),
+    ("eor x", 0xCA000000, REG3, False, "NONE"),
+    ("orn x", 0xAA200000, REG3, False, "NONE"),
+    ("eor x one", 0xD2400000, REG2, False, "NONE"),
+    ("lslv x", 0x9AC02000, REG3, False, "NONE"),
+    ("lsrv x", 0x9AC02400, REG3, False, "NONE"),
+    ("sdiv x", 0x9AC00C00, REG3, False, "NONE"),
+    ("udiv x", 0x9AC00800, REG3, False, "NONE"),
+    ("mul x", 0x9B007C00, REG3, False, "NONE"),
+    ("msub x", 0x9B008000, REG4, False, "NONE"),
+    ("umulh x", 0x9BC07C00, REG3, False, "NONE"),
+    ("csel x", 0x9A800000, SELECT, False, "NONE"),
+    ("csinc w", 0x1A800400, SELECT, False, "NONE"),
+    ("csneg x", 0xDA800400, SELECT, False, "NONE"),
+    ("ldr x", 0xF9400000, SCALED[3], False, "PAGEOFF"),
+    ("ldr w", 0xB9400000, SCALED[2], False, "PAGEOFF"),
+    ("ldrsw x", 0xB9800000, SCALED[2], False, "PAGEOFF"),
+    ("ldrh w", 0x79400000, SCALED[1], False, "PAGEOFF"),
+    ("ldrsh x", 0x79800000, SCALED[1], False, "PAGEOFF"),
+    ("ldrb w", 0x39400000, SCALED[0], False, "PAGEOFF"),
+    ("str x", 0xF9000000, SCALED[3], False, "PAGEOFF"),
+    ("str w", 0xB9000000, SCALED[2], False, "PAGEOFF"),
+    ("strh w", 0x79000000, SCALED[1], False, "PAGEOFF"),
+    ("strb w", 0x39000000, SCALED[0], False, "PAGEOFF"),
+    ("ldr x reg", 0xF8607800, REG3, False, "NONE"),
+    ("ldr w reg", 0xB8607800, REG3, False, "NONE"),
+    ("ldrsw x reg", 0xB8A07800, REG3, False, "NONE"),
+    ("ldrh w reg", 0x78607800, REG3, False, "NONE"),
+    ("ldrsh x reg", 0x78A07800, REG3, False, "NONE"),
+    ("ldrb w reg", 0x38606800, REG3, False, "NONE"),
+    ("str x reg", 0xF8207800, REG3, False, "NONE"),
+    ("str w reg", 0xB8207800, REG3, False, "NONE"),
+    ("strh w reg", 0x78207800, REG3, False, "NONE"),
+    ("strb w reg", 0x38206800, REG3, False, "NONE"),
+    ("ldr x post", 0xF8400400, INDEXED, True, "NONE"),
+    ("str x post", 0xF8000400, INDEXED, True, "NONE"),
+    ("str w post", 0xB8000400, INDEXED, True, "NONE"),
+    ("strb w post", 0x38000400, INDEXED, True, "NONE"),
+    ("ldrb w pre", 0x38400C00, INDEXED, True, "NONE"),
+    ("b", 0x14000000, BRANCH26, True, "PCREL"),
+    ("bl", 0x94000000, BRANCH26, True, "PCREL"),
+    ("b.cond", 0x54000000, BRANCH19, True, "PCREL"),
+    ("cbz w", 0x34000000, COMPARE_BRANCH, True, "PCREL"),
+    ("cbz x", 0xB4000000, COMPARE_BRANCH, True, "PCREL"),
+    ("cbnz x", 0xB5000000, COMPARE_BRANCH, True, "PCREL"),
+    ("adrp", 0x90000000, PAGE21, True, "PAGE"),
+    ("ret", 0xD65F03C0, (), False, "NONE"),
+    ("svc 0x80", 0xD4001001, (), False, "NONE"),
+    ("word", 0x00000000, WORD32, False, "NONE"),
+]
+FORM_FIELD_SLOTS = 4
+MACHO_BASE = 0x100000000
+TEXT_OFFSET = 392
+COMMAND_BYTES = 360
+SEGMENT_BYTES = 16384
+HEADER_VARIABLES = ["CONSTANT", "TEXT_BYTES", "DATA_BYTES", "SIGNED_BYTES", "LINKEDIT_BYTES", "SIGNATURE_BYTES"]
+SIGNATURE_VARIABLES = ["CONSTANT", "SIGNATURE_BYTES", "DIRECTORY_BYTES", "PAGES", "SIGNED_BYTES"]
+SUPERBLOB_HEADER_BYTES = 20
+CODE_DIRECTORY_HEADER_BYTES = 48
+HASH_BYTES = 32
+MARKER_BASE = 0xF0000000
 CONDITIONS = {"EQ": 0, "NE": 1, "HS": 2, "LO": 3, "HI": 8, "LS": 9, "GE": 10, "LT": 11, "GT": 12, "LE": 13}
 XZR = 31
 SP = 31
@@ -706,6 +815,61 @@ def signed64(value):
     return value - (1 << 64) if value >> 63 else value
 
 
+def segment(name, vmaddr, vmsize, fileoff, filesize, protection):
+    return struct.pack("<II16sQQQQiiII", 0x19, 72, name, vmaddr, vmsize, fileoff, filesize, protection, protection, 0, 0)
+
+
+def macho_header_words():
+    text_bytes, data_bytes, signed_bytes, linkedit_bytes, signature_bytes = (MARKER_BASE + k for k in range(1, 6))
+    header = (
+        struct.pack("<IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 2, 7, COMMAND_BYTES, 0x00200004, 0)
+        + segment(b"__PAGEZERO", 0, MACHO_BASE, 0, 0, 0)
+        + segment(b"__TEXT", MACHO_BASE, text_bytes, 0, text_bytes, 5)
+        + segment(b"__DATA", MACHO_BASE + text_bytes, data_bytes, text_bytes, data_bytes, 3)
+        + segment(b"__LINKEDIT", MACHO_BASE + signed_bytes, linkedit_bytes, signed_bytes, signature_bytes, 1)
+        + struct.pack("<III20s", 0xE, 32, 12, b"/usr/lib/dyld")
+        + struct.pack("<IIQQ", 0x80000028, 24, TEXT_OFFSET, 0)
+        + struct.pack("<IIII", 0x1D, 16, signed_bytes, signature_bytes)
+    )
+    assert len(header) == TEXT_OFFSET
+    return [struct.unpack_from("<I", header, 4 * k)[0] for k in range(len(header) // 4)]
+
+
+def signature_header_words():
+    signature_bytes, directory_bytes, pages, signed_bytes = (MARKER_BASE + k for k in range(1, 5))
+    header = struct.pack(">IIIII", 0xFADE0CC0, signature_bytes, 1, 0, SUPERBLOB_HEADER_BYTES) + struct.pack(
+        ">IIIIIIIIIBBBBII", 0xFADE0C02, directory_bytes, 0x20100, 0x2, CODE_DIRECTORY_HEADER_BYTES + 1,
+        CODE_DIRECTORY_HEADER_BYTES, 0, pages, signed_bytes, HASH_BYTES, 2, 0, SEGMENT_BYTES.bit_length() - 1, 0, 0,
+    )
+    assert len(header) == SUPERBLOB_HEADER_BYTES + CODE_DIRECTORY_HEADER_BYTES
+    return [struct.unpack_from(">I", header, 4 * k)[0] for k in range(len(header) // 4)]
+
+
+def split_markers(words, variables):
+    fields = [word - MARKER_BASE if MARKER_BASE < word < MARKER_BASE + len(variables) else 0 for word in words]
+    assert sorted(set(fields)) == list(range(len(variables)))
+    return [0 if field else word for word, field in zip(words, fields)], fields
+
+
+def first_primes(count):
+    primes = []
+    candidate = 2
+    while len(primes) < count:
+        if all(candidate % prime for prime in primes):
+            primes.append(candidate)
+        candidate += 1
+    return primes
+
+
+def integer_cube_root(value):
+    root = int(round(value ** (1 / 3)))
+    while root ** 3 > value:
+        root -= 1
+    while (root + 1) ** 3 <= value:
+        root += 1
+    return root
+
+
 def build():
     fragments = Fragments()
     constants = []
@@ -852,7 +1016,8 @@ def build():
         layout_rows.extend(LAYOUT_ROWS.get(name, []))
     table("LAYOUT_ITEM_COUNT", "short", counts)
     table("LAYOUT_FIRST_ROW", "short", first_rows)
-    table("ROW_PREFIX", "short", [named[row[0]] if row[0] else 0 for row in layout_rows])
+    table("ROW_PREFIX", "short", [ROW_PREFIX_FORM_NAME if row[0] == "FORM_NAME" else named[row[0]] if row[0] else 0
+                                  for row in layout_rows])
     table("ROW_SLICE", "short", [SLICES.index(row[1]) for row in layout_rows])
     table("ROW_NUMBER", "short", [NUMBERS.index(row[2]) for row in layout_rows])
     table("ROW_SUFFIX", "short", [named[row[3]] if row[3] else 0 for row in layout_rows])
@@ -903,6 +1068,42 @@ def build():
 
     for index, name in enumerate(FORMS):
         integer(f"FORM_{name}", index)
+    assert len(FORM_SPECS) == len(FORMS)
+    assert all(len(fields) <= FORM_FIELD_SLOTS for _, _, fields, _, _ in FORM_SPECS)
+    for index, name in enumerate(FIELD_KINDS):
+        integer(f"FIELD_{name}", index)
+    table("FORM_BASE", "long", [base for _, base, _, _, _ in FORM_SPECS])
+    table("FORM_SIGNED", "short", [int(signed) for _, _, _, signed, _ in FORM_SPECS])
+    table("FORM_KIND", "short", [FIELD_KINDS.index(kind) for _, _, _, _, kind in FORM_SPECS])
+    table("FORM_TOP2", "short", [max([low + width for slot, low, width, _ in fields if slot == 2], default=0)
+                                 for _, _, fields, _, _ in FORM_SPECS])
+    padded = [list(fields) + [(0, 0, 0, 0)] * (FORM_FIELD_SLOTS - len(fields)) for _, _, fields, _, _ in FORM_SPECS]
+    for column, name in enumerate(["SLOT", "LOW", "WIDTH", "AT"]):
+        table(f"FORM_FIELD_{name}", "short", [field[column] for fields in padded for field in fields])
+    integer("FORM_FIELD_SLOTS", FORM_FIELD_SLOTS)
+    table("FORM_NAME_FRAGMENT", "short", [fragments.add(name) for name, _, _, _, _ in FORM_SPECS])
+    integer("ROW_PREFIX_FORM_NAME", ROW_PREFIX_FORM_NAME)
+    constants.append(("MACHO_BASE", f"constant long MACHO_BASE = {MACHO_BASE};"))
+    integer("TEXT_OFFSET", TEXT_OFFSET)
+    integer("SEGMENT_BYTES", SEGMENT_BYTES)
+    integer("SUPERBLOB_HEADER_BYTES", SUPERBLOB_HEADER_BYTES)
+    integer("CODE_DIRECTORY_HEADER_BYTES", CODE_DIRECTORY_HEADER_BYTES)
+    integer("HASH_BYTES", HASH_BYTES)
+    header_words, header_fields = split_markers(macho_header_words(), HEADER_VARIABLES)
+    integer("HEADER_WORD_COUNT", len(header_words))
+    table("HEADER_WORD", "uinteger", header_words, lambda v: f"uinteger({v})")
+    table("HEADER_FIELD", "short", header_fields)
+    for index, name in enumerate(HEADER_VARIABLES):
+        integer(f"HV_{name}", index)
+    signature_words, signature_fields = split_markers(signature_header_words(), SIGNATURE_VARIABLES)
+    integer("SIGNATURE_HEADER_BYTES", 4 * len(signature_words))
+    table("SIGNATURE_WORD", "uinteger", signature_words, lambda v: f"uinteger({v})")
+    table("SIGNATURE_FIELD", "short", signature_fields)
+    for index, name in enumerate(SIGNATURE_VARIABLES):
+        integer(f"SV_{name}", index)
+    primes = first_primes(64)
+    table("SHA_K", "uinteger", [integer_cube_root(prime << 96) & 0xFFFFFFFF for prime in primes], lambda v: f"uinteger({v})")
+    table("SHA_IV", "uinteger", [math.isqrt(prime << 64) & 0xFFFFFFFF for prime in primes[:8]], lambda v: f"uinteger({v})")
     for name, value in CONDITIONS.items():
         integer(f"CC_{name}", value)
     for prefix, names in (("MK", MICRO_KINDS), ("TG", TARGET_KINDS), ("GL", GLOBAL_LABELS)):
