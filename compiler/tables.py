@@ -236,8 +236,8 @@ CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
     "GUARDS", "LABELS", "LOOPS", "GROUPS", "DEPENDENCES", "STACK", "PATHS", "LOCALS", "PARSE", "FINISH", "ITEMS",
     "OUTPUT", "INSTANCES", "INSTANTIATE", "LOOKUPS", "ROWS", "ROW_DEPENDENCES", "SEGMENTS", "LOWER",
-    "CLOCKS", "DEFINITIONS", "OBLIGATIONS", "CLOCK_ROUNDS", "PAIRS", "CLOCK_NAMES",
-    "EDGES", "SCHEDULE_NODES", "EFFECTS", "UNITS", "MICRO_OPS", "CODE", "CODE_LABELS", "DATA", "CODE_TEXT",
+    "CLOCKS", "DEFINITIONS", "OBLIGATIONS", "PAIRS", "CLOCK_NAMES", "CLOCK_TEXT", "CLOCK_SORT",
+    "EDGES", "SCHEDULE_NODES", "EFFECTS", "EFFECT_ORDER", "UNITS", "MICRO_OPS", "CODE", "CODE_LABELS", "DATA", "CODE_TEXT",
 ]
 NAMED_FRAGMENTS = [
     ("COLON", ":"), ("ERROR_SEPARATOR", ": error: "), ("ERROR_WORD", "error "), ("SPACE", " "),
@@ -247,7 +247,7 @@ NAMED_FRAGMENTS = [
     ("NONE_CLOSE", "none]"), ("CONST_OPEN", "[CONST ["), ("ENUMCONST_OPEN", "[ENUMCONST ["), ("SIZE_CLOSE", "] "),
     ("STATE_SUFFIX", "'state"), ("DEFINE", "DEFINE"), ("SEED", "SEED"),
     ("HASH", "#"), ("DOT", "."), ("CALL_SUFFIX", "'call"), ("EXPRESSION_AT", "[expression at "),
-    ("AT", " at "),
+    ("AT", " at "), ("OUTPUT_FULL", "error 1 1 program exceeds compiler capacity: OUTPUT"),
 ]
 ROLE_WORDS = ["signal", "type", "model", "constant", "label"]
 
