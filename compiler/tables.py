@@ -252,13 +252,26 @@ NAMED_FRAGMENTS = [
     ("AT", " at "), ("OUTPUT_FULL", "error 1 1 program exceeds compiler capacity: OUTPUT"),
     ("ENCODE_POSITION", ":0:0: error: "), ("OUT_OF_RANGE", " operand out of range: ["), ("LIST_SEPARATOR", ", "),
     ("PRESENCE_PREFIX", "presence inputs: "),
+    ("UTF8_BYTE_PREFIX", "sigc: error: 'utf-8' codec can't decode byte 0x"),
+    ("UTF8_BYTES_PREFIX", "sigc: error: 'utf-8' codec can't decode bytes in position "), ("IN_POSITION", " in position "),
+    ("COLON_SPACE", ": "), ("DASH", "-"), ("RESERVATION_FAILED", "memory reservation failed"),
+]
+UTF8_REASONS = [
+    ("INVALID_START", "invalid start byte"), ("INVALID_CONTINUATION", "invalid continuation byte"),
+    ("UNEXPECTED_END", "unexpected end of data"),
 ]
 ROLE_WORDS = ["signal", "type", "model", "constant", "label"]
 
-LAYOUTS = ["NONE", "OS", "COMPILE", "DUMP_ERROR", "DUMP_TOKENS", "DUMP_PROGRAM", "DUMP_CODE", "ENCODE", "OS_OUTPUT", "PRESENCE"]
+LAYOUTS = [
+    "NONE", "OS", "COMPILE", "DUMP_ERROR", "DUMP_TOKENS", "DUMP_PROGRAM", "DUMP_CODE", "ENCODE", "OS_OUTPUT", "PRESENCE",
+    "UTF8_BYTE", "UTF8_BYTES",
+]
 SLICES = ["NONE", "PATH", "OUTPUT_PATH", "CLOCK"]
-NUMBERS = ["NONE", "ERROR_LINE", "ERROR_COLUMN", "ERRNO", "ENCODE_OP0", "ENCODE_OP1", "ENCODE_OP2", "ENCODE_OP3", "OUTPUT_ERRNO"]
-ROW_PREFIX_FORM_NAME = -1
+NUMBERS = [
+    "NONE", "ERROR_LINE", "ERROR_COLUMN", "ERRNO", "ENCODE_OP0", "ENCODE_OP1", "ENCODE_OP2", "ENCODE_OP3", "OUTPUT_ERRNO",
+    "UTF8_START", "UTF8_LAST",
+]
+COMPUTED_PREFIXES = ["FORM_NAME", "HEX_BYTE", "UTF8_REASON"]
 MESSAGE_SLOTS = 10
 LAYOUT_ROWS = {
     "OS": [("ERRNO_PREFIX", "NONE", "ERRNO", "ERRNO_SUFFIX", 0, -1), ("", "PATH", "NONE", "", 1, -1)],
@@ -285,6 +298,17 @@ LAYOUT_ROWS = {
     ],
     "OS_OUTPUT": [("ERRNO_PREFIX", "NONE", "OUTPUT_ERRNO", "ERRNO_SUFFIX", 0, -1), ("", "OUTPUT_PATH", "NONE", "", 1, -1)],
     "PRESENCE": [("PRESENCE_PREFIX", "CLOCK", "NONE", "", 1, -1)],
+    "UTF8_BYTE": [
+        ("UTF8_BYTE_PREFIX", "NONE", "NONE", "", 0, -1),
+        ("HEX_BYTE", "NONE", "NONE", "IN_POSITION", 0, -1),
+        ("", "NONE", "UTF8_START", "COLON_SPACE", 0, -1),
+        ("UTF8_REASON", "NONE", "NONE", "", 1, -1),
+    ],
+    "UTF8_BYTES": [
+        ("UTF8_BYTES_PREFIX", "NONE", "UTF8_START", "DASH", 0, -1),
+        ("", "NONE", "UTF8_LAST", "COLON_SPACE", 0, -1),
+        ("UTF8_REASON", "NONE", "NONE", "", 1, -1),
+    ],
 }
 
 POWERS = [10 ** k for k in range(20)]
@@ -1016,8 +1040,14 @@ def build():
         layout_rows.extend(LAYOUT_ROWS.get(name, []))
     table("LAYOUT_ITEM_COUNT", "short", counts)
     table("LAYOUT_FIRST_ROW", "short", first_rows)
-    table("ROW_PREFIX", "short", [ROW_PREFIX_FORM_NAME if row[0] == "FORM_NAME" else named[row[0]] if row[0] else 0
-                                  for row in layout_rows])
+    table("ROW_PREFIX", "short", [-1 - COMPUTED_PREFIXES.index(row[0]) if row[0] in COMPUTED_PREFIXES
+                                  else named[row[0]] if row[0] else 0 for row in layout_rows])
+    for index, name in enumerate(COMPUTED_PREFIXES):
+        integer(f"ROW_PREFIX_{name}", -1 - index)
+    for index, (name, _) in enumerate(UTF8_REASONS):
+        integer(f"UTF8_{name}", index)
+    table("UTF8_REASON_FRAGMENT", "short", [fragments.add(text) for _, text in UTF8_REASONS])
+    table("HEX_FRAGMENT", "short", [fragments.add(f"{value:02x}") for value in range(256)])
     table("ROW_SLICE", "short", [SLICES.index(row[1]) for row in layout_rows])
     table("ROW_NUMBER", "short", [NUMBERS.index(row[2]) for row in layout_rows])
     table("ROW_SUFFIX", "short", [named[row[3]] if row[3] else 0 for row in layout_rows])
@@ -1082,7 +1112,6 @@ def build():
         table(f"FORM_FIELD_{name}", "short", [field[column] for fields in padded for field in fields])
     integer("FORM_FIELD_SLOTS", FORM_FIELD_SLOTS)
     table("FORM_NAME_FRAGMENT", "short", [fragments.add(name) for name, _, _, _, _ in FORM_SPECS])
-    integer("ROW_PREFIX_FORM_NAME", ROW_PREFIX_FORM_NAME)
     constants.append(("MACHO_BASE", f"constant long MACHO_BASE = {MACHO_BASE};"))
     integer("TEXT_OFFSET", TEXT_OFFSET)
     integer("SEGMENT_BYTES", SEGMENT_BYTES)

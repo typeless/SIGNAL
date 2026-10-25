@@ -135,6 +135,8 @@ def main():
         dump_columns(PASSES[pass_name](Path(source).read_text()))
     except sigc.CompileError as error:
         print(f"error {error.line} {error.column} {error}")
+    except UnicodeDecodeError as error:
+        print(f"sigc: error: {error}")
     return 0
 
 
