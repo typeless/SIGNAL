@@ -41,6 +41,7 @@ Every milestone ends with test programs that run on this Mac; a milestone is don
 - The compiler is rewritten in SIGNAL (D5) and compiled by the bootstrap (stage 1); stage 1 compiles the compiler (stage 2).
 - D5's no-recursion rule needs no separate check here: SIGNAL models cannot recurse.
 - Exit check: the full test suite passes with stage 2. The Python bootstrap is then retired.
+- Done 2026-10-25: the exit check passes. `python3 tests/selfhost.py` printed `stage2 matches stage1`, `stage3 matches stage2`, `run.py: 278 passed, 0 failed` and `diff.py: 278 cases, 0 differ`. `bootstrap/sigc.py` is frozen as stage 0, and `tests/backend.py` is retired (D13). The declared divergences are listed in [tests/README.md](../tests/README.md).
 
 ## M5 — Bare-metal AArch64
 

@@ -22,6 +22,23 @@ The compiler is run with an empty PATH, so it can invoke no external tool.
 `tests/diff.py` compiles every case in `tests/cases/` and prints one `DIFF` line per differing case, then `N cases, K differ`; it exits 1 when any case differs. A compiler argument is either a `.py` file, run with Python, or a native executable; compilers run with an empty PATH.
 
 - `python3 tests/diff.py dump PASS COMPILER` compares `dump.py PASS SOURCE` with the file `COMPILER SOURCE -o OUT` writes. COMPILER is the SIGNAL compiler built with its `DUMP_PASS` constant set to the pass, which writes the dump to OUT instead of an executable. COMPILER may also be `compiler/sigc.sig`: diff.py then replaces its line `constant integer DUMP_PASS = 0;` with the pass number (`tokens` is 1, `program` is 2, `flat` is 3, `rows` is 4, `clocks` is 5, `schedule` is 6, `code` is 7) and builds it with `bootstrap/sigc.py` into `build/m4/` before comparing.
-- `python3 tests/diff.py image OLD NEW` compiles every case with both compilers and compares exit statuses and executables byte for byte.
+- `python3 tests/diff.py image OLD NEW` compiles every case with both compilers and compares exit statuses, standard output, standard error and executables byte for byte.
 
-`tests/backend.py` holds the backend checks, run with `python3 tests/backend.py [encoder|programs|executables]...` (all parts by default): `encoder` checks the instruction encoder against Apple `as` (a differential property with fixed seed 0 and 300 cases per form, plus field-range checks), `programs` checks every trace case's encoded `__text` and `__data` against `as` and `ld`, and `executables` compiles `m0/counter.sig` with an empty PATH and checks that `codesign --verify --strict` accepts it, that it prints its first step, and that the compiler leaves no other file beside it. It is the only script that invokes `as`, `ld`, `xcrun` or `codesign`, and it is retired with the bootstrap.
+`python3 tests/selfhost.py` checks self-hosting (M4, D13). It builds `compiler/sigc.sig` three times into `build/m4/`: stage 1 with `bootstrap/sigc.py`, stage 2 with stage 1, stage 3 with stage 2. Stage 2 must equal stage 1, which is `sigc.py`'s executable for the compiler, and stage 3 must equal stage 2. It then runs `run.py --compiler build/m4/stage2` and `diff.py image bootstrap/sigc.py build/m4/stage2`, and exits 1 if any of these fails. It takes about 3.5 minutes.
+
+No test invokes `as`, `ld`, `xcrun` or `codesign`. The executables are checked against `sigc.py`'s byte for byte, by `diff.py image` and `selfhost.py`, so the M3 oracles in the retired `tests/backend.py` are no longer needed (D12, D13). `sigc.py` is the frozen stage 0.
+
+## Divergences of compiler/sigc.sig from bootstrap/sigc.py
+
+- Capacities: every table in `compiler/sigc.sig` has a fixed capacity (the `*_CAP` constants written by `compiler/tables.py`). A program that exceeds one is rejected with `program exceeds compiler capacity: TABLE`, where `sigc.py` has no limit. Examples: 2^21 tokens including the end-of-file token, 16000 guards, 2^20 clocks (about 58,000 flat model calls), 2^24 dump items, and message text over 64 KiB.
+- Iterate bound: each of the compiler's own `iterate` loops runs at most `PARSE_CAP` (2^28) times, so a program whose data-derived loop bound exceeds that is a capacity error (for example, 12,000 samplings with a 15-deep clock chain).
+- Effects: a program with more than 4096 effects is a capacity error, because the effect-order check keeps an `EFFECT_ORDER_CAP` × `EFFECT_ORDER_CAP` matrix.
+- OS errors print `sigc: error: [Errno N] PATH`, without Python's `strerror` text or quotes.
+- Staged output: the executable is written to `DIR/.NAME.` plus the process id as 8 lowercase hex digits, opened with `O_EXCL` without retry, then renamed over `NAME`. `sigc.py` uses a random `mkstemp` suffix.
+- `unexpected character` and quoted tokens in parse messages show the raw bytes, not Python's `repr` escaping of `\`, quotes, control and non-printable characters.
+- Source bytes are not validated as UTF-8: invalid bytes in comments and strings are accepted, and elsewhere they are `unexpected character`.
+- The source must be seekable: a pipe fails with `[Errno 29]`.
+- A source over the `SRC` capacity reports its capacity error at 1:1.
+- In a dump build (`DUMP_PASS` nonzero), a dump file that cannot be opened exits 1 without a message.
+- The mmap of the output buffer is not checked.
+- Time: stage 2 compiles `compiler/sigc.sig` in about 46 s against about 3 s for `sigc.py`. `m3/input_far.sig` takes 13 s, and a 9000-equation body takes 39 s against 1.3 s. Programs needing more than 16 clock rounds pay a floor of about 2.3 s, and thousands of `on` guards cost quadratic time in `finish_model`.

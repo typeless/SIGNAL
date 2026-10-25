@@ -27,8 +27,8 @@ def compile_case(compiler, source, output):
             env={"PATH": ""},
         )
     except subprocess.TimeoutExpired:
-        return "timeout"
-    return finished.returncode
+        return "timeout", b"", b""
+    return finished.returncode, finished.stdout, finished.stderr
 
 
 def read_output(output):
@@ -43,7 +43,7 @@ def dump_differences(pass_name, compiler, source, scratch):
         return [f"dump.py exit {expected.returncode}: {expected.stderr.decode(errors='replace').strip()}"]
     output = scratch / "dump"
     output.unlink(missing_ok=True)
-    status = compile_case(compiler, source, output)
+    status, _, _ = compile_case(compiler, source, output)
     actual = read_output(output)
     if actual is None:
         return [f"compiler exit {status}, no dump written"]
@@ -58,13 +58,18 @@ def image_differences(old, new, source, scratch):
         output = scratch / side / "image"
         output.parent.mkdir(exist_ok=True)
         output.unlink(missing_ok=True)
-        outputs.append((compile_case(compiler, source, output), read_output(output)))
-    (old_status, old_image), (new_status, new_image) = outputs
+        outputs.append((*compile_case(compiler, source, output), read_output(output)))
+    (old_status, old_stdout, old_stderr, old_image), (new_status, new_stdout, new_stderr, new_image) = outputs
+    report = []
     if old_status != new_status:
-        return [f"exit {old_status} vs {new_status}"]
+        report.append(f"exit {old_status} vs {new_status}")
+    if old_stdout != new_stdout:
+        report.append("stdout differs")
+    if old_stderr != new_stderr:
+        report.append("stderr differs")
     if old_image != new_image:
-        return ["executables differ"]
-    return []
+        report.append("executables differ")
+    return report
 
 
 MODES = {"dump": dump_differences, "image": image_differences}
@@ -78,7 +83,7 @@ def build_dump_compiler(pass_name, source):
     patched = BUILD / f"sigc_{pass_name}.sig"
     patched.write_text(text.replace(DUMP_PASS_LINE, f"constant integer DUMP_PASS = {PASS_NUMBERS[pass_name]};", 1))
     executable = BUILD / f"sigc_{pass_name}"
-    status = compile_case(STAGE0, patched, executable)
+    status, _, _ = compile_case(STAGE0, patched, executable)
     if status != 0:
         return None, f"stage 0 exit {status} on {patched}"
     return executable, None
