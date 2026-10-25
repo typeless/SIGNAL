@@ -230,13 +230,14 @@ TEMPLATES = [
     ("EFFECT_CYCLE", "causality cycle between effects at #", ["CLOCK"]),
     ("CLOCK_CAUSALITY", "causality cycle between clocks", []),
     ("EFFECTS_UNORDERED", "effects # and # on resource # have no order between them; order them with -->", ["CLOCK", "CLOCK", "TYPE"]),
+    ("ARRAYS_ADDRESS", "arrays need more than 2^64 bytes of address space", []),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
     "GUARDS", "LABELS", "LOOPS", "GROUPS", "DEPENDENCES", "STACK", "PATHS", "LOCALS", "PARSE", "FINISH", "ITEMS",
     "OUTPUT", "INSTANCES", "INSTANTIATE", "LOOKUPS", "ROWS", "ROW_DEPENDENCES", "SEGMENTS", "LOWER",
     "CLOCKS", "DEFINITIONS", "OBLIGATIONS", "CLOCK_ROUNDS", "PAIRS", "CLOCK_NAMES",
-    "EDGES", "SCHEDULE_NODES", "EFFECTS",
+    "EDGES", "SCHEDULE_NODES", "EFFECTS", "UNITS", "MICRO_OPS", "CODE", "CODE_LABELS", "DATA", "CODE_TEXT",
 ]
 NAMED_FRAGMENTS = [
     ("COLON", ":"), ("ERROR_SEPARATOR", ": error: "), ("ERROR_WORD", "error "), ("SPACE", " "),
@@ -250,7 +251,7 @@ NAMED_FRAGMENTS = [
 ]
 ROLE_WORDS = ["signal", "type", "model", "constant", "label"]
 
-LAYOUTS = ["NONE", "OS", "COMPILE", "DUMP_ERROR", "DUMP_TOKENS", "DUMP_PROGRAM"]
+LAYOUTS = ["NONE", "OS", "COMPILE", "DUMP_ERROR", "DUMP_TOKENS", "DUMP_PROGRAM", "DUMP_CODE"]
 SLICES = ["NONE", "PATH"]
 NUMBERS = ["NONE", "ERROR_LINE", "ERROR_COLUMN", "ERRNO"]
 MESSAGE_SLOTS = 10
@@ -355,6 +356,335 @@ CALL_PARAMS_STEP = 4
 PARAM_STEPS = 6
 CONDITION_PRECEDENCE = 9
 DELAY_PRECEDENCE = 21
+
+
+FORMS = [
+    "MOVZ_X", "MOVZ_W", "MOVK_X", "MOVK_W", "ADD_X_IMM", "ADD_W_IMM", "SUB_X_IMM", "SUB_W_IMM", "SUBS_X_IMM",
+    "SUBS_W_IMM", "ADD_X", "ADDS_X", "SUB_X", "SUBS_X", "AND_X", "AND_W", "ORR_X", "ORR_W", "EOR_X", "ORN_X",
+    "EOR_X_ONE", "LSLV_X", "LSRV_X", "SDIV_X", "UDIV_X", "MUL_X", "MSUB_X", "UMULH_X", "CSEL_X", "CSINC_W", "CSNEG_X",
+    "LDR_X", "LDR_W", "LDRSW_X", "LDRH_W", "LDRSH_X", "LDRB_W", "STR_X", "STR_W", "STRH_W", "STRB_W",
+    "LDR_X_REG", "LDR_W_REG", "LDRSW_X_REG", "LDRH_W_REG", "LDRSH_X_REG", "LDRB_W_REG", "STR_X_REG", "STR_W_REG",
+    "STRH_W_REG", "STRB_W_REG", "LDR_X_POST", "STR_X_POST", "STR_W_POST", "STRB_W_POST", "LDRB_W_PRE",
+    "B", "BL", "B_COND", "CBZ_W", "CBZ_X", "CBNZ_X", "ADRP", "RET", "SVC_80", "WORD",
+]
+CONDITIONS = {"EQ": 0, "NE": 1, "HS": 2, "LO": 3, "HI": 8, "LS": 9, "GE": 10, "LT": 11, "GT": 12, "LE": 13}
+XZR = 31
+SP = 31
+UINTEGER_TYPE = 7
+LOAD_FORMS = {
+    (1, 0): ("LDRB_W", "LDRB_W_REG"), (2, 0): ("LDRH_W", "LDRH_W_REG"), (2, 1): ("LDRSH_X", "LDRSH_X_REG"),
+    (4, 0): ("LDR_W", "LDR_W_REG"), (4, 1): ("LDRSW_X", "LDRSW_X_REG"), (8, 0): ("LDR_X", "LDR_X_REG"),
+    (8, 1): ("LDR_X", "LDR_X_REG"),
+}
+STORE_FORMS = {1: ("STRB_W", "STRB_W_REG"), 2: ("STRH_W", "STRH_W_REG"), 4: ("STR_W", "STR_W_REG"), 8: ("STR_X", "STR_X_REG")}
+OP_INSTRUCTIONS = {"ADD": "ADD_X", "SUB": "SUB_X", "MUL": "MUL_X", "AND": "AND_X", "OR": "ORR_X", "XOR": "EOR_X"}
+OP_CONDITIONS = {
+    "EQ": ("EQ", "EQ"), "NE": ("NE", "NE"), "LT": ("LT", "LO"), "LE": ("LE", "LS"), "GT": ("GT", "HI"), "GE": ("GE", "HS"),
+}
+OP_SHIFTS = {"SHL": "LSLV_X", "SHR": "LSRV_X"}
+GLOBAL_LABELS = ["malformed", "reserve_failed", "read_value", "put_int", "put_uint", "put_bool", "step", "read_done"]
+EMIT_SOURCES = [
+    "row", "left", "right", "right_left", "right_right", "param", "value_row",
+    "arg0", "arg1", "arg2", "arg3", "arg4", "arg5", "arg6",
+    "type_row", "size_left", "size_row", "words_row",
+    "key_left", "key_right", "key_owner", "key_a_right", "key_a_row", "key_p_row",
+    "clock_row", "clock_left", "clock_loop", "node_parent", "node_left", "node_right", "root_position",
+    "input_root_position", "input_bound", "loop_count", "loop_size", "loop_size_less_one", "loop_condition",
+    "window_offset", "window_bytes", "reservation", "line_capacity", "root_count",
+    "load_param", "store_param", "load_indexed_row", "load_indexed_index", "load_indexed_element",
+    "store_indexed_element", "instruction_op", "shift_op", "pair_form", "signed_condition", "unsigned_condition",
+    "loop_start", "loop_end", "local0", "local1", "local2", "local3", "local4", "put_output",
+] + GLOBAL_LABELS
+EMIT_PREDICATES = [
+    "always", "flag", "has_arg1", "has_arg2", "has_arg3", "has_arg4", "has_arg5", "has_arg6", "right_loads",
+    "counted", "uncounted", "bounded", "keys_differ",
+]
+MICRO_KINDS = ["EMIT", "LI", "LOAD", "STORE", "OPERAND", "ADDRESS", "PLACE"]
+TARGET_KINDS = ["NONE", "LABEL", "TABLE", "WINDOW", "SIG", "MEM", "CLK", "IN", "OUT", "MALFORMED_TEXT", "RESERVE_TEXT"]
+SOURCE_BASE = 1 << 20
+CC = CONDITIONS
+CODE_COLUMNS = [
+    "form", "op0", "op1", "op2", "op3", "target_section", "target_offset", "data_offsets", "data_alignments", "data",
+]
+EMIT_TEXT = "presence input malformed at step memory reservation failed"
+UNIT_PHASES = [
+    "PROLOGUE", "RESERVE", "WINDOW", "JUMP_STEP", "RESERVE_FAILED", "READ_VALUE", "STEP", "READ_LINE", "VALUE_INPUT",
+    "READ_TAIL", "ORDER", "DELAY", "OUTPUT_HEAD", "OUTPUT", "OUTPUT_TAIL", "FINISH",
+]
+
+
+def step(kind, when, form=0, a0=0, a1=0, a2=0, a3=0, target=("NONE", 0)):
+    return (kind, when, form, a0, a1, a2, a3, target[0], target[1])
+
+
+def emit(form, a0=0, a1=0, a2=0, a3=0, to=("NONE", 0), when="always"):
+    return step("EMIT", when, form, a0, a1, a2, a3, to)
+
+
+def li(register, value, when="always"):
+    return step("LI", when, 0, register, value)
+
+
+def ld(register, target, type_source, when="always"):
+    return step("LOAD", when, 0, register, type_source, target=target)
+
+
+def st(register, target, type_source, when="always"):
+    return step("STORE", when, 0, register, type_source, target=target)
+
+
+def operand(register, row, when="always"):
+    return step("OPERAND", when, 0, register, row)
+
+
+def address(register, key, when="always"):
+    return step("ADDRESS", when, 0, register, key)
+
+
+def place(label, when="always"):
+    return step("PLACE", when, 0, label)
+
+
+def label(name):
+    return ("LABEL", name)
+
+
+def copy_words(source_key, destination_key, words, loop_label, when="always"):
+    return [
+        address(12, source_key, when), address(13, destination_key, when), li(15, words, when), place(loop_label, when),
+        emit("LDR_X_POST", 9, 12, 8, when=when), emit("STR_X_POST", 9, 13, 8, when=when),
+        emit("SUBS_X_IMM", 15, 15, 1, when=when), emit("B_COND", a3=CC["NE"], to=label(loop_label), when=when),
+    ]
+
+
+def gated(body, stores=True):
+    return (
+        [ld(9, ("CLK", "clock_row"), UINTEGER_TYPE, "flag"), emit("CBZ_W", 9, to=label("local0"), when="flag")]
+        + body + ([st(9, ("SIG", "row"), "type_row")] if stores else []) + [place("local0", "flag")]
+    )
+
+
+def generic(*tail):
+    return [operand(9, "left"), operand(10, "right", "right_loads"), *tail]
+
+
+def loop_bound(when):
+    return [
+        operand(11, "loop_count", when), li(12, "loop_size_less_one", when), emit("SUBS_X", XZR, 11, 12, when=when),
+        emit("CSEL_X", 11, 11, 12, "loop_condition", when=when), emit("ADD_X_IMM", 11, 11, 1, when=when),
+    ]
+
+
+def system_call(number):
+    return [emit("MOVZ_X", 16, 0, number), emit("SVC_80")]
+
+
+EMIT_TEMPLATES = [
+    ("PROLOGUE", [emit("ORR_X", 25, XZR, 0), emit("ORR_X", 26, XZR, 1), emit("MOVZ_X", 22)]),
+    ("RESERVE", [
+        emit("MOVZ_X", 0), li(1, "reservation"), emit("MOVZ_X", 2), emit("MOVZ_X", 3, 0, 0x1002), emit("ORN_X", 4, XZR, XZR),
+        emit("MOVZ_X", 5), *system_call(197), emit("B_COND", a3=CC["HS"], to=label("reserve_failed")),
+        emit("ORR_X", 24, XZR, 0),
+    ]),
+    ("WINDOW", [
+        li(9, "window_offset"), emit("ADD_X", 0, 24, 9), emit("ADRP", 8, to=("WINDOW", "row")),
+        emit("STR_X", 0, 8, to=("WINDOW", "row")), li(1, "window_bytes"), emit("MOVZ_X", 2, 0, 3), *system_call(74),
+        emit("B_COND", a3=CC["HS"], to=label("reserve_failed")),
+    ]),
+    ("JUMP_STEP", [emit("B", to=label("step"))]),
+    ("RESERVE_FAILED", [
+        place("reserve_failed"), emit("MOVZ_X", 0, 0, 2), emit("ADRP", 1, to=("RESERVE_TEXT", 0)),
+        emit("ADD_X_IMM", 1, 1, to=("RESERVE_TEXT", 0)), emit("MOVZ_X", 2, 0, 26), *system_call(4), emit("MOVZ_X", 0, 0, 3),
+        *system_call(1),
+    ]),
+    ("READ_VALUE", [
+        place("read_value"), emit("LDRB_W_REG", 9, 21, 19), emit("SUBS_W_IMM", XZR, 9, 32),
+        emit("B_COND", a3=CC["NE"], to=label("malformed")), emit("ADD_X_IMM", 19, 19, 1), emit("MOVZ_X", 11),
+        emit("LDRB_W_REG", 9, 21, 19), emit("SUBS_W_IMM", XZR, 9, 45), emit("B_COND", a3=CC["NE"], to=label("local0")),
+        emit("MOVZ_X", 11, 0, 1), emit("ADD_X_IMM", 19, 19, 1), place("local0"), emit("MOVZ_X", 0), emit("MOVZ_X", 12),
+        emit("MOVZ_X", 13, 0, 10), place("local1"), emit("LDRB_W_REG", 9, 21, 19), emit("SUB_W_IMM", 9, 9, 48),
+        emit("SUBS_W_IMM", XZR, 9, 9), emit("B_COND", a3=CC["HI"], to=label("local2")), emit("UMULH_X", 14, 0, 13),
+        emit("CBNZ_X", 14, to=label("malformed")), emit("MUL_X", 0, 0, 13), emit("ADDS_X", 0, 0, 9),
+        emit("B_COND", a3=CC["HS"], to=label("malformed")), emit("ADD_X_IMM", 19, 19, 1), emit("ADD_X_IMM", 12, 12, 1),
+        emit("B", to=label("local1")), place("local2"), emit("CBZ_X", 12, to=label("malformed")),
+        emit("SUBS_X_IMM", XZR, 12, 20), emit("B_COND", a3=CC["HI"], to=label("malformed")),
+        emit("CBZ_X", 11, to=label("local3")), emit("SUB_X", 0, XZR, 0), place("local3"), emit("RET"),
+    ]),
+    ("STEP", [place("step"), emit("ADD_X_IMM", 22, 22, 1)]),
+    ("READ_LINE", [
+        emit("ADRP", 21, to=("IN", 0)), emit("ADD_X_IMM", 21, 21, to=("IN", 0)), emit("MOVZ_X", 19), place("local0"),
+        emit("MOVZ_X", 0), emit("ADD_X", 1, 21, 19), emit("MOVZ_X", 2, 0, 1), *system_call(3),
+        emit("B_COND", a3=CC["HS"], to=label("malformed")), emit("CBNZ_X", 0, to=label("local1")),
+        emit("CBNZ_X", 19, to=label("malformed")), emit("MOVZ_X", 0), *system_call(1), place("local1"),
+        emit("LDRB_W_REG", 9, 21, 19), emit("SUBS_W_IMM", XZR, 9, 10), emit("B_COND", a3=CC["EQ"], to=label("local2")),
+        emit("ADD_X_IMM", 19, 19, 1), li(11, "line_capacity"), emit("SUBS_X", XZR, 19, 11),
+        emit("B_COND", a3=CC["LS"], to=label("local0")), emit("B", to=label("malformed")), place("local2"),
+        li(11, "root_count"), emit("SUBS_X", XZR, 19, 11), emit("B_COND", a3=CC["LO"], to=label("malformed")),
+        emit("MOVZ_X", 19), place("local3"), emit("SUBS_X", XZR, 19, 11), emit("B_COND", a3=CC["EQ"], to=label("local4")),
+        emit("LDRB_W_REG", 9, 21, 19), emit("SUB_W_IMM", 9, 9, 48), emit("SUBS_W_IMM", XZR, 9, 1),
+        emit("B_COND", a3=CC["HI"], to=label("malformed")), emit("ADD_X_IMM", 19, 19, 1), emit("B", to=label("local3")),
+        place("local4"),
+    ]),
+    ("VALUE_INPUT", [
+        li(10, "input_root_position"), emit("LDRB_W_REG", 9, 21, 10), emit("SUBS_W_IMM", XZR, 9, 49),
+        emit("B_COND", a3=CC["NE"], to=label("local0")), emit("BL", to=label("read_value")),
+        emit("CBNZ_X", 11, to=label("malformed"), when="bounded"), li(12, "input_bound", "bounded"),
+        emit("SUBS_X", XZR, 0, 12, when="bounded"), emit("B_COND", a3=CC["HS"], to=label("malformed"), when="bounded"),
+        st(0, ("SIG", "row"), "type_row"), place("local0"),
+    ]),
+    ("READ_TAIL", [
+        emit("LDRB_W_REG", 9, 21, 19), emit("SUBS_W_IMM", XZR, 9, 10), emit("B_COND", a3=CC["EQ"], to=label("read_done")),
+        place("malformed"), emit("MOVZ_X", 0, 0, 2), emit("ADRP", 1, to=("MALFORMED_TEXT", 0)),
+        emit("ADD_X_IMM", 1, 1, to=("MALFORMED_TEXT", 0)), emit("MOVZ_X", 2, 0, 33), *system_call(4),
+        emit("ADRP", 20, to=("OUT", 0)), emit("ADD_X_IMM", 20, 20, to=("OUT", 0)), emit("ORR_X", 0, XZR, 22),
+        emit("BL", to=label("put_int")), emit("MOVZ_W", 10, 0, 10), emit("STRB_W_POST", 10, 20, 1), emit("MOVZ_X", 0, 0, 2),
+        emit("ADRP", 1, to=("OUT", 0)), emit("ADD_X_IMM", 1, 1, to=("OUT", 0)), emit("SUB_X", 2, 20, 1), *system_call(4),
+        emit("MOVZ_X", 0, 0, 2), *system_call(1), place("read_done"),
+    ]),
+    ("LOOP_HEAD", [ld(9, ("CLK", "clock_loop"), UINTEGER_TYPE), emit("CBZ_W", 9, to=label("loop_end"))]),
+    ("LOOP_MID", [
+        emit("MOVZ_X", 23), *loop_bound("counted"), emit("SUBS_X", XZR, 23, 11, when="counted"),
+        emit("B_COND", a3=CC["GE"], to=label("loop_end"), when="counted"), place("loop_start"),
+    ]),
+    ("SNAPSHOT", copy_words("key_a_row", "key_p_row", "words_row", "local0")),
+    ("LOOP_TAIL", [
+        emit("ADD_X_IMM", 23, 23, 1), *loop_bound("counted"), li(11, "loop_size", "uncounted"), emit("SUBS_X", XZR, 23, 11),
+        emit("B_COND", a3=CC["LO"], to=label("loop_start")), place("loop_end"),
+    ]),
+    ("CLOCK_ROOT_READ", [
+        li(10, "root_position"), emit("LDRB_W_REG", 9, 21, 10), emit("SUBS_W_IMM", XZR, 9, 49),
+        emit("CSINC_W", 9, XZR, XZR, CC["EQ"] ^ 1), st(9, ("CLK", "row"), UINTEGER_TYPE),
+    ]),
+    ("CLOCK_ROOT", [emit("MOVZ_W", 9, 0, 1), st(9, ("CLK", "row"), UINTEGER_TYPE)]),
+    ("CLOCK_SAMPLE", [
+        ld(9, ("CLK", "node_parent"), UINTEGER_TYPE), operand(10, "node_left"), emit("AND_W", 9, 9, 10),
+        st(9, ("CLK", "row"), UINTEGER_TYPE),
+    ]),
+    ("CLOCK_PAIR", [
+        ld(9, ("CLK", "node_left"), UINTEGER_TYPE), ld(10, ("CLK", "node_right"), UINTEGER_TYPE),
+        emit("pair_form", 9, 9, 10), st(9, ("CLK", "row"), UINTEGER_TYPE),
+    ]),
+    ("ROW_SEED_ARRAY", gated(copy_words("key_left", "key_a_right", "words_row", "local1"), False)),
+    ("ROW_SEED", gated([operand(9, "left"), st(9, ("SIG", "right"), "type_row")], False)),
+    ("ROW_LOAD", gated([operand(9, "arg0"), emit("load_param", 9, 9, 0)])),
+    ("ROW_STORE", gated([operand(9, "arg0"), operand(10, "arg1"), emit("store_param", 10, 9, 0)], False)),
+    ("ROW_SYSCALL", gated([
+        *[operand(register, f"arg{register + 1}", f"has_arg{register + 1}") for register in range(6)],
+        operand(16, "arg0"), emit("SVC_80"), emit("CSNEG_X", 9, 0, 0, CC["HS"] ^ 1),
+    ])),
+    ("ROW_INSTRUCTION", gated([operand(0, "arg0"), emit("WORD", a2="param"), emit("ORR_X", 9, XZR, 0)])),
+    ("ROW_ITER_RANGE", gated([emit("ORR_X", 9, XZR, 23)])),
+    ("ROW_ITER", gated([address(12, "key_left"), emit("load_indexed_row", 9, 12, 23)])),
+    ("ROW_PREV", gated([ld(9, ("SIG", "left"), "type_row")])),
+    ("ROW_ELEMENT", gated([
+        address(12, "key_left"), operand(10, "right"), li(11, "size_left"), emit("MOVZ_X", 9), emit("SUBS_X", XZR, 10, 11),
+        emit("B_COND", a3=CC["HS"], to=label("local1")), emit("load_indexed_row", 9, 12, 10), place("local1"),
+    ])),
+    ("ROW_GATHER", gated([
+        address(12, "key_left"), address(13, "key_right"), address(14, "key_owner"), emit("MOVZ_X", 15), place("local1"),
+        emit("load_indexed_index", 10, 13, 15), emit("MOVZ_X", 9), li(11, "size_left"), emit("SUBS_X", XZR, 10, 11),
+        emit("B_COND", a3=CC["HS"], to=label("local2")), emit("load_indexed_element", 9, 12, 10), place("local2"),
+        emit("store_indexed_element", 9, 14, 15), emit("ADD_X_IMM", 15, 15, 1), li(17, "size_row"),
+        emit("SUBS_X", XZR, 15, 17), emit("B_COND", a3=CC["LO"], to=label("local1")),
+    ], False)),
+    ("ROW_NEXT", gated([
+        *copy_words("key_left", "key_owner", "words_row", "local1", "keys_differ"), address(12, "key_owner"),
+        operand(10, "right_left"), operand(9, "right_right"), li(11, "size_row"), emit("SUBS_X", XZR, 10, 11),
+        emit("B_COND", a3=CC["HS"], to=label("local2")), emit("store_indexed_element", 9, 12, 10), place("local2"),
+    ], False)),
+    ("ROW_CONST", gated([operand(9, "row")])),
+    ("ROW_DELAY", gated([ld(9, ("MEM", "row"), "type_row")])),
+    ("ROW_ONE", gated([emit("MOVZ_X", 9, 0, 1)])),
+    ("ROW_IF", gated([
+        operand(9, "left"), operand(10, "right_left"), operand(11, "right_right"), emit("SUBS_X_IMM", XZR, 9, 0),
+        emit("CSEL_X", 9, 10, 11, CC["NE"]),
+    ])),
+    ("ROW_DEFAULT", gated([
+        ld(11, ("CLK", "clock_left"), UINTEGER_TYPE), operand(9, "left"), operand(10, "right"),
+        emit("SUBS_W_IMM", XZR, 11, 0), emit("CSEL_X", 9, 9, 10, CC["NE"]),
+    ])),
+    ("ROW_PLAIN", gated(generic())),
+    ("ROW_NEG", gated(generic(emit("SUB_X", 9, XZR, 9)))),
+    ("ROW_NOT_LOGICAL", gated(generic(emit("EOR_X_ONE", 9, 9)))),
+    ("ROW_NOT", gated(generic(emit("ORN_X", 9, XZR, 9)))),
+    ("ROW_BINARY", gated(generic(emit("instruction_op", 9, 9, 10)))),
+    ("ROW_DIV_SIGNED", gated(generic(emit("SDIV_X", 9, 9, 10)))),
+    ("ROW_DIV", gated(generic(emit("UDIV_X", 9, 9, 10)))),
+    ("ROW_COMPARE_SIGNED", gated(generic(emit("SUBS_X", XZR, 9, 10), emit("CSINC_W", 9, XZR, XZR, "signed_condition")))),
+    ("ROW_COMPARE", gated(generic(emit("SUBS_X", XZR, 9, 10), emit("CSINC_W", 9, XZR, XZR, "unsigned_condition")))),
+    ("ROW_MOD_SIGNED", gated(generic(
+        emit("SDIV_X", 11, 9, 10), emit("MSUB_X", 11, 11, 10, 9), emit("SUBS_X_IMM", XZR, 10, 0),
+        emit("CSNEG_X", 12, 10, 10, CC["LT"] ^ 1), emit("ADD_X", 12, 11, 12), emit("SUBS_X_IMM", XZR, 11, 0),
+        emit("CSEL_X", 9, 12, 11, CC["LT"]),
+    ))),
+    ("ROW_MOD", gated(generic(emit("UDIV_X", 11, 9, 10), emit("MSUB_X", 9, 11, 10, 9)))),
+    ("ROW_SHIFT", gated(generic(
+        emit("SUBS_X_IMM", XZR, 10, 64), emit("shift_op", 11, 9, 10), emit("CSEL_X", 9, 11, XZR, CC["LO"]),
+    ))),
+    ("DELAY", [
+        ld(9, ("CLK", "clock_row"), UINTEGER_TYPE), emit("CBZ_W", 9, to=label("local0")),
+        ld(9, ("SIG", "left"), "type_row"), st(9, ("MEM", "row"), "type_row"), place("local0"),
+    ]),
+    ("OUTPUT_HEAD", [emit("ADRP", 20, to=("OUT", 0)), emit("ADD_X_IMM", 20, 20, to=("OUT", 0))]),
+    ("OUTPUT", [
+        emit("MOVZ_W", 10, 0, 32, when="flag"), emit("STRB_W_POST", 10, 20, 1, when="flag"),
+        ld(9, ("CLK", "clock_row"), UINTEGER_TYPE), emit("CBZ_W", 9, to=label("local0")), ld(0, ("SIG", "row"), "type_row"),
+        emit("BL", to=label("put_output")), emit("B", to=label("local1")), place("local0"), emit("MOVZ_W", 10, 0, 45),
+        emit("STRB_W_POST", 10, 20, 1), place("local1"),
+    ]),
+    ("OUTPUT_TAIL", [
+        emit("MOVZ_W", 10, 0, 10), emit("STRB_W_POST", 10, 20, 1), emit("ADRP", 1, to=("OUT", 0)),
+        emit("ADD_X_IMM", 1, 1, to=("OUT", 0)), emit("SUB_X", 2, 20, 1), emit("MOVZ_X", 0, 0, 1), *system_call(4),
+    ]),
+    ("FINISH", [
+        emit("B", to=label("step")), place("put_int"), emit("SUBS_X_IMM", XZR, 0, 0),
+        emit("B_COND", a3=CC["GE"], to=label("put_uint")), emit("MOVZ_W", 10, 0, 45), emit("STRB_W_POST", 10, 20, 1),
+        emit("SUB_X", 0, XZR, 0), place("put_uint"), emit("ORR_X", 9, XZR, 0), emit("SUB_X_IMM", SP, SP, 32),
+        emit("ADD_X_IMM", 11, SP, 0), emit("ADD_X_IMM", 15, SP, 0), emit("MOVZ_X", 12, 0, 10), place("local0"),
+        emit("UDIV_X", 13, 9, 12), emit("MSUB_X", 14, 13, 12, 9), emit("ADD_W_IMM", 14, 14, 48),
+        emit("STRB_W_POST", 14, 11, 1), emit("ORR_X", 9, XZR, 13), emit("CBNZ_X", 9, to=label("local0")), place("local1"),
+        emit("LDRB_W_PRE", 14, 11, -1), emit("STRB_W_POST", 14, 20, 1), emit("SUBS_X", XZR, 11, 15),
+        emit("B_COND", a3=CC["NE"], to=label("local1")), emit("ADD_X_IMM", SP, SP, 32), emit("RET"), place("put_bool"),
+        emit("CBZ_W", 0, to=label("local2")), emit("MOVZ_W", 9, 0, 0x7274), emit("MOVK_W", 9, 0, 0x6575, 1),
+        emit("STR_W_POST", 9, 20, 4), emit("RET"), place("local2"), emit("MOVZ_W", 9, 0, 0x6166),
+        emit("MOVK_W", 9, 0, 0x736C, 1), emit("STR_W_POST", 9, 20, 4), emit("MOVZ_W", 9, 0, 101),
+        emit("STRB_W_POST", 9, 20, 1), emit("RET"),
+    ]),
+]
+
+
+def emit_template_rows():
+    starts, lengths, label_counts, rows = [], [], [], []
+    for _, steps in EMIT_TEMPLATES:
+        starts.append(len(rows))
+        lengths.append(len(steps))
+        locals_used = [
+            int(name[5:]) for step_row in steps for name in (step_row[3], step_row[8])
+            if isinstance(name, str) and name.startswith("local")
+        ]
+        label_counts.append(max(locals_used) + 1 if locals_used else 0)
+        for kind, when, form, a0, a1, a2, a3, target_kind, target in steps:
+            sources = []
+
+            def spec(value):
+                if isinstance(value, int):
+                    assert -1 <= value < SOURCE_BASE
+                    return value
+                if value in FORMS:
+                    return FORMS.index(value)
+                sources.append(EMIT_SOURCES.index(value))
+                return SOURCE_BASE + len(sources) - 1
+
+            slots = [spec(value) for value in (form, a0, a1, a2, a3, target)]
+            assert len(sources) <= 2
+            sources += [-1] * (2 - len(sources))
+            rows.append((MICRO_KINDS.index(kind), EMIT_PREDICATES.index(when), *slots, TARGET_KINDS.index(target_kind), *sources))
+    return starts, lengths, label_counts, rows
+
+
+def packed_words(text, count):
+    data = text.encode() + bytes(8 * count - len(text))
+    return [int.from_bytes(data[8 * k:8 * k + 8], "little") for k in range(count)]
 
 
 class Fragments:
@@ -570,6 +900,51 @@ def build():
         ARG_ATOMS.index(program[step]) if step < len(program) else 0
         for program in arg_programs for step in range(ARG_WIDTH)])
     integer("DELAY_PRECEDENCE", DELAY_PRECEDENCE)
+
+    for index, name in enumerate(FORMS):
+        integer(f"FORM_{name}", index)
+    for name, value in CONDITIONS.items():
+        integer(f"CC_{name}", value)
+    for prefix, names in (("MK", MICRO_KINDS), ("TG", TARGET_KINDS), ("GL", GLOBAL_LABELS)):
+        for index, name in enumerate(names):
+            integer(f"{prefix}_{name.upper()}", index)
+    for prefix, names in (("ES", EMIT_SOURCES), ("EP", EMIT_PREDICATES), ("ET", [name for name, _ in EMIT_TEMPLATES])):
+        for index, name in enumerate(names):
+            integer(f"{prefix}_{name.upper()}", index)
+    integer("GLOBAL_LABEL_COUNT", len(GLOBAL_LABELS))
+    integer("STEP_SOURCE_BASE", SOURCE_BASE)
+    integer("ET_COUNT", len(EMIT_TEMPLATES))
+    template_names = [name for name, _ in EMIT_TEMPLATES]
+    for index, name in enumerate(UNIT_PHASES):
+        integer(f"UPH_{name}", index)
+    integer("UPH_DONE", len(UNIT_PHASES))
+    table("UNIT_PHASE_TEMPLATE", "integer", [template_names.index(name) if name in template_names else -1 for name in UNIT_PHASES])
+    starts, lengths, label_counts, step_rows = emit_template_rows()
+    table("ET_START", "integer", starts)
+    table("ET_LENGTH", "integer", lengths)
+    table("ET_LABELS", "integer", label_counts)
+    step_columns = ["KIND", "WHEN", "FORM", "A0", "A1", "A2", "A3", "TARGET", "TARGET_KIND", "SOURCE0", "SOURCE1"]
+    for column, name in enumerate(step_columns):
+        table(f"STEP_{name}", "integer", [row[column] for row in step_rows])
+    table("LOAD_OFFSET_FORM", "integer", [FORMS.index(LOAD_FORMS[key][0]) if key in LOAD_FORMS else 0
+                                          for key in ((index // 2, index % 2) for index in range(18))])
+    table("LOAD_INDEXED_FORM", "integer", [FORMS.index(LOAD_FORMS[key][1]) if key in LOAD_FORMS else 0
+                                           for key in ((index // 2, index % 2) for index in range(18))])
+    table("STORE_OFFSET_FORM", "integer", [FORMS.index(STORE_FORMS[size][0]) if size in STORE_FORMS else 0 for size in range(9)])
+    table("STORE_INDEXED_FORM", "integer", [FORMS.index(STORE_FORMS[size][1]) if size in STORE_FORMS else 0 for size in range(9)])
+    table("OP_INSTRUCTION_FORM", "integer", [FORMS.index(OP_INSTRUCTIONS[op]) if op in OP_INSTRUCTIONS else -1 for op in OPS])
+    table("OP_SHIFT_FORM", "integer", [FORMS.index(OP_SHIFTS[op]) if op in OP_SHIFTS else -1 for op in OPS])
+    table("OP_SIGNED_CONDITION", "integer", [CONDITIONS[OP_CONDITIONS[op][0]] ^ 1 if op in OP_CONDITIONS else -1 for op in OPS])
+    table("OP_UNSIGNED_CONDITION", "integer", [CONDITIONS[OP_CONDITIONS[op][1]] ^ 1 if op in OP_CONDITIONS else -1 for op in OPS])
+    headers = [column + " " for column in CODE_COLUMNS]
+    assert all(len(header) <= 16 for header in headers)
+    integer("CODE_COLUMN_COUNT", len(CODE_COLUMNS))
+    for word in range(2):
+        table(f"CODE_HEADER_WORD{word}", "ulong", [packed_words(header, 2)[word] for header in headers],
+              lambda v: f"ulong({signed64(v)})")
+    table("CODE_HEADER_LENGTH", "integer", [len(header) for header in headers])
+    constants.append(("EMIT_TEXT", f'constant [{len(EMIT_TEXT)}] ubyte EMIT_TEXT = "{EMIT_TEXT}";'))
+    integer("MALFORMED_TEXT_LENGTH", EMIT_TEXT.index("memory"))
 
     text = "".join(fragments.texts)
     assert '"' not in text and "\n" not in text

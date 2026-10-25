@@ -53,8 +53,48 @@ def scheduled(text):
     return Scheduled(order, loop_orders, loops.snapshots, rows.snapshotted)
 
 
+@dataclass
+class Emitted:
+    form: list
+    op0: list
+    op1: list
+    op2: list
+    op3: list
+    target_section: list
+    target_offset: list
+    data_offsets: list
+    data_alignments: list
+    data: bytes
+
+
+def emitted(text):
+    program = flat(text)
+    rows, loops = sigc.lower(program)
+    clocks_found = sigc.clock_calculus(rows, program, loops)
+    order, loop_orders = sigc.schedule(program, rows, clocks_found, loops)
+    alignments = []
+    data_item = sigc.data_item
+
+    def recording_data_item(code, alignment, content):
+        alignments.append(alignment)
+        return data_item(code, alignment, content)
+
+    sigc.data_item = recording_data_item
+    try:
+        code = sigc.emit_code(program, rows, clocks_found, loops, order, loop_orders)
+    finally:
+        sigc.data_item = data_item
+    targets = [(-1, 0) if target < 0 else (code.label_section[target], code.label_offset[target]) for target in code.target]
+    data_offsets = [offset for section, offset in zip(code.label_section, code.label_offset) if section == sigc.DATA]
+    return Emitted(
+        code.form, code.op0, code.op1, code.op2, code.op3, [section for section, _ in targets],
+        [offset for _, offset in targets], data_offsets, alignments, bytes(code.data),
+    )
+
+
 PASSES = {
     "tokens": sigc.lex, "program": parse, "flat": flat, "rows": lowered, "clocks": clocks, "schedule": scheduled,
+    "code": emitted,
 }
 
 
