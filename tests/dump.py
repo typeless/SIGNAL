@@ -19,13 +19,26 @@ def flat(text):
 class Lowered:
     rows: sigc.Rows
     loops: sigc.Loops
+    types: sigc.Types
+    table_types: list
+    table_values: list
 
 
 def lowered(text):
-    return Lowered(*sigc.lower(flat(text)))
+    program = flat(text)
+    rows, loops = sigc.lower(program)
+    return Lowered(rows, loops, program.types, program.table_types, program.table_values)
 
 
-PASSES = {"tokens": sigc.lex, "program": parse, "flat": flat, "rows": lowered}
+def clocks(text):
+    program = flat(text)
+    rows, loops = sigc.lower(program)
+    result = sigc.clock_calculus(rows, program, loops)
+    result.parent = [sigc.find(result, clock) for clock in range(len(result.parent))]
+    return result
+
+
+PASSES = {"tokens": sigc.lex, "program": parse, "flat": flat, "rows": lowered, "clocks": clocks}
 
 
 def render(value, nested):

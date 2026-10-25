@@ -1,0 +1,1 @@
+clocks_cycle_self.sig:6:27: error: clocks of Y are defined in terms of each other

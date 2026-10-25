@@ -1,0 +1,1 @@
+clocks_cycle_expressions.sig:6:14: error: clocks of A, B are defined in terms of each other

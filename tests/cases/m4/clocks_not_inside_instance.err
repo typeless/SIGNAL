@@ -1,0 +1,1 @@
+clocks_not_inside_instance.sig:11:17: error: clock of Y cannot be shown inside the clock [INNER#1.P]

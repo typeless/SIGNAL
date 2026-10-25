@@ -86,9 +86,21 @@ ROW_COLUMNS = [
     "rows.dependence_to", "rows.war", "rows.snapshotted", "rows.effects.kind", "rows.effects.resource",
     "rows.effects.param", "loops.index", "loops.size", "loops.defined", "loops.snapshots", "loops.count",
 ]
-ALL_COLUMNS = COLUMNS + ROW_COLUMNS
+CLOCK_COLUMNS = [
+    "parent", "sample_rows", "def_kind", "def_target", "def_left", "def_right", "def_line", "def_column", "def_pending",
+    "ob_small", "ob_big", "ob_line", "ob_column", "node_kind", "node_parent", "node_depth", "node_root", "node_left",
+    "node_right", "roots",
+]
+ALL_COLUMNS = COLUMNS + ROW_COLUMNS + CLOCK_COLUMNS
+TYPE_COLUMNS = [column for column in COLUMNS if column.startswith("types.")]
+DUMP_ORDERS = [
+    ("PROGRAM", COLUMNS), ("ROWS", ROW_COLUMNS + TYPE_COLUMNS + ["table_types", "table_values"]), ("CLOCKS", CLOCK_COLUMNS),
+]
+CLOCK_KINDS = ["NONE", "ROOT", "SAMPLE", "PRODUCT", "SUM"]
 
-ARGUMENT_KINDS = ["NONE", "TOKEN", "LITERAL", "NAME", "TYPE", "NUMBER", "CODE", "FRAGMENT", "CHARACTER", "FLAT", "TEXT", "LONG"]
+ARGUMENT_KINDS = [
+    "NONE", "TOKEN", "LITERAL", "NAME", "TYPE", "NUMBER", "CODE", "FRAGMENT", "CHARACTER", "FLAT", "TEXT", "LONG", "CLOCK",
+]
 TEMPLATES = [
     ("UNEXPECTED_CHARACTER", "unexpected character '#'", ["CHARACTER"]),
     ("CAPACITY", "program exceeds compiler capacity: #", ["FRAGMENT"]),
@@ -204,11 +216,20 @@ TEMPLATES = [
     ("ARRAY_DEFINITION", "an array signal must be defined by a constant, indices, a gather, or next", []),
     ("NEVER_DEFINED", "signal # is never defined", ["FLAT"]),
     ("RANGE_INDEX", "a range can only be the index of iterate", []),
+    ("NO_CLOCK", "a constant has no clock", []),
+    ("DELAY_CONSTANT", "the argument of $ cannot be a constant", []),
+    ("FITS_NO_TREE", "clock of # fits no tree: it relates root clocks # and #", ["CLOCK", "CLOCK", "CLOCK"]),
+    ("TWO_DEFINITIONS", "clock of # has two definitions that cannot be shown equal", ["CLOCK"]),
+    ("CLOCK_CYCLE", "clocks of # are defined in terms of each other", ["CLOCK"]),
+    ("GUARD_CYCLE", "the clocks of guards # depend on each other", ["CLOCK"]),
+    ("NOT_INSIDE", "clock of # cannot be shown inside the clock #", ["CLOCK", "CLOCK"]),
+    ("INPUT_ROOT", "input signal # must have a root of its own", ["FLAT"]),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
     "GUARDS", "LABELS", "LOOPS", "GROUPS", "DEPENDENCES", "STACK", "PATHS", "LOCALS", "PARSE", "FINISH", "ITEMS",
     "OUTPUT", "INSTANCES", "INSTANTIATE", "LOOKUPS", "ROWS", "ROW_DEPENDENCES", "SEGMENTS", "LOWER",
+    "CLOCKS", "DEFINITIONS", "OBLIGATIONS", "CLOCK_ROUNDS", "PAIRS", "CLOCK_NAMES",
 ]
 NAMED_FRAGMENTS = [
     ("COLON", ":"), ("ERROR_SEPARATOR", ": error: "), ("ERROR_WORD", "error "), ("SPACE", " "),
@@ -217,7 +238,7 @@ NAMED_FRAGMENTS = [
     ("CLOSE_TWO", "]]"), ("CLOSE_THREE", "]]]"), ("EMPTY_LIST", "[]"), ("OPEN_NONE", "[none"),
     ("NONE_CLOSE", "none]"), ("CONST_OPEN", "[CONST ["), ("ENUMCONST_OPEN", "[ENUMCONST ["), ("SIZE_CLOSE", "] "),
     ("STATE_SUFFIX", "'state"), ("DEFINE", "DEFINE"), ("SEED", "SEED"),
-    ("HASH", "#"), ("DOT", "."), ("CALL_SUFFIX", "'call"),
+    ("HASH", "#"), ("DOT", "."), ("CALL_SUFFIX", "'call"), ("EXPRESSION_AT", "[expression at "),
 ]
 ROLE_WORDS = ["signal", "type", "model", "constant", "label"]
 
@@ -268,6 +289,10 @@ LOWER_STATES = [
 ]
 POST_STATES = ["DEPENDENCE", "ROWS", "PREFIX", "PLACE", "WALK", "LABELSUM", "SIZE", "DONE", "FAILED"]
 EXPAND_STATES = ["PLACE", "PAIRS", "PREV", "DONE", "FAILED"]
+CLOCK_STATES = ["ROWS", "SAMPLES", "GROUPS", "REWRITE", "TARGETS", "GUARDS", "SCAN", "DEFS", "WAIT", "DONE", "FAILED"]
+OBLIGATION_STATES = ["START", "WALK", "DONE", "FAILED"]
+KEY_FAMILIES = ["SIGNAL", "LABEL", "CALL_LABEL", "VALUE", "PAIR", "ARRAY"]
+KEY_STRIDE = 8
 INSTANTIATE_PHASES = [
     "ROOT", "INSTANCE", "LABEL", "SIGNAL", "FINISH_SIGNAL", "LOOP", "EQUATION", "FINISH_EQUATION", "GROUP",
     "FINISH_GROUP", "DEPENDENCE", "ENTRY", "ANCESTRY", "PATH", "INPUT", "EMIT", "DONE", "FAILED",
@@ -295,6 +320,7 @@ COLUMN_SHAPES = {
     "dependence_positions": "POSITION", "dependence_guards": "LIST NUMBERS",
     "rows.op": "FRAGMENT", "rows.groups": "LIST NUMBERS", "rows.group_positions": "POSITION",
     "rows.war": "LIST NUMBERS", "rows.effects.kind": "NAME", "loops.defined": "LIST NUMBERS",
+    "def_kind": "FRAGMENT", "node_kind": "FRAGMENT",
 }
 ITEM_CLASSES = ["HEADER", "NEWLINE", "OPEN", "CLOSE", "NAME", "TOKEN", "NUMBER", "FRAGMENT", "SIZE", "PREFIX"]
 ARG_ATOMS = [
@@ -439,6 +465,7 @@ def build():
     for index, kind in enumerate(TYPE_KINDS):
         integer(f"TK_{kind}", index)
     table("TYPE_KIND_FRAGMENT", "short", type_kind_ids)
+    table("CLOCK_KIND_FRAGMENT", "short", [named["NONE"]] + [fragments.add(kind) for kind in CLOCK_KINDS[1:]])
     table("BUILTIN_KIND", "short", BUILTIN_KIND)
     table("BUILTIN_BYTES", "short", BUILTIN_BYTES)
     table("BUILTIN_SIGNED", "short", BUILTIN_SIGNED)
@@ -447,8 +474,12 @@ def build():
     table("ROLE_FRAGMENT", "short", role_ids)
     for index, word in enumerate(ROLE_WORDS):
         integer(f"F_ROLE_{word.upper()}", role_word_ids[index])
-    integer("COLUMN_COUNT", len(COLUMNS))
-    integer("COLUMN_TOTAL", len(ALL_COLUMNS))
+    dump_order = []
+    for name, columns in DUMP_ORDERS:
+        integer(f"ORDER_{name}_START", len(dump_order))
+        dump_order.extend(ALL_COLUMNS.index(column) for column in columns)
+        integer(f"ORDER_{name}_END", len(dump_order))
+    table("DUMP_ORDER", "short", dump_order)
     for index, column in enumerate(ALL_COLUMNS):
         integer(f"COL_{column.upper().replace('.', '_')}", index)
     table("COLUMN_FRAGMENT", "short", column_ids)
@@ -498,10 +529,14 @@ def build():
     for prefix, names in (("P", PARSE_STATES), ("X", OPERAND_CASES + OPERATOR_CASES), ("FRAME", FRAMES),
                           ("INIT", DELAY_INITS), ("PHASE", FINISH_PHASES),
                           ("IP", INSTANTIATE_PHASES), ("LS", LOWER_STATES), ("PS", POST_STATES),
-                          ("XS", EXPAND_STATES)):
+                          ("XS", EXPAND_STATES), ("KS", CLOCK_STATES), ("OS", OBLIGATION_STATES), ("CLK", CLOCK_KINDS)):
         for index, name in enumerate(names):
             integer(f"{prefix}_{name}", index)
     integer("CONDITION_PRECEDENCE", CONDITION_PRECEDENCE)
+    assert len(KEY_FAMILIES) <= KEY_STRIDE
+    integer("KEY_STRIDE", KEY_STRIDE)
+    for index, name in enumerate(KEY_FAMILIES):
+        integer(f"KEY_{name}", index)
     for prefix, names in (("SHAPE", SHAPES), ("SA", SCALAR_ATOMS), ("LIST", LIST_KINDS), ("IC", ITEM_CLASSES),
                           ("AA", ARG_ATOMS)):
         for index, name in enumerate(names):

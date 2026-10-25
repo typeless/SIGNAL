@@ -1,0 +1,1 @@
+clocks_cycle_three.sig:6:13: error: clocks of A, B, C are defined in terms of each other
