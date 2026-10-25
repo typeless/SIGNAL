@@ -14,7 +14,7 @@ SEED_WORDS = [
     "clock'", "state'", "cur'", "on'",
     "process", "where", "end", "init", "true", "false", "when", "default", "and", "or", "xor", "not", "modulo",
     "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with", "if", "then", "else", "procedure",
-    "node", "function", "automaton", "label", "on", "external", "indices", "pragmas", "Interrupt", "Boot",
+    "node", "function", "automaton", "label", "on", "external", "indices", "pragmas", "Interrupt", "Boot", "Machine",
 ]
 KEYWORDS = {
     "process", "where", "end", "init", "integer", "boolean", "event", "true", "false", "when", "default", "and", "or",
@@ -27,6 +27,7 @@ NAME_CONSTANTS = {
     "instruction": "N_INSTRUCTION", "Automaton_Initial_State": "N_INITIAL", "Automaton_Transition": "N_TRANSITION",
     "Automaton_IsIn": "N_ISIN", "clock'": "N_CLOCK_MARK", "state'": "N_STATE_MARK", "cur'": "N_CURRENT_MARK",
     "on'": "N_ON_MARK", "indices": "N_INDICES", "pragmas": "N_PRAGMAS", "Interrupt": "N_INTERRUPT", "Boot": "N_BOOT",
+    "Machine": "N_MACHINE",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -234,7 +235,7 @@ TEMPLATES = [
     ("EFFECTS_UNORDERED", "effects # and # on resource # have no order between them; order them with -->", ["CLOCK", "CLOCK", "TYPE"]),
     ("ARRAYS_ADDRESS", "arrays need more than 2^64 bytes of address space", []),
     ("PRAGMAS_TOP", "pragmas are allowed only on the top model", []),
-    ("PRAGMA_UNKNOWN", "pragma # is not supported; use Interrupt or Boot", ["NAME"]),
+    ("PRAGMA_UNKNOWN", "pragma # is not supported; use Interrupt, Boot or Machine", ["NAME"]),
     ("PRAGMAS_END", "expected 'end pragmas', found #", ["TOKEN"]),
     ("INTERRUPT_STATEMENT", "Interrupt expects an interrupt number in quotes, found #", ["TOKEN"]),
     ("INTERRUPT_NUMBER", "interrupt number # must be a decimal from 16 to 31", ["TOKEN"]),
@@ -248,6 +249,11 @@ TEMPLATES = [
     ("SYSCALL_VIRT", "syscall is not available on QEMU virt", []),
     ("BOOT_MISSING", "a program with Interrupt pragmas needs a Boot pragma to enable them", []),
     ("INPUT_SHARED", "input signals # and # share one root clock; each Interrupt or Boot input needs its own", ["NAME", "NAME"]),
+    ("MACHINE_UNKNOWN", "machine # is not supported; use mps2-an385", ["TOKEN"]),
+    ("MACHINE_TWICE", "pragma Machine is used twice", []),
+    ("INTERRUPT_NUMBER_MPS2", "interrupt number # must be a decimal from 15 to 47", ["TOKEN"]),
+    ("SYSCALL_MPS2", "syscall is not available on mps2-an385", []),
+    ("IMAGE_SIZE", "the program needs more than the 4 MiB of RAM on mps2-an385", []),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
@@ -436,7 +442,7 @@ BRANCH19 = ((3, 0, 4, 0), (2, 2, 19, 5))
 COMPARE_BRANCH = ((0, 0, 5, 0), (2, 2, 19, 5))
 PAGE21 = ((0, 0, 5, 0), (2, 12, 2, 29), (2, 14, 19, 5))
 WORD32 = ((2, 0, 32, 0),)
-FIELD_KINDS = ["NONE", "PCREL", "PAGE", "PAGEOFF"]
+FIELD_KINDS = ["NONE", "PCREL", "PAGE", "PAGEOFF", "THUMB_PCREL", "ABS_LO", "ABS_HI"]
 FORM_SPECS = [
     ("movz x", 0xD2800000, MOVE_X, False, "NONE"),
     ("movz w", 0x52800000, MOVE_W, False, "NONE"),
@@ -506,7 +512,97 @@ FORM_SPECS = [
     ("word", 0x00000000, WORD32, False, "NONE"),
     ("wfi", 0xD503207F, (), False, "NONE"),
 ]
-FORM_FIELD_SLOTS = 4
+
+
+def memory_order(word):
+    return ((word & 0xFFFF) << 16) | (word >> 16)
+
+
+def memory_field(field):
+    slot, low, width, at = field
+    assert at + width <= 16 or at >= 16
+    return (slot, low, width, at - 16 if at >= 16 else at + 16)
+
+
+THUMB_IMM16 = ((0, 0, 4, 8), (2, 0, 8, 0), (2, 8, 3, 12), (2, 11, 1, 26), (2, 12, 4, 16))
+THUMB_IMM12 = ((0, 0, 4, 8), (1, 0, 4, 16), (2, 0, 8, 0), (2, 8, 3, 12), (2, 11, 1, 26))
+THUMB_IMM8 = ((0, 0, 4, 8), (1, 0, 4, 16), (2, 0, 8, 0))
+THUMB_REG3 = ((0, 0, 4, 8), (1, 0, 4, 16), (2, 0, 4, 0))
+THUMB_REG3_SHIFT = THUMB_REG3 + ((3, 0, 2, 6), (3, 2, 3, 12))
+THUMB_REG2 = ((0, 0, 4, 8), (1, 0, 4, 0))
+THUMB_SHIFT_IMM = ((0, 0, 4, 8), (1, 0, 4, 0), (2, 0, 2, 6), (2, 2, 3, 12))
+THUMB_MULTIPLY = ((0, 0, 4, 8), (1, 0, 4, 16), (2, 0, 4, 0), (3, 0, 4, 12))
+THUMB_LONG_MULTIPLY = ((0, 0, 4, 12), (1, 0, 4, 16), (2, 0, 4, 0), (3, 0, 4, 8))
+THUMB_OFFSET12 = ((0, 0, 4, 12), (1, 0, 4, 16), (2, 0, 12, 0))
+THUMB_OFFSET8 = ((0, 0, 4, 12), (1, 0, 4, 16), (2, 0, 8, 0))
+THUMB_DUAL = ((0, 0, 4, 12), (1, 0, 4, 16), (2, 2, 8, 0), (3, 0, 4, 8))
+THUMB_BRANCH = ((2, 1, 11, 0), (2, 12, 10, 16), (2, 22, 1, 26))
+THUMB_SKIP = ((3, 0, 4, 24),)
+THUMB_WORD = ((2, 0, 16, 0), (2, 16, 16, 16))
+THUMB_SPECS = [
+    ("MOVW_T", "movw", 0xF2400000, THUMB_IMM16, False, "NONE"),
+    ("MOVT_T", "movt", 0xF2C00000, THUMB_IMM16, False, "NONE"),
+    ("MOVW_ABS_T", "movw address", 0xF2400000, THUMB_IMM16, False, "ABS_LO"),
+    ("MOVT_ABS_T", "movt address", 0xF2C00000, THUMB_IMM16, False, "ABS_HI"),
+    ("ADDW_T", "addw", 0xF2000000, THUMB_IMM12, False, "NONE"),
+    ("SUBW_T", "subw", 0xF2A00000, THUMB_IMM12, False, "NONE"),
+    ("AND_T", "and.w", 0xEA000000, THUMB_REG3, False, "NONE"),
+    ("ORR_T", "orr.w", 0xEA400000, THUMB_REG3, False, "NONE"),
+    ("ORRS_T", "orrs.w", 0xEA500000, THUMB_REG3, False, "NONE"),
+    ("EOR_T", "eor.w", 0xEA800000, THUMB_REG3, False, "NONE"),
+    ("ADD_SHIFT_T", "add.w shifted", 0xEB000000, THUMB_REG3_SHIFT, False, "NONE"),
+    ("ADDS_T", "adds.w", 0xEB100000, THUMB_REG3, False, "NONE"),
+    ("ADC_T", "adc.w", 0xEB400000, THUMB_REG3, False, "NONE"),
+    ("ADCS_T", "adcs.w", 0xEB500000, THUMB_REG3, False, "NONE"),
+    ("SBC_T", "sbc.w", 0xEB600000, THUMB_REG3, False, "NONE"),
+    ("SBCS_T", "sbcs.w", 0xEB700000, THUMB_REG3, False, "NONE"),
+    ("SUBS_T", "subs.w", 0xEBB00000, THUMB_REG3, False, "NONE"),
+    ("MOV_T", "mov.w", 0xEA4F0000, THUMB_REG2, False, "NONE"),
+    ("MVN_T", "mvn.w", 0xEA6F0000, THUMB_REG2, False, "NONE"),
+    ("LSL_T", "lsl.w", 0xFA00F000, THUMB_REG3, False, "NONE"),
+    ("LSR_T", "lsr.w", 0xFA20F000, THUMB_REG3, False, "NONE"),
+    ("LSL_IMM_T", "lsl.w imm", 0xEA4F0000, THUMB_SHIFT_IMM, False, "NONE"),
+    ("LSR_IMM_T", "lsr.w imm", 0xEA4F0010, THUMB_SHIFT_IMM, False, "NONE"),
+    ("ASR_IMM_T", "asr.w imm", 0xEA4F0020, THUMB_SHIFT_IMM, False, "NONE"),
+    ("UMULL_T", "umull", 0xFBA00000, THUMB_LONG_MULTIPLY, False, "NONE"),
+    ("MLA_T", "mla", 0xFB000000, THUMB_MULTIPLY, False, "NONE"),
+    ("SUBS_IMM_T", "subs.w imm", 0xF1B00000, THUMB_IMM8, False, "NONE"),
+    ("ADDS_IMM_T", "adds.w imm", 0xF1100000, THUMB_IMM8, False, "NONE"),
+    ("ADC_IMM_T", "adc.w imm", 0xF1400000, THUMB_IMM8, False, "NONE"),
+    ("SBCS_IMM_T", "sbcs.w imm", 0xF1700000, THUMB_IMM8, False, "NONE"),
+    ("RSB_IMM_T", "rsb.w imm", 0xF1C00000, THUMB_IMM8, False, "NONE"),
+    ("EOR_IMM_T", "eor.w imm", 0xF0800000, THUMB_IMM8, False, "NONE"),
+    ("ORR_IMM_T", "orr.w imm", 0xF0400000, THUMB_IMM8, False, "NONE"),
+    ("LDR_T", "ldr.w", 0xF8D00000, THUMB_OFFSET12, False, "NONE"),
+    ("LDRB_T", "ldrb.w", 0xF8900000, THUMB_OFFSET12, False, "NONE"),
+    ("LDRH_T", "ldrh.w", 0xF8B00000, THUMB_OFFSET12, False, "NONE"),
+    ("LDRSH_T", "ldrsh.w", 0xF9B00000, THUMB_OFFSET12, False, "NONE"),
+    ("STR_T", "str.w", 0xF8C00000, THUMB_OFFSET12, False, "NONE"),
+    ("STRB_T", "strb.w", 0xF8800000, THUMB_OFFSET12, False, "NONE"),
+    ("STRH_T", "strh.w", 0xF8A00000, THUMB_OFFSET12, False, "NONE"),
+    ("LDRD_T", "ldrd", 0xE9D00000, THUMB_DUAL, False, "NONE"),
+    ("STRD_T", "strd", 0xE9C00000, THUMB_DUAL, False, "NONE"),
+    ("LDRD_POST_T", "ldrd post", 0xE8F00000, THUMB_DUAL, False, "NONE"),
+    ("STRD_POST_T", "strd post", 0xE8E00000, THUMB_DUAL, False, "NONE"),
+    ("STRB_POST_T", "strb post", 0xF8000B00, THUMB_OFFSET8, False, "NONE"),
+    ("LDRB_POST_T", "ldrb post", 0xF8100B00, THUMB_OFFSET8, False, "NONE"),
+    ("LDRB_PRE_DEC_T", "ldrb pre", 0xF8100D00, THUMB_OFFSET8, False, "NONE"),
+    ("STR_PRE_DEC_T", "str pre", 0xF8400D00, THUMB_OFFSET8, False, "NONE"),
+    ("LDR_POST_T", "ldr post", 0xF8500B00, THUMB_OFFSET8, False, "NONE"),
+    ("B_W_T", "b.w", 0xF000B800, THUMB_BRANCH, True, "THUMB_PCREL"),
+    ("BL_T", "bl", 0xF000F800, THUMB_BRANCH, True, "THUMB_PCREL"),
+    ("SKIP_T", "b.n skip", 0xD002BF00, THUMB_SKIP, False, "NONE"),
+    ("BX_LR_T", "bx lr", 0x4770BF00, (), False, "NONE"),
+    ("WFI_T", "wfi.w", 0xF3AF8003, (), False, "NONE"),
+    ("MSR_PRIMASK_T", "msr primask", 0xF3808810, (), False, "NONE"),
+    ("WORD_T", "thumb word", 0x00000000, THUMB_WORD, False, "NONE"),
+]
+FORMS += [name for name, _, _, _, _, _ in THUMB_SPECS]
+FORM_SPECS += [
+    (text, memory_order(base), tuple(memory_field(field) for field in fields), signed, kind)
+    for _, text, base, fields, signed, kind in THUMB_SPECS
+]
+FORM_FIELD_SLOTS = 5
 MACHO_BASE = 0x100000000
 TEXT_OFFSET = 392
 COMMAND_BYTES = 360
@@ -533,7 +629,10 @@ OP_CONDITIONS = {
     "EQ": ("EQ", "EQ"), "NE": ("NE", "NE"), "LT": ("LT", "LO"), "LE": ("LE", "LS"), "GT": ("GT", "HI"), "GE": ("GE", "HS"),
 }
 OP_SHIFTS = {"SHL": "LSLV_X", "SHR": "LSRV_X"}
-GLOBAL_LABELS = ["malformed", "reserve_failed", "read_value", "put_int", "put_uint", "put_bool", "step", "read_done", "wait", "complete"]
+GLOBAL_LABELS = [
+    "malformed", "reserve_failed", "read_value", "put_int", "put_uint", "put_bool", "step", "read_done", "wait", "complete",
+    "divide",
+]
 EMIT_SOURCES = [
     "row", "left", "right", "right_left", "right_right", "param", "value_row",
     "arg0", "arg1", "arg2", "arg3", "arg4", "arg5", "arg6",
@@ -545,12 +644,15 @@ EMIT_SOURCES = [
     "load_param", "store_param", "load_indexed_row", "load_indexed_index", "load_indexed_element",
     "store_indexed_element", "instruction_op", "shift_op", "pair_form", "signed_condition", "unsigned_condition",
     "loop_start", "loop_end", "local0", "local1", "local2", "local3", "local4", "put_output", "root_irq",
+    "binary_lo", "binary_hi", "pair_form_thumb", "signed_condition_thumb", "unsigned_condition_thumb", "element_row",
+    "index_element",
 ] + GLOBAL_LABELS
 EMIT_PREDICATES = [
     "always", "flag", "has_arg1", "has_arg2", "has_arg3", "has_arg4", "has_arg5", "has_arg6", "right_loads",
-    "counted", "uncounted", "bounded", "keys_differ",
+    "counted", "uncounted", "bounded", "keys_differ", "mul", "not_mul", "compare_equal", "compare_direct", "compare_swapped",
+    "shift_left", "shift_right",
 ]
-MICRO_KINDS = ["EMIT", "LI", "LOAD", "STORE", "OPERAND", "ADDRESS", "PLACE"]
+MICRO_KINDS = ["EMIT", "LI", "LOAD", "STORE", "OPERAND", "ADDRESS", "PLACE", "LOAD_AT", "STORE_AT"]
 TARGET_KINDS = ["NONE", "LABEL", "TABLE", "WINDOW", "SIG", "MEM", "CLK", "IN", "OUT", "MALFORMED_TEXT", "RESERVE_TEXT", "TAIL", "STACK"]
 SOURCE_BASE = 1 << 20
 CC = CONDITIONS
@@ -859,6 +961,313 @@ EMIT_TEMPLATES += [
 ]
 
 
+THUMB_SUFFIX = "_THUMB"
+LR = 14
+SP_T = 13
+PC_T = 15
+UART0 = 0x40004000
+ICSR = 0xE000ED04
+NVIC_ICPR0 = 0xE000E280
+PENDSTCLR = 0x02000000
+MPS2_UNLOADED = 84
+MPS2_HEADER_BYTES = 92
+MPS2_RAM_BYTES = 0x400000
+MPS2_STACK_BYTES = 64
+VIRT_STACK_BYTES = 32
+PLATFORMS = ["MACOS", "VIRT", "MPS2"]
+MACHINE_TEXT = "mps2-an385"
+THUMB_LOAD_FORMS = {(1, 0): "LDRB_T", (1, 1): "LDRB_T", (2, 0): "LDRH_T", (2, 1): "LDRSH_T", (4, 0): "LDR_T", (4, 1): "LDR_T",
+                    (8, 0): "LDRD_T", (8, 1): "LDRD_T"}
+THUMB_STORE_FORMS = {1: "STRB_T", 2: "STRH_T", 4: "STR_T", 8: "STRD_T"}
+THUMB_BINARY = {"ADD": ("ADDS_T", "ADC_T"), "SUB": ("SUBS_T", "SBC_T"), "AND": ("AND_T", "AND_T"), "OR": ("ORR_T", "ORR_T"),
+                "XOR": ("EOR_T", "EOR_T")}
+THUMB_CONDITIONS = {
+    "EQ": ("EQ", "EQ"), "NE": ("NE", "NE"), "LT": ("LT", "LO"), "GE": ("GE", "HS"), "GT": ("LT", "LO"), "LE": ("GE", "HS"),
+}
+
+
+def li1(register, value, when="always"):
+    return step("LI", when, 0, register, value)
+
+
+def li2(register, value, when="always"):
+    return step("LI", when, 1, register, value)
+
+
+def ld1(register, target, type_source, when="always"):
+    return step("LOAD", when, 0, register, type_source, target=target)
+
+
+def ld2(register, target, type_source, when="always"):
+    return step("LOAD", when, 1, register, type_source, target=target)
+
+
+def st1(register, target, type_source, when="always"):
+    return step("STORE", when, 0, register, type_source, target=target)
+
+
+def st2(register, target, type_source, when="always"):
+    return step("STORE", when, 1, register, type_source, target=target)
+
+
+def operand1(register, row, when="always"):
+    return step("OPERAND", when, 0, register, row)
+
+
+def operand2(register, row, when="always"):
+    return step("OPERAND", when, 1, register, row)
+
+
+def load_at(register, type_source, base, index, when="always"):
+    return step("LOAD_AT", when, 1, register, type_source, base, index)
+
+
+def store_at(register, type_source, base, index, when="always"):
+    return step("STORE_AT", when, 1, register, type_source, base, index)
+
+
+def movw(register, value, when="always"):
+    return emit("MOVW_T", register, 0, value, when=when)
+
+
+def mov(destination, source, when="always"):
+    return emit("MOV_T", destination, source, when=when)
+
+
+def literal(register, value):
+    return [movw(register, value & 0xFFFF), emit("MOVT_T", register, 0, value >> 16)]
+
+
+def absolute(register, target):
+    return [emit("MOVW_ABS_T", register, to=target), emit("MOVT_ABS_T", register, to=target)]
+
+
+def only_if(condition, when="always"):
+    return emit("SKIP_T", a3=CC[condition] ^ 1, when=when)
+
+
+def branch_if(condition, name, when="always"):
+    return [only_if(condition, when), emit("B_W_T", to=label(name), when=when)]
+
+
+def branch(name, when="always"):
+    return emit("B_W_T", to=label(name), when=when)
+
+
+def compare(register, value, when="always"):
+    return emit("SUBS_IMM_T", PC_T, register, value, when=when)
+
+
+def compare_registers(left, right, when="always"):
+    return emit("SUBS_T", PC_T, left, right, when=when)
+
+
+def compare_pairs(left, right, when="always"):
+    return [emit("SUBS_T", LR, left, right, when=when), emit("SBCS_T", LR, left + 1, right + 1, when=when)]
+
+
+def put_byte(register):
+    return emit("STRB_POST_T", register, 10, 1)
+
+
+def apply_sign(register, sign):
+    return [
+        emit("EOR_T", register, register, sign), emit("EOR_T", register + 1, register + 1, sign),
+        emit("SUBS_T", register, register, sign), emit("SBC_T", register + 1, register + 1, sign),
+    ]
+
+
+def copy_pairs(source_key, destination_key, words, loop_label, when="always"):
+    return [
+        address(6, source_key, when), address(7, destination_key, when), li1(9, words, when), place(loop_label, when),
+        emit("LDRD_POST_T", 0, 6, 8, 1, when=when), emit("STRD_POST_T", 0, 7, 8, 1, when=when),
+        emit("SUBS_IMM_T", 9, 9, 1, when=when), *branch_if("NE", loop_label, when),
+    ]
+
+
+def gated_thumb(body, stores=True):
+    return (
+        [ld1(0, ("CLK", "clock_row"), UINTEGER_TYPE, "flag"), compare(0, 0, "flag"), *branch_if("EQ", "local0", "flag")]
+        + body + ([st2(0, ("SIG", "row"), "type_row")] if stores else []) + [place("local0", "flag")]
+    )
+
+
+def generic_thumb(*tail):
+    return [operand2(0, "left"), operand2(2, "right", "right_loads"), *tail]
+
+
+def loop_bound_thumb(when):
+    return [
+        operand2(4, "loop_count", when), li2(2, "loop_size_less_one", when), *compare_pairs(4, 2, when),
+        emit("SKIP_T", a3="loop_condition", when=when), mov(4, 2, when),
+        emit("SKIP_T", a3="loop_condition", when=when), mov(5, 3, when),
+        emit("ADDS_IMM_T", 4, 4, 1, when=when), emit("ADC_IMM_T", 5, 5, 0, when=when),
+    ]
+
+
+def put_bytes_thumb(text):
+    return [step_row for byte in text.encode() for step_row in (movw(2, byte), put_byte(2))]
+
+
+SIGNS = [emit("ASR_IMM_T", 8, 1, 31), emit("ASR_IMM_T", 9, 3, 31), *apply_sign(0, 8), *apply_sign(2, 9)]
+SHIFT_LEFT = [
+    emit("LSL_T", 4, 1, 2), emit("RSB_IMM_T", 5, 2, 32), emit("LSR_T", 6, 0, 5), emit("ORR_T", 4, 4, 6),
+    emit("SUBW_T", 5, 2, 32), emit("LSL_T", 6, 0, 5), emit("ORR_T", 1, 4, 6), emit("LSL_T", 0, 0, 2),
+]
+SHIFT_RIGHT = [
+    emit("LSR_T", 4, 0, 2), emit("RSB_IMM_T", 5, 2, 32), emit("LSL_T", 6, 1, 5), emit("ORR_T", 4, 4, 6),
+    emit("SUBW_T", 5, 2, 32), emit("LSR_T", 6, 1, 5), emit("ORR_T", 0, 4, 6), emit("LSR_T", 1, 1, 2),
+]
+PUT_NUMBER_THUMB = [
+    place("put_int"), compare(1, 0), *branch_if("GE", "put_uint"), movw(2, 45), put_byte(2), movw(2, 0),
+    emit("SUBS_T", 0, 2, 0), emit("SBC_T", 1, 2, 1),
+    place("put_uint"), emit("STR_PRE_DEC_T", LR, SP_T, 8), emit("SUBW_T", SP_T, SP_T, 24), emit("ADDW_T", 12, SP_T, 0),
+    place("local0"), movw(2, 10), movw(3, 0), emit("BL_T", to=label("divide")), emit("ADDW_T", 2, 2, 48),
+    emit("STRB_POST_T", 2, 12, 1), emit("ORRS_T", 4, 0, 1), *branch_if("NE", "local0"),
+    place("local1"), emit("LDRB_PRE_DEC_T", 2, 12, 1), put_byte(2), compare_registers(SP_T, 12), *branch_if("NE", "local1"),
+    emit("ADDW_T", SP_T, SP_T, 24), emit("LDR_POST_T", PC_T, SP_T, 8),
+]
+DIVIDE_THUMB = [
+    place("divide"), emit("ORRS_T", 4, 2, 3), only_if("EQ"), mov(2, 0), only_if("EQ"), mov(3, 1), only_if("EQ"), movw(0, 0),
+    only_if("EQ"), movw(1, 0), only_if("EQ"), emit("BX_LR_T"), movw(4, 0), movw(5, 0), movw(9, 64), place("local3"),
+    emit("ADDS_T", 0, 0, 0), emit("ADCS_T", 1, 1, 1), emit("ADCS_T", 4, 4, 4), emit("ADCS_T", 5, 5, 5), movw(8, 0),
+    emit("ADC_IMM_T", 8, 8, 0), emit("SUBS_T", 6, 4, 2), emit("SBCS_T", 7, 5, 3), emit("SBCS_IMM_T", 8, 8, 0),
+    only_if("HS"), mov(4, 6), only_if("HS"), mov(5, 7), only_if("HS"), emit("ORR_IMM_T", 0, 0, 1),
+    emit("SUBS_IMM_T", 9, 9, 1), *branch_if("NE", "local3"), mov(2, 4), mov(3, 5), emit("BX_LR_T"),
+]
+COMPARE_FLAGS = [
+    emit("EOR_T", 4, 0, 2, when="compare_equal"), emit("EOR_T", 5, 1, 3, when="compare_equal"),
+    emit("ORRS_T", 4, 4, 5, when="compare_equal"), *compare_pairs(0, 2, "compare_direct"), *compare_pairs(2, 0, "compare_swapped"),
+]
+
+
+EMIT_TEMPLATES += [
+    ("PROLOGUE_THUMB", [
+        movw(0, 1), emit("MSR_PRIMASK_T"), *literal(6, UART0), movw(0, 16), emit("STR_T", 0, 6, 16), movw(0, 1),
+        emit("STR_T", 0, 6, 8),
+    ]),
+    ("WINDOW_THUMB", [*absolute(0, ("TAIL", "row")), *absolute(LR, ("WINDOW", "row")), emit("STR_T", 0, LR, 0)]),
+    ("BOOT_THUMB", [movw(11, BOOT_ID), branch("step")]),
+    ("WAIT_THUMB", [
+        place("wait"), emit("WFI_T"), *literal(6, ICSR), emit("LDR_T", 11, 6, 0), emit("LSL_IMM_T", 11, 11, 11),
+        emit("LSR_IMM_T", 11, 11, 23), compare(11, 15), *branch_if("LO", "wait"),
+    ]),
+    ("DISPATCH_THUMB", [compare(11, "row", "flag"), *branch_if("EQ", "step", "flag")]),
+    ("WAIT_TAIL_THUMB", [
+        place("complete"), compare(11, 15), *branch_if("NE", "local0"), *literal(6, ICSR), *literal(0, PENDSTCLR),
+        emit("STR_T", 0, 6, 0), branch("wait"), place("local0"), compare(11, 48), *branch_if("HS", "wait"),
+        emit("SUBW_T", 0, 11, 16), movw(1, 1), emit("LSL_T", 1, 1, 0), *literal(6, NVIC_ICPR0), emit("STR_T", 1, 6, 0),
+        branch("wait"),
+    ]),
+    ("STEP_THUMB", [place("step")]),
+    ("LOOP_HEAD_THUMB", [ld1(0, ("CLK", "clock_loop"), UINTEGER_TYPE), compare(0, 0), *branch_if("EQ", "loop_end")]),
+    ("LOOP_MID_THUMB", [
+        movw(12, 0), *loop_bound_thumb("counted"), emit("SUBS_IMM_T", LR, 4, 1, when="counted"),
+        emit("SBCS_IMM_T", LR, 5, 0, when="counted"), *branch_if("LT", "loop_end", "counted"), place("loop_start"),
+    ]),
+    ("SNAPSHOT_THUMB", copy_pairs("key_a_row", "key_p_row", "words_row", "local0")),
+    ("LOOP_TAIL_THUMB", [
+        emit("ADDW_T", 12, 12, 1), *loop_bound_thumb("counted"), li1(4, "loop_size", "uncounted"), compare_registers(12, 4),
+        *branch_if("LO", "loop_start"), place("loop_end"),
+    ]),
+    ("CLOCK_ROOT_THUMB", [
+        li1(6, "root_irq"), compare_registers(11, 6), movw(0, 0), only_if("EQ"), movw(0, 1),
+        st1(0, ("CLK", "row"), UINTEGER_TYPE),
+    ]),
+    ("CLOCK_SAMPLE_THUMB", [
+        ld1(0, ("CLK", "node_parent"), UINTEGER_TYPE), operand1(2, "node_left"), emit("AND_T", 0, 0, 2),
+        st1(0, ("CLK", "row"), UINTEGER_TYPE),
+    ]),
+    ("CLOCK_PAIR_THUMB", [
+        ld1(0, ("CLK", "node_left"), UINTEGER_TYPE), ld1(2, ("CLK", "node_right"), UINTEGER_TYPE),
+        emit("pair_form_thumb", 0, 0, 2), st1(0, ("CLK", "row"), UINTEGER_TYPE),
+    ]),
+    ("ROW_SEED_ARRAY_THUMB", gated_thumb(copy_pairs("key_left", "key_a_right", "words_row", "local1"), False)),
+    ("ROW_SEED_THUMB", gated_thumb([operand2(0, "left"), st2(0, ("SIG", "right"), "type_row")], False)),
+    ("ROW_LOAD_THUMB", gated_thumb([operand1(0, "arg0"), load_at(0, "param", 0, -1)])),
+    ("ROW_STORE_THUMB", gated_thumb([operand1(6, "arg0"), operand2(2, "arg1"), store_at(2, "param", 6, -1)], False)),
+    ("ROW_INSTRUCTION_THUMB", gated_thumb([operand2(0, "arg0"), emit("WORD_T", a2="param")])),
+    ("ROW_ITER_RANGE_THUMB", gated_thumb([mov(0, 12), movw(1, 0)])),
+    ("ROW_ITER_THUMB", gated_thumb([address(6, "key_left"), load_at(0, "type_row", 6, 12)])),
+    ("ROW_PREV_THUMB", gated_thumb([ld2(0, ("SIG", "left"), "type_row")])),
+    ("ROW_ELEMENT_THUMB", gated_thumb([
+        address(6, "key_left"), operand2(2, "right"), li2(4, "size_left"), movw(0, 0), movw(1, 0), *compare_pairs(2, 4),
+        *branch_if("HS", "local1"), load_at(0, "type_row", 6, 2), place("local1"),
+    ])),
+    ("ROW_GATHER_THUMB", gated_thumb([
+        address(6, "key_left"), address(7, "key_right"), address(8, "key_owner"), movw(9, 0), place("local1"),
+        load_at(2, "index_element", 7, 9), movw(0, 0), movw(1, 0), li2(4, "size_left"), *compare_pairs(2, 4),
+        *branch_if("HS", "local2"), load_at(0, "element_row", 6, 2), place("local2"), store_at(0, "element_row", 8, 9),
+        emit("ADDW_T", 9, 9, 1), li1(LR, "size_row"), compare_registers(9, LR), *branch_if("LO", "local1"),
+    ], False)),
+    ("ROW_NEXT_THUMB", gated_thumb([
+        *copy_pairs("key_left", "key_owner", "words_row", "local1", "keys_differ"), address(6, "key_owner"),
+        operand2(2, "right_left"), operand2(0, "right_right"), li2(4, "size_row"), *compare_pairs(2, 4),
+        *branch_if("HS", "local2"), store_at(0, "element_row", 6, 2), place("local2"),
+    ], False)),
+    ("ROW_CONST_THUMB", gated_thumb([operand2(0, "row")])),
+    ("ROW_DELAY_THUMB", gated_thumb([ld2(0, ("MEM", "row"), "type_row")])),
+    ("ROW_ONE_THUMB", gated_thumb([movw(0, 1), movw(1, 0)])),
+    ("ROW_IF_THUMB", gated_thumb([
+        operand1(0, "left"), operand2(2, "right_left"), operand2(4, "right_right"), compare(0, 0), mov(0, 4), mov(1, 5),
+        only_if("NE"), mov(0, 2), only_if("NE"), mov(1, 3),
+    ])),
+    ("ROW_DEFAULT_THUMB", gated_thumb([
+        ld1(4, ("CLK", "clock_left"), UINTEGER_TYPE), operand2(0, "left"), operand2(2, "right"), compare(4, 0),
+        only_if("EQ"), mov(0, 2), only_if("EQ"), mov(1, 3),
+    ])),
+    ("ROW_PLAIN_THUMB", gated_thumb(generic_thumb())),
+    ("ROW_NEG_THUMB", gated_thumb(generic_thumb(movw(LR, 0), emit("SUBS_T", 0, LR, 0), emit("SBC_T", 1, LR, 1)))),
+    ("ROW_NOT_LOGICAL_THUMB", gated_thumb(generic_thumb(emit("EOR_IMM_T", 0, 0, 1)))),
+    ("ROW_NOT_THUMB", gated_thumb(generic_thumb(emit("MVN_T", 0, 0), emit("MVN_T", 1, 1)))),
+    ("ROW_BINARY_THUMB", gated_thumb(generic_thumb(
+        emit("binary_lo", 0, 0, 2, when="not_mul"), emit("binary_hi", 1, 1, 3, when="not_mul"),
+        emit("UMULL_T", 4, 0, 2, 5, when="mul"), emit("MLA_T", 5, 0, 3, 5, when="mul"), emit("MLA_T", 5, 1, 2, 5, when="mul"),
+        mov(0, 4, "mul"), mov(1, 5, "mul"),
+    ))),
+    ("ROW_DIV_SIGNED_THUMB", gated_thumb(generic_thumb(
+        *SIGNS, emit("EOR_T", 8, 8, 9), emit("STR_PRE_DEC_T", 8, SP_T, 8), emit("BL_T", to=label("divide")),
+        emit("LDR_POST_T", 8, SP_T, 8), *apply_sign(0, 8),
+    ))),
+    ("ROW_DIV_THUMB", gated_thumb(generic_thumb(emit("BL_T", to=label("divide"))))),
+    ("ROW_COMPARE_SIGNED_THUMB", gated_thumb(generic_thumb(
+        *COMPARE_FLAGS, movw(0, 0), movw(1, 0), emit("SKIP_T", a3="signed_condition_thumb"), movw(0, 1),
+    ))),
+    ("ROW_COMPARE_THUMB", gated_thumb(generic_thumb(
+        *COMPARE_FLAGS, movw(0, 0), movw(1, 0), emit("SKIP_T", a3="unsigned_condition_thumb"), movw(0, 1),
+    ))),
+    ("ROW_MOD_SIGNED_THUMB", gated_thumb(generic_thumb(
+        *SIGNS, emit("STR_PRE_DEC_T", 3, SP_T, 4), emit("STR_PRE_DEC_T", 2, SP_T, 4), emit("STR_PRE_DEC_T", 8, SP_T, 8), emit("BL_T", to=label("divide")),
+        emit("LDR_POST_T", 8, SP_T, 8), emit("LDRD_POST_T", 4, SP_T, 8, 5), mov(0, 2), mov(1, 3), *apply_sign(0, 8),
+        compare(1, 0), *branch_if("GE", "local1"), emit("ADDS_T", 0, 0, 4), emit("ADC_T", 1, 1, 5), place("local1"),
+    ))),
+    ("ROW_MOD_THUMB", gated_thumb(generic_thumb(emit("BL_T", to=label("divide")), mov(0, 2), mov(1, 3)))),
+    ("ROW_SHIFT_THUMB", gated_thumb(generic_thumb(
+        *[step_row[:1] + ("shift_left",) + step_row[2:] for step_row in SHIFT_LEFT],
+        *[step_row[:1] + ("shift_right",) + step_row[2:] for step_row in SHIFT_RIGHT],
+        emit("SUBS_IMM_T", LR, 2, 64), emit("SBCS_IMM_T", LR, 3, 0), only_if("HS"), movw(0, 0), only_if("HS"), movw(1, 0),
+    ))),
+    ("DELAY_THUMB", [
+        ld1(0, ("CLK", "clock_row"), UINTEGER_TYPE), compare(0, 0), *branch_if("EQ", "local0"),
+        ld2(0, ("SIG", "left"), "type_row"), st2(0, ("MEM", "row"), "type_row"), place("local0"),
+    ]),
+    ("OUTPUT_HEAD_THUMB", absolute(10, ("OUT", 0))),
+    ("OUTPUT_THUMB", [
+        movw(2, 32, "flag"), emit("STRB_POST_T", 2, 10, 1, when="flag"), ld1(0, ("CLK", "clock_row"), UINTEGER_TYPE),
+        compare(0, 0), *branch_if("EQ", "local0"), ld2(0, ("SIG", "row"), "type_row"), emit("BL_T", to=label("put_output")),
+        branch("local1"), place("local0"), movw(2, 45), put_byte(2), place("local1"),
+    ]),
+    ("OUTPUT_TAIL_THUMB", [
+        movw(2, 10), put_byte(2), *absolute(6, ("OUT", 0)), *literal(7, UART0), place("local0"), emit("LDRB_POST_T", 2, 6, 1),
+        emit("STR_T", 2, 7, 0), compare_registers(6, 10), *branch_if("NE", "local0"),
+    ]),
+    ("FINISH_THUMB", [
+        branch("complete"), *PUT_NUMBER_THUMB, place("put_bool"), compare(0, 0), *branch_if("EQ", "local2"),
+        *put_bytes_thumb("true"), emit("BX_LR_T"), place("local2"), *put_bytes_thumb("false"), emit("BX_LR_T"), *DIVIDE_THUMB,
+    ]),
+]
+
+
 def emit_template_rows():
     starts, lengths, label_counts, rows = [], [], [], []
     for _, steps in EMIT_TEMPLATES:
@@ -940,6 +1349,19 @@ def elf_header_words():
         + struct.pack("<IIQQQQQQ", 1, 7, 0, VIRT_BASE, VIRT_BASE, signed_bytes, memory_bytes, SEGMENT_BYTES)
     )
     assert len(header) == VIRT_TEXT_OFFSET
+    return [struct.unpack_from("<I", header, 4 * k)[0] for k in range(len(header) // 4)]
+
+
+def elf32_header_words():
+    signed_bytes, memory_bytes = (MARKER_BASE + k for k in range(1, 3))
+    entry = MPS2_HEADER_BYTES - MPS2_UNLOADED + 1
+    header = (
+        b"\x7fELF\x01\x01\x01" + bytes(9)
+        + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, entry, 52, 0, 0x05000200, 52, 32, 1, 40, 0, 0)
+        + struct.pack("<IIIIIIII", 1, MPS2_UNLOADED, 0, 0, signed_bytes, memory_bytes, 7, 4)
+        + struct.pack("<II", memory_bytes, entry)
+    )
+    assert len(header) == MPS2_HEADER_BYTES
     return [struct.unpack_from("<I", header, 4 * k)[0] for k in range(len(header) // 4)]
 
 
@@ -1214,6 +1636,18 @@ def build():
     table("ELF_FIELD", "short", elf_fields)
     for index, name in enumerate(ELF_VARIABLES):
         integer(f"EV_{name}", index)
+    elf32_words, elf32_fields = split_markers(elf32_header_words(), ELF_VARIABLES)
+    table("ELF32_WORD", "uinteger", elf32_words, lambda v: f"uinteger({v})")
+    table("ELF32_FIELD", "short", elf32_fields)
+    integer("MPS2_HEADER_BYTES", MPS2_HEADER_BYTES)
+    integer("MPS2_UNLOADED", MPS2_UNLOADED)
+    integer("MPS2_RAM_BYTES", MPS2_RAM_BYTES)
+    integer("MPS2_STACK_BYTES", MPS2_STACK_BYTES)
+    integer("VIRT_STACK_BYTES", VIRT_STACK_BYTES)
+    for index, name in enumerate(PLATFORMS):
+        integer(f"PLATFORM_{name}", index)
+    integer("MACHINE_TEXT_LENGTH", len(MACHINE_TEXT))
+    constants.append(("MACHINE_TEXT", f'constant [{len(MACHINE_TEXT)}] ubyte MACHINE_TEXT = "{MACHINE_TEXT}";'))
     constants.append(("VIRT_BASE", f"constant long VIRT_BASE = {VIRT_BASE};"))
     integer("VIRT_TEXT_OFFSET", VIRT_TEXT_OFFSET)
     integer("BOOT_ID", BOOT_ID)
@@ -1246,6 +1680,24 @@ def build():
         template_names.index(name + VIRT_SUFFIX) if name + VIRT_SUFFIX in template_names
         else template_names.index(name) if name in template_names else -1 for name in UNIT_PHASES
     ])
+    thumb_template = []
+    for name in template_names:
+        base = name[:-len(VIRT_SUFFIX)] if name.endswith(VIRT_SUFFIX) else name
+        thumb_name = base + THUMB_SUFFIX
+        thumb_template.append(template_names.index(thumb_name) if thumb_name in template_names
+                              else template_names.index(name) if name.endswith(THUMB_SUFFIX) else -1)
+    assert all(name + THUMB_SUFFIX in template_names for name in template_names if name.startswith("ROW_") and name != "ROW_SYSCALL"
+               and not name.endswith(THUMB_SUFFIX))
+    table("THUMB_TEMPLATE", "integer", thumb_template)
+    table("THUMB_LOAD_FORM", "integer", [FORMS.index(THUMB_LOAD_FORMS[key]) if key in THUMB_LOAD_FORMS else 0
+                                         for key in ((index // 2, index % 2) for index in range(18))])
+    table("THUMB_STORE_FORM", "integer", [FORMS.index(THUMB_STORE_FORMS[size]) if size in THUMB_STORE_FORMS else 0
+                                          for size in range(9)])
+    table("THUMB_BINARY_LO", "integer", [FORMS.index(THUMB_BINARY[op][0]) if op in THUMB_BINARY else -1 for op in OPS])
+    table("THUMB_BINARY_HI", "integer", [FORMS.index(THUMB_BINARY[op][1]) if op in THUMB_BINARY else -1 for op in OPS])
+    table("THUMB_SIGNED_SKIP", "integer", [CONDITIONS[THUMB_CONDITIONS[op][0]] ^ 1 if op in THUMB_CONDITIONS else -1 for op in OPS])
+    table("THUMB_UNSIGNED_SKIP", "integer", [CONDITIONS[THUMB_CONDITIONS[op][1]] ^ 1 if op in THUMB_CONDITIONS else -1
+                                             for op in OPS])
     starts, lengths, label_counts, step_rows = emit_template_rows()
     table("ET_START", "integer", starts)
     table("ET_LENGTH", "integer", lengths)

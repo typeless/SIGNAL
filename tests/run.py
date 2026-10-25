@@ -11,8 +11,10 @@ BUILD = ROOT / "build" / "tests"
 COMPILER = ROOT / "bootstrap" / "sigc.py"
 COMPILE_TIMEOUT_SECONDS = 60
 RUN_TIMEOUT_SECONDS = 5
-VIRT_SUITE = "m5"
-QEMU = ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-kernel"]
+QEMU_COMMANDS = {
+    "m5": ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-kernel"],
+    "m6": ["qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic", "-no-reboot", "-kernel"],
+}
 
 
 def compile_case(compiler, source, executable):
@@ -82,7 +84,7 @@ def run_trace_case(compiler, source, expected_path):
             report.append(f"expected stderr containing {expected_stderr.strip()!r}, got {stderr.strip()!r}")
         timed_out = False
     else:
-        command = [*QEMU, str(executable)] if source.relative_to(CASES).parts[0] == VIRT_SUITE else [str(executable)]
+        command = [*QEMU_COMMANDS.get(source.relative_to(CASES).parts[0], []), str(executable)]
         actual, timed_out, returncode = read_trace(command, len(expected), source.with_suffix(".in"))
         report = []
     if actual == expected and not report:
@@ -117,7 +119,7 @@ def main():
         del selected[position:position + 2]
     sources = sorted(CASES.rglob("*.sig"))
     if compiler[-1] == str(COMPILER):
-        sources = [s for s in sources if s.relative_to(CASES).parts[0] != VIRT_SUITE]
+        sources = [s for s in sources if s.relative_to(CASES).parts[0] not in QEMU_COMMANDS]
     if selected:
         sources = [s for s in sources if any(name in str(s.relative_to(CASES)) for name in selected)]
     failures = 0

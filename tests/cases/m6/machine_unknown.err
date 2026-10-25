@@ -1,0 +1,1 @@
+machine_unknown.sig:5:13: error: machine '"lm3s6965evb"' is not supported; use mps2-an385

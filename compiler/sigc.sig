@@ -431,8 +431,9 @@ process SIGC =
         | IN_PRAGMA_STATEMENT := STATE = P_PRAGMA_STATEMENT
         | PRAGMAS_HERE := IN_MODEL_BODY and CODE0 = C_NAME and NAME0 = N_PRAGMAS
         | PRAGMAS_OPEN := PRAGMAS_HERE and MODEL_NOW = 0 and PRAGMA_COUNT[?] = 0
-        | PRAGMAS_CLOSE := IN_PRAGMA_NAME and PRAGMA_COUNT[?] > 0 and CODE0 = C_END and CODE1 = C_NAME and NAME1 = N_PRAGMAS
-        | PRAGMA_KNOWN := CODE0 = C_NAME and (NAME0 = N_INTERRUPT or NAME0 = N_BOOT)
+        | PRAGMAS_STARTED := PRAGMA_COUNT[?] > 0 or MACHINE_TOKEN[?] >= 0
+        | PRAGMAS_CLOSE := IN_PRAGMA_NAME and PRAGMAS_STARTED and CODE0 = C_END and CODE1 = C_NAME and NAME1 = N_PRAGMAS
+        | PRAGMA_KNOWN := CODE0 = C_NAME and (NAME0 = N_INTERRUPT or NAME0 = N_BOOT or NAME0 = N_MACHINE)
         | PRAGMA_KIND := if IN_PRAGMA_NAME then NAME0 else PRAGMA_KIND[?]
         | PRAGMA_NAME_HELD := if IN_PRAGMA_OBJECT then NAME0 else PRAGMA_NAME_HELD[?]
         | PRAGMA_TOKEN_HELD := if IN_PRAGMA_OBJECT then HERE else PRAGMA_TOKEN_HELD[?]
@@ -440,18 +441,30 @@ process SIGC =
         | INTERRUPT_LOW := integer(SRC[TOKEN_START[HERE] + 2]) - 48
         | INTERRUPT_VALUE := 10 * INTERRUPT_HIGH + INTERRUPT_LOW
         | INTERRUPT_OK := TOKEN_LENGTH[HERE] = 4 and INTERRUPT_HIGH >= 0 and INTERRUPT_HIGH <= 9 and INTERRUPT_LOW >= 0
-                          and INTERRUPT_LOW <= 9 and INTERRUPT_VALUE >= 16 and INTERRUPT_VALUE <= 31
-        | INTERRUPT_BIT := if INTERRUPT_OK then ulong(1) shl INTERRUPT_VALUE else ulong(0)
+                          and INTERRUPT_LOW <= 9
+        | INTERRUPT_BIT := if INTERRUPT_OK and INTERRUPT_VALUE < 64 then ulong(1) shl INTERRUPT_VALUE else ulong(0)
+        | MACHINE_AT := TOKEN_START[HERE] + 1
+        | MACHINE_OK := CODE0 = C_STRING and TOKEN_LENGTH[HERE] = MACHINE_TEXT_LENGTH + 2
+                        and SRC[MACHINE_AT] = MACHINE_TEXT[0] and SRC[MACHINE_AT + 1] = MACHINE_TEXT[1]
+                        and SRC[MACHINE_AT + 2] = MACHINE_TEXT[2] and SRC[MACHINE_AT + 3] = MACHINE_TEXT[3]
+                        and SRC[MACHINE_AT + 4] = MACHINE_TEXT[4] and SRC[MACHINE_AT + 5] = MACHINE_TEXT[5]
+                        and SRC[MACHINE_AT + 6] = MACHINE_TEXT[6] and SRC[MACHINE_AT + 7] = MACHINE_TEXT[7]
+                        and SRC[MACHINE_AT + 8] = MACHINE_TEXT[8] and SRC[MACHINE_AT + 9] = MACHINE_TEXT[9]
+        | MACHINE_STATEMENT := IN_PRAGMA_STATEMENT and PRAGMA_KIND = N_MACHINE
         | PRAGMA_MESSAGE_HERE := if IN_PRAGMA_NAME then
                                    (if PRAGMAS_CLOSE then 0
-                                    else if PRAGMA_KNOWN then (if NAME0 = N_BOOT and PRAGMA_HAS_BOOT[?] then T_BOOT_TWICE else 0)
+                                    else if PRAGMA_KNOWN then
+                                      (if NAME0 = N_BOOT and PRAGMA_HAS_BOOT[?] then T_BOOT_TWICE
+                                       else if NAME0 = N_MACHINE and MACHINE_TOKEN[?] >= 0 then T_MACHINE_TWICE else 0)
                                     else if CODE0 = C_NAME then T_PRAGMA_UNKNOWN
-                                    else if PRAGMA_COUNT[?] > 0 then T_PRAGMAS_END else T_EXPECTED_NAME)
+                                    else if PRAGMAS_STARTED then T_PRAGMAS_END else T_EXPECTED_NAME)
                                  else if IN_PRAGMA_OPEN then (if CODE0 /= C_OPEN_BRACE then T_EXPECTED_FOUND else 0)
                                  else if IN_PRAGMA_OBJECT then (if CODE0 /= C_NAME then T_EXPECTED_NAME else 0)
                                  else if IN_PRAGMA_CLOSE then (if CODE0 /= C_CLOSE_BRACE then T_EXPECTED_FOUND else 0)
+                                 else if MACHINE_STATEMENT then (if MACHINE_OK then 0 else T_MACHINE_UNKNOWN)
                                  else if IN_PRAGMA_STATEMENT then
-                                   (if CODE0 /= C_STRING then T_INTERRUPT_STATEMENT else if not INTERRUPT_OK then T_INTERRUPT_NUMBER
+                                   (if CODE0 /= C_STRING then T_INTERRUPT_STATEMENT
+                                    else if not INTERRUPT_OK then (if MACHINE_TOKEN[?] >= 0 then T_INTERRUPT_NUMBER_MPS2 else T_INTERRUPT_NUMBER)
                                     else if (PRAGMA_USED[?] and INTERRUPT_BIT) /= ulong(0) then T_INTERRUPT_TWICE else 0)
                                  else 0
         | COPIED_TYPE := TYPE_COUNT[?]
@@ -942,7 +955,8 @@ process SIGC =
                         else if IN_OUTPUTS then (if CODE0 = C_CLOSE then P_MODEL_CLOSE else P_TYPE)
                         else if IN_MODEL_CLOSE then P_MODEL_BODY
                         else if IN_MODEL_BODY then (if PRAGMAS_OPEN then P_PRAGMA_NAME else P_PROCESS)
-                        else if IN_PRAGMA_NAME then (if PRAGMAS_CLOSE then P_MODEL_BODY else P_PRAGMA_OPEN)
+                        else if IN_PRAGMA_NAME then
+                          (if PRAGMAS_CLOSE then P_MODEL_BODY else if NAME0 = N_MACHINE then P_PRAGMA_STATEMENT else P_PRAGMA_OPEN)
                         else if IN_PRAGMA_OPEN then P_PRAGMA_OBJECT
                         else if IN_PRAGMA_OBJECT then P_PRAGMA_CLOSE
                         else if IN_PRAGMA_CLOSE then (if PRAGMA_KIND = N_INTERRUPT then P_PRAGMA_STATEMENT else P_PRAGMA_NAME)
@@ -1042,8 +1056,8 @@ process SIGC =
         | TYPE_KIND := TYPE_KIND[?] next TYPE_SLOT
                        : (if IN_COPY_TYPES then (if COPY_IS_BUILTIN then BUILTIN_KIND[COPIED_TYPE] else USER_TYPE_KIND[COPIED_USER])
                           else if CREATES_ARRAY_TYPE then TK_ARRAY else TK_ENUM)
-        | TYPE_BYTES := TYPE_BYTES[?] next TYPE_SLOT
-                        : (if IN_COPY_TYPES then
+        | TYPE_BYTES := TYPE_BYTES[?] next (if GO and MACHINE_STATEMENT then BUILTIN_POINTER else TYPE_SLOT)
+                        : (if MACHINE_STATEMENT then 4 else if IN_COPY_TYPES then
                              (if COPY_IS_BUILTIN then BUILTIN_BYTES[COPIED_TYPE] else if USER_TYPE_KIND[COPIED_USER] = TK_ENUM then 4 else 0)
                            else if CREATES_ARRAY_TYPE then 8 else 4)
         | TYPE_SIGNED := TYPE_SIGNED[?] next TYPE_SLOT : IN_COPY_TYPES and COPY_IS_BUILTIN and BUILTIN_SIGNED[COPIED_TYPE] = 1
@@ -1206,7 +1220,9 @@ process SIGC =
         | DEPENDENCE_MODEL := DEPENDENCE_MODEL[?] next DEPENDENCE_SLOT : MODEL_NOW
         | DEPENDENCE_GUARDS := DEPENDENCE_GUARDS[?] next DEPENDENCE_SLOT : GUARD_NODE[?]
         | DEPENDENCE_COUNT := DEPENDENCE_COUNT[?] + integer(DEPENDENCE_SLOT >= 0)
-        | PRAGMA_SLOT := if GO and (IN_PRAGMA_STATEMENT or IN_PRAGMA_CLOSE and PRAGMA_KIND = N_BOOT) then PRAGMA_COUNT[?] else -1
+        | PRAGMA_SLOT := if GO and (IN_PRAGMA_STATEMENT and PRAGMA_KIND = N_INTERRUPT or IN_PRAGMA_CLOSE and PRAGMA_KIND = N_BOOT)
+                         then PRAGMA_COUNT[?] else -1
+        | MACHINE_TOKEN := if GO and MACHINE_STATEMENT then HERE - 1 else MACHINE_TOKEN[?]
         | PRAGMA_IRQ := PRAGMA_IRQ[?] next PRAGMA_SLOT : (if IN_PRAGMA_STATEMENT then INTERRUPT_VALUE else BOOT_ID)
         | PRAGMA_OBJECT := PRAGMA_OBJECT[?] next PRAGMA_SLOT : PRAGMA_NAME_HELD
         | PRAGMA_TOKEN := PRAGMA_TOKEN[?] next PRAGMA_SLOT : PRAGMA_TOKEN_HELD
@@ -1235,10 +1251,13 @@ process SIGC =
            | TABLE_COUNT := 0 | POOL_COUNT := 0 | USE_COUNT := 0 | GUARD_COUNT := 0 | LOOP_COUNT := 0 | EQUATION_COUNT := 0
            | MEMBER_COUNT := 0 | GROUP_COUNT := 0 | DEPENDENCE_COUNT := 0 | PARSE_MESSAGE := 0 | PARSE_TOKEN := 0
            | PARSE_ARGUMENT0 := 0 | PARSE_ARGUMENT1 := 0 | PARSE_ARGUMENT2 := 0 | PRAGMA_KIND := 0 | PRAGMA_NAME_HELD := 0
-           | PRAGMA_TOKEN_HELD := 0 | PRAGMA_COUNT := 0 | PRAGMA_HAS_BOOT := false | PRAGMA_USED := ulong(0) |)
+           | PRAGMA_TOKEN_HELD := 0 | PRAGMA_COUNT := 0 | PRAGMA_HAS_BOOT := false | PRAGMA_USED := ulong(0)
+           | MACHINE_TOKEN := -1 |)
      end
-   | VIRT := PRAGMA_COUNT > 0
-   | PRAGMA_CHECKS := PARSES and PARSE_MESSAGE = 0 and PARSE_STATE = P_DONE and VIRT
+   | PLATFORM := if MACHINE_TOKEN >= 0 then PLATFORM_MPS2 else if PRAGMA_COUNT > 0 then PLATFORM_VIRT else PLATFORM_MACOS
+   | PRAGMA_CHECKS := PARSES and PARSE_MESSAGE = 0 and PARSE_STATE = P_DONE and PLATFORM /= PLATFORM_MACOS
+   | INTERRUPT_LOWEST := if PLATFORM = PLATFORM_MPS2 then 15 else 16
+   | INTERRUPT_HIGHEST := if PLATFORM = PLATFORM_MPS2 then 47 else 31
    | PC_INDEX := 0 .. (if PRAGMA_CHECKS then (PRAGMA_COUNT + 1) * SIGNAL_COUNT - 1 else -1)
    | iterate PC_INDEX of
        (| PC_PRAGMA := PC_INDEX / SIGNAL_COUNT
@@ -1247,20 +1266,28 @@ process SIGC =
         | PC_TOP_INPUT := SIGNAL_MODEL[PC_SIGNAL] = 0 and SIGNAL_ROLE[PC_SIGNAL] = ROLE_INPUT
         | PC_MATCHES := PC_NAMING and SIGNAL_MODEL[PC_SIGNAL] = 0 and SIGNAL_NAME[PC_SIGNAL] = PRAGMA_OBJECT[PC_PRAGMA]
         | PC_FOUND := PC_MATCHES or PC_SIGNAL > 0 and PC_FOUND[?]
-        | PC_STEP_MESSAGE := if PC_MATCHES then
+        | PC_IRQ := PRAGMA_IRQ[if PC_NAMING then PC_PRAGMA else 0]
+        | PC_OUT_OF_RANGE := PC_NAMING and PC_SIGNAL = 0 and PC_IRQ /= BOOT_ID
+                             and (PC_IRQ < INTERRUPT_LOWEST or PC_IRQ > INTERRUPT_HIGHEST)
+        | PC_STEP_MESSAGE := if PC_OUT_OF_RANGE then
+                               (if PLATFORM = PLATFORM_MPS2 then T_INTERRUPT_NUMBER_MPS2 else T_INTERRUPT_NUMBER)
+                             else if PC_MATCHES then
                                (if SIGNAL_ROLE[PC_SIGNAL] /= ROLE_INPUT then T_PRAGMA_INPUT
                                 else if SIGNAL_TYPE[PC_SIGNAL] /= BUILTIN_EVENT then T_PRAGMA_EVENT
                                 else if SIGNAL_IRQ1[?][PC_SIGNAL] > 0 then T_PRAGMA_TWICE else 0)
                              else if PC_NAMING and PC_SIGNAL = SIGNAL_COUNT - 1 and not PC_FOUND then T_PRAGMA_INPUT
                              else if not PC_NAMING and PC_TOP_INPUT and SIGNAL_IRQ1[?][PC_SIGNAL] = 0 then T_INPUT_UNNAMED
-                             else if not PC_NAMING and PC_SIGNAL = SIGNAL_COUNT - 1 and not PRAGMA_HAS_BOOT then T_BOOT_MISSING
+                             else if not PC_NAMING and PC_SIGNAL = SIGNAL_COUNT - 1 and PRAGMA_COUNT > 0 and not PRAGMA_HAS_BOOT
+                             then T_BOOT_MISSING
                              else 0
         | SIGNAL_IRQ1 := SIGNAL_IRQ1[?] next (if PC_MATCHES and PC_STEP_MESSAGE = 0 then PC_SIGNAL else -1) : PRAGMA_IRQ[PC_PRAGMA] + 1
         | PC_FIRST := PC_STEP_MESSAGE /= 0 and PRAGMA_MESSAGE[?] = 0
         | PRAGMA_MESSAGE := if PC_FIRST then PC_STEP_MESSAGE else PRAGMA_MESSAGE[?]
-        | PRAGMA_MESSAGE_TOKEN := if not PC_FIRST then PRAGMA_MESSAGE_TOKEN[?] else if PC_NAMING then PRAGMA_TOKEN[PC_PRAGMA]
+        | PRAGMA_MESSAGE_TOKEN := if not PC_FIRST then PRAGMA_MESSAGE_TOKEN[?] else if PC_OUT_OF_RANGE then PRAGMA_TOKEN[PC_PRAGMA] + 2
+                                  else if PC_NAMING then PRAGMA_TOKEN[PC_PRAGMA]
                                   else if PC_STEP_MESSAGE = T_BOOT_MISSING then PRAGMA_TOKEN[0] - 2 else SIGNAL_TOKEN[PC_SIGNAL]
-        | PRAGMA_ARGUMENT0 := if not PC_FIRST then PRAGMA_ARGUMENT0[?] else if PC_NAMING then PRAGMA_OBJECT[PC_PRAGMA]
+        | PRAGMA_ARGUMENT0 := if not PC_FIRST then PRAGMA_ARGUMENT0[?] else if PC_OUT_OF_RANGE then PRAGMA_TOKEN[PC_PRAGMA] + 2
+                              else if PC_NAMING then PRAGMA_OBJECT[PC_PRAGMA]
                               else SIGNAL_NAME[PC_SIGNAL]
         |)
      with (| PC_FOUND := false | PRAGMA_MESSAGE := 0 | PRAGMA_MESSAGE_TOKEN := 0 | PRAGMA_ARGUMENT0 := 0 |)
@@ -2562,7 +2589,8 @@ process SIGC =
                              else if FX_SYSCALL_AT = 5 then FX_T5 else FX_T6
         | FX_ROW_TYPE := if FX_IS_LOAD then FX_TYPE1 else if FX_IS_STORE then BUILTIN_EVENT
                          else if FX_IS_SYSCALL then BUILTIN_LONG else BUILTIN_ULONG
-        | FX_MESSAGE := if FX_IS_SYSCALL and VIRT then T_SYSCALL_VIRT
+        | FX_MESSAGE := if FX_IS_SYSCALL and PLATFORM = PLATFORM_VIRT then T_SYSCALL_VIRT
+                        else if FX_IS_SYSCALL and PLATFORM = PLATFORM_MPS2 then T_SYSCALL_MPS2
                         else if FX_PARAMS /= FX_EXPECTED then T_STATIC_COUNT
                         else if FX_TYPE0 < 0 then T_TYPE_UNDECLARED_TEXT
                         else if TYPE_KIND[FX_TYPE0] /= TK_EXTERNAL then T_RESOURCE_EXTERNAL
@@ -3990,13 +4018,13 @@ process SIGC =
         | ROOT_LIST := ROOT_LIST[?] next (if CF_LISTS then ROOT_COUNT[?] else -1) : CF_ROOT
         | ROOT_COUNT := ROOT_COUNT[?] + integer(CF_LISTS)
         | CLOCK_REP := CLOCK_REP[?] next (if CF_SIGNALS then -1 else CF_CLOCK) : FF
-        | CF_ROOT_IRQ1 := if VIRT and CF_INPUT then SIGNAL_IRQ1[CF_SOURCE] else 0
+        | CF_ROOT_IRQ1 := if PLATFORM /= PLATFORM_MACOS and CF_INPUT then SIGNAL_IRQ1[CF_SOURCE] else 0
         | CF_SHARED := CF_GOING and CF_ROOT_IRQ1 > 0 and ROOT_IRQ1[?][CF_ROOT] > 0
         | ROOT_IRQ1 := ROOT_IRQ1[?] next (if CF_GOING and CF_ROOT_IRQ1 > 0 then CF_ROOT else -1) : CF_ROOT_IRQ1
         | ROOT_INPUT1 := ROOT_INPUT1[?] next (if CF_GOING and CF_ROOT_IRQ1 > 0 then CF_ROOT else -1) : CF_CLOCK + 1
         | CF_PARTNER := if CF_SHARED then ROOT_INPUT1[?][CF_ROOT] - 1 else CF_PARTNER[?]
         | CF_SHARED_ROOT := CF_SHARED_ROOT[?] or CF_SHARED
-        | CF_FREE := VIRT and CF_GOING and not CF_SIGNALS and NODE_KIND[FF] = CLK_ROOT and ROOT_IRQ1[?][NODE_ROOT1[FF] - 1] = 0
+        | CF_FREE := PLATFORM /= PLATFORM_MACOS and CF_GOING and not CF_SIGNALS and NODE_KIND[FF] = CLK_ROOT and ROOT_IRQ1[?][NODE_ROOT1[FF] - 1] = 0
         | CF_FAILED := not CF_GOING or CF_NOT_ROOT or CF_FREE or CF_SHARED
         | CF_SIGNAL := if CF_NOT_ROOT or CF_SHARED then CF_CLOCK else if CF_FREE then CF_CLOCK else CF_SIGNAL[?]
         | CF_VIRT_ROOT := CF_VIRT_ROOT[?] or CF_FREE
@@ -4834,8 +4862,8 @@ process SIGC =
    | MEM_BASE := SIG_BASE + long(8) * long(ROW_COUNT)
    | CLK_BASE := MEM_BASE + long(8) * long(DELAY_COUNT)
    | IN_BASE := CLK_BASE + long(4) * long(CLK_COUNT)
-   | READS_LINE := not VIRT and (ROOT_COUNT >= 2 or EMIT_INPUT_COUNT > 0)
-   | RESERVES := EMIT_WINDOWS > 0 and not VIRT
+   | READS_LINE := PLATFORM = PLATFORM_MACOS and (ROOT_COUNT >= 2 or EMIT_INPUT_COUNT > 0)
+   | RESERVES := EMIT_WINDOWS > 0 and PLATFORM = PLATFORM_MACOS
    | LINE_CAPACITY := ROOT_COUNT + 22 * VI_COUNT
    | OUT_BASE := IN_BASE + long(LINE_CAPACITY + 1)
    | MAL_BASE := OUT_BASE + long(24) * long(OUT_COUNT + 1)
@@ -4884,9 +4912,9 @@ process SIGC =
         | UN_PHASE_LENGTH := if UN_PH = UPH_PROLOGUE or UN_PH = UPH_STEP or UN_PH = UPH_FINISH then 1
                              else if UN_PH = UPH_RESERVE or UN_PH = UPH_RESERVE_FAILED then integer(RESERVES)
                              else if UN_PH = UPH_WINDOW then EMIT_WINDOWS
-                             else if UN_PH = UPH_JUMP_STEP then integer(not VIRT and (EMIT_WINDOWS > 0 or VI_COUNT > 0))
+                             else if UN_PH = UPH_JUMP_STEP then integer(PLATFORM = PLATFORM_MACOS and (EMIT_WINDOWS > 0 or VI_COUNT > 0))
                              else if UN_PH = UPH_BOOT then integer(PRAGMA_HAS_BOOT)
-                             else if UN_PH = UPH_WAIT or UN_PH = UPH_WAIT_TAIL then integer(VIRT)
+                             else if UN_PH = UPH_WAIT or UN_PH = UPH_WAIT_TAIL then integer(PLATFORM /= PLATFORM_MACOS)
                              else if UN_PH = UPH_DISPATCH then PRAGMA_COUNT
                              else if UN_PH = UPH_READ_VALUE then integer(VI_COUNT > 0)
                              else if UN_PH = UPH_READ_LINE or UN_PH = UPH_READ_TAIL then integer(READS_LINE)
@@ -4952,16 +4980,20 @@ process SIGC =
                          else if TP_OP = OP_MOD then (if TP_SIGNED then ET_ROW_MOD_SIGNED else ET_ROW_MOD)
                          else if OP_SHIFT_FORM[TP_OP] >= 0 then ET_ROW_SHIFT else ET_ROW_PLAIN
         | UN_CLOCK_KIND := NODE_KIND[UN_C]
-        | UN_TEMPLATE := if not UN_IN_PHASE then -1
-                         else if not UN_ORDER then (if VIRT then UNIT_PHASE_TEMPLATE_VIRT[UN_PH] else UNIT_PHASE_TEMPLATE[UN_PH])
+        | UN_BASE_TEMPLATE := if not UN_IN_PHASE then -1
+                         else if not UN_ORDER then
+                           (if PLATFORM /= PLATFORM_MACOS then UNIT_PHASE_TEMPLATE_VIRT[UN_PH] else UNIT_PHASE_TEMPLATE[UN_PH])
                          else if UN_LOOP_NODE then
                            (if UN_LS = 0 then ET_LOOP_HEAD else if UN_LS = 2 then ET_LOOP_MID else if UN_LS = 3 then ET_SNAPSHOT
                             else if UN_LS = 5 then ET_LOOP_TAIL else TP_TEMPLATE)
                          else if UN_CLOCK_NODE then
                            (if UN_CLOCK_KIND = CLK_ROOT then
-                              (if VIRT then ET_CLOCK_ROOT_VIRT else if READS_LINE then ET_CLOCK_ROOT_READ else ET_CLOCK_ROOT)
+                              (if PLATFORM /= PLATFORM_MACOS then ET_CLOCK_ROOT_VIRT else if READS_LINE then ET_CLOCK_ROOT_READ
+                               else ET_CLOCK_ROOT)
                             else if UN_CLOCK_KIND = CLK_SAMPLE then ET_CLOCK_SAMPLE else ET_CLOCK_PAIR)
                          else TP_TEMPLATE
+        | UN_TEMPLATE := if PLATFORM = PLATFORM_MPS2 and UN_BASE_TEMPLATE >= 0 then THUMB_TEMPLATE[UN_BASE_TEMPLATE]
+                         else UN_BASE_TEMPLATE
         | UN_P := if not UN_ORDER then
                     (if UN_PH = UPH_WINDOW then UN_J else if UN_PH = UPH_VALUE_INPUT then VI_LIST[UN_J]
                      else if UN_PH = UPH_DELAY then DELAY_LIST[UN_J] else if UN_PH = UPH_OUTPUT then OUT_LIST[UN_J]
@@ -5116,6 +5148,14 @@ process SIGC =
                       else if PL_SOURCE0 = ES_WAIT then long(GL_WAIT)
                       else if PL_SOURCE0 = ES_COMPLETE then long(GL_COMPLETE)
                       else if PL_SOURCE0 = ES_ROOT_IRQ then long(PL_ROOT_IRQ)
+                      else if PL_SOURCE0 = ES_BINARY_LO then long(THUMB_BINARY_LO[PL_OP])
+                      else if PL_SOURCE0 = ES_BINARY_HI then long(THUMB_BINARY_HI[PL_OP])
+                      else if PL_SOURCE0 = ES_PAIR_FORM_THUMB then long(if NODE_KIND[PL_CLOCK] = CLK_PRODUCT then FORM_AND_T else FORM_ORR_T)
+                      else if PL_SOURCE0 = ES_SIGNED_CONDITION_THUMB then long(THUMB_SIGNED_SKIP[PL_OP])
+                      else if PL_SOURCE0 = ES_UNSIGNED_CONDITION_THUMB then long(THUMB_UNSIGNED_SKIP[PL_OP])
+                      else if PL_SOURCE0 = ES_ELEMENT_ROW then long(PL_ELEMENT)
+                      else if PL_SOURCE0 = ES_INDEX_ELEMENT then long(PL_INDEX_ELEMENT)
+                      else if PL_SOURCE0 = ES_DIVIDE then long(GL_DIVIDE)
                       else long(GL_READ_DONE)
         | PL_V1 := if PL_SOURCE1 = ES_ROW then long(PL_P)
                       else if PL_SOURCE1 = ES_LEFT then long(PL_LEFT)
@@ -5188,6 +5228,14 @@ process SIGC =
                       else if PL_SOURCE1 = ES_WAIT then long(GL_WAIT)
                       else if PL_SOURCE1 = ES_COMPLETE then long(GL_COMPLETE)
                       else if PL_SOURCE1 = ES_ROOT_IRQ then long(PL_ROOT_IRQ)
+                      else if PL_SOURCE1 = ES_BINARY_LO then long(THUMB_BINARY_LO[PL_OP])
+                      else if PL_SOURCE1 = ES_BINARY_HI then long(THUMB_BINARY_HI[PL_OP])
+                      else if PL_SOURCE1 = ES_PAIR_FORM_THUMB then long(if NODE_KIND[PL_CLOCK] = CLK_PRODUCT then FORM_AND_T else FORM_ORR_T)
+                      else if PL_SOURCE1 = ES_SIGNED_CONDITION_THUMB then long(THUMB_SIGNED_SKIP[PL_OP])
+                      else if PL_SOURCE1 = ES_UNSIGNED_CONDITION_THUMB then long(THUMB_UNSIGNED_SKIP[PL_OP])
+                      else if PL_SOURCE1 = ES_ELEMENT_ROW then long(PL_ELEMENT)
+                      else if PL_SOURCE1 = ES_INDEX_ELEMENT then long(PL_INDEX_ELEMENT)
+                      else if PL_SOURCE1 = ES_DIVIDE then long(GL_DIVIDE)
                       else long(GL_READ_DONE)
         | PL_ACTIVE := if PL_WHEN = EP_ALWAYS then (true)
                       else if PL_WHEN = EP_FLAG then (PL_FLAG)
@@ -5201,6 +5249,13 @@ process SIGC =
                       else if PL_WHEN = EP_COUNTED then (PL_COUNT_ROW >= 0)
                       else if PL_WHEN = EP_UNCOUNTED then (PL_COUNT_ROW < 0)
                       else if PL_WHEN = EP_BOUNDED then (XT_KIND[PL_TYPE] = TK_BOOLEAN or XT_KIND[PL_TYPE] = TK_ENUM)
+                      else if PL_WHEN = EP_MUL then (PL_OP = OP_MUL)
+                      else if PL_WHEN = EP_NOT_MUL then (PL_OP /= OP_MUL)
+                      else if PL_WHEN = EP_COMPARE_EQUAL then (PL_OP = OP_EQ or PL_OP = OP_NE)
+                      else if PL_WHEN = EP_COMPARE_DIRECT then (PL_OP = OP_LT or PL_OP = OP_GE)
+                      else if PL_WHEN = EP_COMPARE_SWAPPED then (PL_OP = OP_GT or PL_OP = OP_LE)
+                      else if PL_WHEN = EP_SHIFT_LEFT then (PL_OP = OP_SHL)
+                      else if PL_WHEN = EP_SHIFT_RIGHT then (PL_OP = OP_SHR)
                       else (SK_KEY[PL_LEFT_ROW] /= PL_OWNER_KEY)
         | PL_FORM_SPEC := STEP_FORM[PL_STEP]
         | PL_A0_SPEC := STEP_A0[PL_STEP]
@@ -5227,7 +5282,20 @@ process SIGC =
         | PL_BITS := ulong(PL_VALUE)
         | PL_CHUNKS := integer((PL_BITS shr 16) modulo ulong(65536) /= ulong(0)) + integer((PL_BITS shr 32) modulo ulong(65536) /= ulong(0))
                        + integer(PL_BITS shr 48 /= ulong(0))
-        | PL_INSTRUCTIONS := if PL_MICRO = MK_PLACE then 0 else if PL_MICRO = MK_EMIT then 1
+        | PL_PAIR := PL_FORM = 1
+        | PL_EXTENDS := PL_PAIR and XT_BYTES[if PL_TYPE_OR_KEY >= 0 and PL_TYPE_OR_KEY < XT_TOTAL then PL_TYPE_OR_KEY else 0] < 8
+        | PL_INDEXED := PL_A3 >= 0
+        | PL_THUMB_INSTRUCTIONS := if PL_MICRO = MK_PLACE then 0 else if PL_MICRO = MK_EMIT then 1
+                                   else if PL_MICRO = MK_LI then
+                                     1 + integer((PL_BITS shr 16) modulo ulong(65536) /= ulong(0))
+                                     + (if PL_PAIR then 1 + integer(PL_BITS shr 48 /= ulong(0)) else 0)
+                                   else if PL_MICRO = MK_LOAD then 3 + integer(PL_EXTENDS)
+                                   else if PL_MICRO = MK_STORE then 3
+                                   else if PL_MICRO = MK_ADDRESS then (if PL_TYPE_OR_KEY < 0 then 2 else 3)
+                                   else if PL_MICRO = MK_LOAD_AT then integer(PL_INDEXED) + 1 + integer(PL_EXTENDS)
+                                   else integer(PL_INDEXED) + 1
+        | PL_INSTRUCTIONS := if PLATFORM = PLATFORM_MPS2 then PL_THUMB_INSTRUCTIONS
+                             else if PL_MICRO = MK_PLACE then 0 else if PL_MICRO = MK_EMIT then 1
                              else if PL_MICRO = MK_LI then 1 + PL_CHUNKS else 2
         | PL_SLOT := if PL_ACTIVE and MO_COUNT[?] < MICRO_CAP then MO_COUNT[?] else -1
         | MO_KIND := MO_KIND[?] next PL_SLOT : PL_MICRO
@@ -5262,28 +5330,77 @@ process SIGC =
         | EX_NZ2 := (EX_BITS shr 32) modulo ulong(65536) /= ulong(0)
         | EX_NZ3 := EX_BITS shr 48 /= ulong(0)
         | EX_PLACES := EX_KIND = MK_PLACE
-        | EX_COUNT := if EX_PLACES then 0 else if EX_KIND = MK_EMIT then 1
+        | EX_TYPE := if EX_A1 >= 0 and EX_A1 < XT_TOTAL then EX_A1 else 0
+        | EX_PAIR := MO_FORM[EX_M] = 1
+        | EX_BYTES := XT_BYTES[EX_TYPE]
+        | EX_SIGNED := XT_SIGNED[EX_TYPE]
+        | EX_EXTENDS := EX_PAIR and EX_BYTES < 8
+        | EX_INDEX_REGISTER := MO_A3[EX_M]
+        | EX_INDEXED := EX_INDEX_REGISTER >= 0
+        | EX_AT := EX_KIND = MK_LOAD_AT or EX_KIND = MK_STORE_AT
+        | EX_TABLE_KEY := EX_KIND = MK_ADDRESS and EX_A1 < 0
+        | EX_THUMB_COUNT := if EX_PLACES then 0 else if EX_KIND = MK_EMIT then 1
+                            else if EX_KIND = MK_LI then 1 + integer(EX_NZ1) + (if EX_PAIR then 1 + integer(EX_NZ3) else 0)
+                            else if EX_KIND = MK_LOAD then 3 + integer(EX_EXTENDS)
+                            else if EX_KIND = MK_STORE then 3
+                            else if EX_KIND = MK_ADDRESS then (if EX_TABLE_KEY then 2 else 3)
+                            else if EX_KIND = MK_LOAD_AT then integer(EX_INDEXED) + 1 + integer(EX_EXTENDS)
+                            else integer(EX_INDEXED) + 1
+        | EX_COUNT := if PLATFORM = PLATFORM_MPS2 then EX_THUMB_COUNT
+                      else if EX_PLACES then 0 else if EX_KIND = MK_EMIT then 1
                       else if EX_KIND = MK_LI then 1 + integer(EX_NZ1) + integer(EX_NZ2) + integer(EX_NZ3) else 2
         | EX_LAST := EX_PLACES or EX_S + 1 >= EX_COUNT
         | EX_NEXT_M := if EX_LAST then EX_M + 1 else EX_M
         | EX_NEXT_S := if EX_LAST then 0 else EX_S + 1
-        | EX_CHUNK := if EX_S = 0 then 0 else if EX_NZ1 and EX_S = 1 then 1 else if EX_NZ2 and EX_S = 1 + integer(EX_NZ1) then 2 else 3
+        | EX_THUMB_CHUNK := if EX_S = 0 then 0 else if EX_S = 1 then (if EX_NZ1 then 1 else 2)
+                            else if EX_S = 2 then (if EX_NZ1 then 2 else 3) else 3
+        | EX_CHUNK := if PLATFORM = PLATFORM_MPS2 then EX_THUMB_CHUNK
+                      else if EX_S = 0 then 0 else if EX_NZ1 and EX_S = 1 then 1 else if EX_NZ2 and EX_S = 1 + integer(EX_NZ1) then 2 else 3
         | EX_CHUNK_VALUE := long((EX_BITS shr (16 * EX_CHUNK)) modulo ulong(65536))
-        | EX_TYPE := if EX_A1 >= 0 and EX_A1 < XT_TOTAL then EX_A1 else 0
-        | EX_TABLE_KEY := EX_KIND = MK_ADDRESS and EX_A1 < 0
-        | EX_FORM := if EX_KIND = MK_EMIT then MO_FORM[EX_M]
+        | EX_ROLE := if EX_AT and not EX_INDEXED then EX_S + 1 else EX_S
+        | EX_DUAL := EX_PAIR and EX_BYTES = 8
+        | EX_LOAD_FORM := if EX_BYTES = 8 and not EX_PAIR then FORM_LDR_T else THUMB_LOAD_FORM[EX_BYTES * 2 + integer(EX_SIGNED)]
+        | EX_STORE_FORM := if EX_BYTES = 8 and not EX_PAIR then FORM_STR_T else THUMB_STORE_FORM[EX_BYTES]
+        | EX_EXTEND_STEP := EX_AT and EX_ROLE = 2 or EX_KIND = MK_LOAD and EX_S = 3
+        | EX_ABSOLUTE_STEP := not EX_AT and EX_KIND /= MK_EMIT and EX_KIND /= MK_LI and EX_S <= 1
+        | EX_MEMORY_STEP := EX_AT and EX_ROLE = 1 or not EX_AT and EX_KIND /= MK_EMIT and EX_KIND /= MK_LI and EX_S = 2
+        | EX_ADDRESS_REGISTER := if EX_KIND = MK_STORE then 14 else EX_A0
+        | EX_THUMB_FORM := if EX_KIND = MK_EMIT then MO_FORM[EX_M]
+                           else if EX_KIND = MK_LI then (if EX_THUMB_CHUNK modulo 2 = 0 then FORM_MOVW_T else FORM_MOVT_T)
+                           else if EX_AT and EX_ROLE = 0 then FORM_ADD_SHIFT_T
+                           else if EX_EXTEND_STEP then (if EX_SIGNED then FORM_ASR_IMM_T else FORM_LSR_IMM_T)
+                           else if EX_ABSOLUTE_STEP then (if EX_S = 0 then FORM_MOVW_ABS_T else FORM_MOVT_ABS_T)
+                           else if EX_KIND = MK_LOAD or EX_KIND = MK_LOAD_AT then EX_LOAD_FORM
+                           else if EX_KIND = MK_STORE or EX_KIND = MK_STORE_AT then EX_STORE_FORM else FORM_LDR_T
+        | EX_THUMB_OP0 := if EX_KIND = MK_EMIT then EX_A0 else if EX_KIND = MK_LI then EX_A0 + integer(EX_THUMB_CHUNK >= 2)
+                          else if EX_AT and EX_ROLE = 0 then 14 else if EX_EXTEND_STEP then EX_A0 + 1
+                          else if EX_ABSOLUTE_STEP then EX_ADDRESS_REGISTER else EX_A0
+        | EX_THUMB_OP1 := if EX_KIND = MK_EMIT then EX_A1 else if EX_KIND = MK_LI or EX_ABSOLUTE_STEP then 0
+                          else if EX_AT and EX_ROLE = 0 then integer(EX_A2) else if EX_EXTEND_STEP then EX_A0
+                          else if EX_AT then (if EX_INDEXED then 14 else integer(EX_A2)) else EX_ADDRESS_REGISTER
+        | EX_THUMB_OP2 := if EX_KIND = MK_EMIT then EX_A2 else if EX_KIND = MK_LI then EX_CHUNK_VALUE
+                          else if EX_AT and EX_ROLE = 0 then long(EX_INDEX_REGISTER) else long(0)
+        | EX_THUMB_OP3 := if EX_KIND = MK_EMIT then MO_A3[EX_M]
+                          else if EX_AT and EX_ROLE = 0 then integer(EX_BYTES >= 2) + integer(EX_BYTES >= 4) + integer(EX_BYTES >= 8)
+                          else if EX_MEMORY_STEP and EX_DUAL then EX_A0 + 1 else 0
+        | EX_THUMB_TK := if EX_KIND = MK_EMIT then MO_TK[EX_M] else if not EX_ABSOLUTE_STEP then TG_NONE
+                         else if EX_KIND = MK_ADDRESS then (if EX_TABLE_KEY then TG_TABLE else TG_WINDOW) else MO_TK[EX_M]
+        | EX_THUMB_TID := if EX_KIND = MK_EMIT then MO_TID[EX_M] else if not EX_ABSOLUTE_STEP then 0
+                          else if EX_KIND = MK_ADDRESS then (if EX_TABLE_KEY then -1 - EX_A1 else EX_A1) else MO_TID[EX_M]
+        | EX_FORM := if PLATFORM = PLATFORM_MPS2 then EX_THUMB_FORM
+                     else if EX_KIND = MK_EMIT then MO_FORM[EX_M]
                      else if EX_KIND = MK_LI then (if EX_S = 0 then FORM_MOVZ_X else FORM_MOVK_X)
                      else if EX_S = 0 then FORM_ADRP
                      else if EX_KIND = MK_LOAD then LOAD_OFFSET_FORM[XT_BYTES[EX_TYPE] * 2 + integer(XT_SIGNED[EX_TYPE])]
                      else if EX_KIND = MK_STORE then STORE_OFFSET_FORM[XT_BYTES[EX_TYPE]]
                      else if EX_TABLE_KEY then FORM_ADD_X_IMM else FORM_LDR_X
-        | EX_OP0 := if EX_KIND = MK_EMIT or EX_KIND = MK_LI or EX_S = 1 or EX_TABLE_KEY then EX_A0 else 8
-        | EX_OP1 := if EX_KIND = MK_EMIT then EX_A1 else if EX_KIND = MK_LI or EX_S = 0 then 0 else if EX_TABLE_KEY then EX_A0 else 8
-        | EX_OP2 := if EX_KIND = MK_EMIT then EX_A2 else if EX_KIND = MK_LI then EX_CHUNK_VALUE else long(0)
-        | EX_OP3 := if EX_KIND = MK_EMIT then MO_A3[EX_M] else if EX_KIND = MK_LI then EX_CHUNK else 0
-        | EX_TK := if EX_KIND = MK_ADDRESS then (if EX_TABLE_KEY then TG_TABLE else TG_WINDOW)
+        | EX_OP0 := if PLATFORM = PLATFORM_MPS2 then EX_THUMB_OP0 else if EX_KIND = MK_EMIT or EX_KIND = MK_LI or EX_S = 1 or EX_TABLE_KEY then EX_A0 else 8
+        | EX_OP1 := if PLATFORM = PLATFORM_MPS2 then EX_THUMB_OP1 else if EX_KIND = MK_EMIT then EX_A1 else if EX_KIND = MK_LI or EX_S = 0 then 0 else if EX_TABLE_KEY then EX_A0 else 8
+        | EX_OP2 := if PLATFORM = PLATFORM_MPS2 then EX_THUMB_OP2 else if EX_KIND = MK_EMIT then EX_A2 else if EX_KIND = MK_LI then EX_CHUNK_VALUE else long(0)
+        | EX_OP3 := if PLATFORM = PLATFORM_MPS2 then EX_THUMB_OP3 else if EX_KIND = MK_EMIT then MO_A3[EX_M] else if EX_KIND = MK_LI then EX_CHUNK else 0
+        | EX_TK := if PLATFORM = PLATFORM_MPS2 then EX_THUMB_TK else if EX_KIND = MK_ADDRESS then (if EX_TABLE_KEY then TG_TABLE else TG_WINDOW)
                    else if EX_KIND = MK_LI then TG_NONE else MO_TK[EX_M]
-        | EX_TID := if EX_KIND = MK_ADDRESS then (if EX_TABLE_KEY then -1 - EX_A1 else EX_A1)
+        | EX_TID := if PLATFORM = PLATFORM_MPS2 then EX_THUMB_TID else if EX_KIND = MK_ADDRESS then (if EX_TABLE_KEY then -1 - EX_A1 else EX_A1)
                     else if EX_KIND = MK_LI then 0 else MO_TID[EX_M]
         | EX_SLOT := if EX_PLACES then -1 else EX_CODE_COUNT[?]
         | CODE_FORM := CODE_FORM[?] next EX_SLOT : EX_FORM
@@ -5335,9 +5452,13 @@ process SIGC =
      end
    | EMIT_READY := DATA_RUN
    | CODE_COUNT := EX_CODE_COUNT
-   | HEADER_BYTES := if VIRT then VIRT_TEXT_OFFSET else TEXT_OFFSET
-   | TEXT_BYTES := (HEADER_BYTES + 4 * CODE_COUNT + SEGMENT_BYTES - 1) / SEGMENT_BYTES * SEGMENT_BYTES
-   | TAIL_BYTES := (EW_PAGES_TOTAL - long(EMIT_WINDOWS)) * long(16384) + long(32)
+   | HEADER_BYTES := if PLATFORM = PLATFORM_MPS2 then MPS2_HEADER_BYTES else if PLATFORM = PLATFORM_VIRT then VIRT_TEXT_OFFSET
+                     else TEXT_OFFSET
+   | UNLOADED_BYTES := if PLATFORM = PLATFORM_MPS2 then MPS2_UNLOADED else 0
+   | TEXT_BYTES := UNLOADED_BYTES
+                   + (HEADER_BYTES - UNLOADED_BYTES + 4 * CODE_COUNT + SEGMENT_BYTES - 1) / SEGMENT_BYTES * SEGMENT_BYTES
+   | TAIL_BYTES := (EW_PAGES_TOTAL - long(EMIT_WINDOWS)) * long(16384)
+                   + long(if PLATFORM = PLATFORM_MPS2 then MPS2_STACK_BYTES else VIRT_STACK_BYTES)
    | MEMORY_BYTES := long(SIGNED_BYTES) + TAIL_BYTES
    | DATA_BYTES := integer((DATA_END + long(SEGMENT_BYTES - 1)) / long(SEGMENT_BYTES)) * SEGMENT_BYTES
    | SIGNED_BYTES := TEXT_BYTES + DATA_BYTES
@@ -5345,11 +5466,12 @@ process SIGC =
    | DIRECTORY_BYTES := CODE_DIRECTORY_HEADER_BYTES + 1 + HASH_BYTES * PAGES
    | SIGNATURE_BYTES := SUPERBLOB_HEADER_BYTES + DIRECTORY_BYTES
    | LINKEDIT_BYTES := (SIGNATURE_BYTES + SEGMENT_BYTES - 1) / SEGMENT_BYTES * SEGMENT_BYTES
-   | FILE_BYTES := SIGNED_BYTES + (if VIRT then 0 else SIGNATURE_BYTES)
+   | FILE_BYTES := SIGNED_BYTES + (if PLATFORM = PLATFORM_MACOS then SIGNATURE_BYTES else 0)
    | STAGED_AT := (FILE_BYTES + 7) / 8 * 8
    | IMAGE_TEXT_AT := STAGED_AT + ARG_CAP + 16
    | IMAGE_TOO_BIG := DUMP_PASS = 0 and EMIT_READY and IMAGE_TEXT_AT > NAMES_AT
-   | IMAGE_BASE := if VIRT then VIRT_BASE else MACHO_BASE
+   | IMAGE_BASE := if PLATFORM = PLATFORM_MPS2 then long(-MPS2_UNLOADED) else if PLATFORM = PLATFORM_VIRT then VIRT_BASE
+                   else MACHO_BASE
    | TEXT_BASE := IMAGE_BASE + long(HEADER_BYTES)
    | DATA_BASE := IMAGE_BASE + long(TEXT_BYTES)
    | EN_INDEX := 0 .. (if EMIT_READY then CODE_COUNT - 1 else -1)
@@ -5380,7 +5502,10 @@ process SIGC =
         | EN_OP2 := if EN_SECTION < 0 then CODE_OP2[EN_INDEX]
                     else if EN_KIND = FIELD_PCREL then EN_ADDRESS - EN_PC
                     else if EN_KIND = FIELD_PAGE then EN_ADDRESS / long(4096) * long(4096) - EN_PC / long(4096) * long(4096)
-                    else if EN_KIND = FIELD_PAGEOFF then EN_ADDRESS modulo long(4096) else CODE_OP2[EN_INDEX]
+                    else if EN_KIND = FIELD_PAGEOFF then EN_ADDRESS modulo long(4096)
+                    else if EN_KIND = FIELD_THUMB_PCREL then EN_ADDRESS - EN_PC - long(4)
+                    else if EN_KIND = FIELD_ABS_LO then EN_ADDRESS modulo long(65536)
+                    else if EN_KIND = FIELD_ABS_HI then EN_ADDRESS / long(65536) else CODE_OP2[EN_INDEX]
         | EN_OP3 := long(CODE_OP3[EN_INDEX])
         | EN_F := FORM_FIELD_SLOTS * EN_FORM
         | EN_S0 := FORM_FIELD_SLOT[EN_F + 0]
@@ -5407,11 +5532,22 @@ process SIGC =
         | EN_A3 := FORM_FIELD_AT[EN_F + 3]
         | EN_V3 := ulong(if EN_S3 = 0 then EN_OP0 else if EN_S3 = 1 then EN_OP1 else if EN_S3 = 2 then EN_OP2 else EN_OP3)
         | EN_B3 := (EN_V3 shr EN_L3) modulo (ulong(1) shl EN_W3)
+        | EN_S4 := FORM_FIELD_SLOT[EN_F + 4]
+        | EN_L4 := FORM_FIELD_LOW[EN_F + 4]
+        | EN_W4 := FORM_FIELD_WIDTH[EN_F + 4]
+        | EN_A4 := FORM_FIELD_AT[EN_F + 4]
+        | EN_V4 := ulong(if EN_S4 = 0 then EN_OP0 else if EN_S4 = 1 then EN_OP1 else if EN_S4 = 2 then EN_OP2 else EN_OP3)
+        | EN_B4 := (EN_V4 shr EN_L4) modulo (ulong(1) shl EN_W4)
         | EN_WORD := ulong(FORM_BASE[EN_FORM]) or (EN_B0 shl EN_A0) or (EN_B1 shl EN_A1) or (EN_B2 shl EN_A2) or (EN_B3 shl EN_A3)
+                     or (EN_B4 shl EN_A4)
         | EN_R0 := (if EN_S0 = 0 then EN_B0 shl EN_L0 else ulong(0)) or (if EN_S1 = 0 then EN_B1 shl EN_L1 else ulong(0)) or (if EN_S2 = 0 then EN_B2 shl EN_L2 else ulong(0)) or (if EN_S3 = 0 then EN_B3 shl EN_L3 else ulong(0))
+                  or (if EN_S4 = 0 then EN_B4 shl EN_L4 else ulong(0))
         | EN_R1 := (if EN_S0 = 1 then EN_B0 shl EN_L0 else ulong(0)) or (if EN_S1 = 1 then EN_B1 shl EN_L1 else ulong(0)) or (if EN_S2 = 1 then EN_B2 shl EN_L2 else ulong(0)) or (if EN_S3 = 1 then EN_B3 shl EN_L3 else ulong(0))
+                  or (if EN_S4 = 1 then EN_B4 shl EN_L4 else ulong(0))
         | EN_R2 := (if EN_S0 = 2 then EN_B0 shl EN_L0 else ulong(0)) or (if EN_S1 = 2 then EN_B1 shl EN_L1 else ulong(0)) or (if EN_S2 = 2 then EN_B2 shl EN_L2 else ulong(0)) or (if EN_S3 = 2 then EN_B3 shl EN_L3 else ulong(0))
+                  or (if EN_S4 = 2 then EN_B4 shl EN_L4 else ulong(0))
         | EN_R3 := (if EN_S0 = 3 then EN_B0 shl EN_L0 else ulong(0)) or (if EN_S1 = 3 then EN_B1 shl EN_L1 else ulong(0)) or (if EN_S2 = 3 then EN_B2 shl EN_L2 else ulong(0)) or (if EN_S3 = 3 then EN_B3 shl EN_L3 else ulong(0))
+                  or (if EN_S4 = 3 then EN_B4 shl EN_L4 else ulong(0))
         | EN_TOP2 := FORM_TOP2[EN_FORM]
         | EN_NEGATIVE := FORM_SIGNED[EN_FORM] = 1 and (EN_R2 shr (EN_TOP2 - 1)) modulo ulong(2) = ulong(1)
         | EN_R2_VALUE := long(EN_R2) - (if EN_NEGATIVE then long(ulong(1) shl EN_TOP2) else long(0))
@@ -5546,7 +5682,12 @@ process SIGC =
        (| IM_OFFSET := 4 * IM_INDEX
         | IM_FIELD := HEADER_FIELD[IM_INDEX]
         | IM_ELF_FIELD := ELF_FIELD[IM_INDEX]
-        | IM_HEADER := if VIRT then
+        | IM_ELF32_FIELD := ELF32_FIELD[IM_INDEX]
+        | IM_HEADER := if PLATFORM = PLATFORM_MPS2 then
+                         (if IM_ELF32_FIELD = EV_CONSTANT then ELF32_WORD[IM_INDEX]
+                          else uinteger(if IM_ELF32_FIELD = EV_SIGNED_BYTES then long(SIGNED_BYTES - MPS2_UNLOADED)
+                                        else MEMORY_BYTES - long(MPS2_UNLOADED)))
+                       else if PLATFORM = PLATFORM_VIRT then
                          (if IM_ELF_FIELD = EV_CONSTANT then ELF_WORD[IM_INDEX]
                           else uinteger(if IM_ELF_FIELD = EV_SIGNED_BYTES then long(SIGNED_BYTES) else MEMORY_BYTES))
                        else if IM_FIELD = HV_CONSTANT then HEADER_WORD[IM_INDEX]
@@ -5563,7 +5704,7 @@ process SIGC =
         | store{IMAGE, uinteger}(OUTPUT_BASE + IM_OFFSET, IM_WORD)
         |)
      end
-   | SH_INDEX := 0 .. (if IMAGE_GO and not VIRT then PAGES * 16448 - 1 else -1)
+   | SH_INDEX := 0 .. (if IMAGE_GO and PLATFORM = PLATFORM_MACOS then PAGES * 16448 - 1 else -1)
    | iterate SH_INDEX of
        (| SH_T := SH_INDEX modulo 64
         | SH_BLOCK := SH_INDEX / 64
@@ -5643,7 +5784,7 @@ process SIGC =
         | PAGE_HASH7 := PAGE_HASH7[?] next (if SH_PAGE_END then SH_P else -1) : SH_H7
         |)
      end
-   | SG_INDEX := 0 .. (if IMAGE_GO and not VIRT then SIGNATURE_BYTES - 1 else -1)
+   | SG_INDEX := 0 .. (if IMAGE_GO and PLATFORM = PLATFORM_MACOS then SIGNATURE_BYTES - 1 else -1)
    | iterate SG_INDEX of
        (| SG_IN_HEADER := SG_INDEX < SIGNATURE_HEADER_BYTES
         | SG_FIELD := SIGNATURE_FIELD[SG_INDEX / 4]
@@ -5699,8 +5840,11 @@ process SIGC =
                       else if not CODE_FITS then F_CAP_CODE else if not CODE_LABELS_FIT then F_CAP_CODE_LABELS
                       else if not DATA_FITS then F_CAP_DATA else F_CAP_CODE_TEXT
    | EMIT_SHORT := EMIT_PREPARED and (not EMIT_READY or CODE_DUMP and (not CW_RUN or CW_OVERFLOW))
-   | EMIT_MESSAGE := if EMIT_RUN and EW_FAILED then T_ARRAYS_ADDRESS else if EMIT_SHORT then T_CAPACITY else 0
-   | EMIT_ERROR_TOKEN := if EMIT_MESSAGE = T_ARRAYS_ADDRESS then ROWS_TOKEN[EW_FAIL_SIGNAL] else -1
+   | IMAGE_OVER_RAM := EMIT_READY and PLATFORM = PLATFORM_MPS2 and MEMORY_BYTES - long(MPS2_UNLOADED) > long(MPS2_RAM_BYTES)
+   | EMIT_MESSAGE := if EMIT_RUN and EW_FAILED then T_ARRAYS_ADDRESS else if EMIT_SHORT then T_CAPACITY
+                     else if IMAGE_OVER_RAM then T_IMAGE_SIZE else 0
+   | EMIT_ERROR_TOKEN := if EMIT_MESSAGE = T_ARRAYS_ADDRESS then ROWS_TOKEN[EW_FAIL_SIGNAL]
+                         else if EMIT_MESSAGE = T_IMAGE_SIZE then MACHINE_TOKEN else -1
    | MERGE_BOUND := long(SIGNAL_COUNT) + long(FINISH_SIGNAL_COUNT) + long(EQUATION_COUNT) + long(FINISH_EQUATION_COUNT)
                     + long(GROUP_COUNT) + long(FINISH_GROUP_COUNT) + long(3) * long(CLOSED_COUNT) + long(LABEL_COUNT)
                     + long(MODEL_COUNT) + long(USE_COUNT) + long(TABLE_COUNT) + long(8)
@@ -6208,7 +6352,7 @@ process SIGC =
                  (if MESSAGE /= 0 then LAYOUT_DUMP_ERROR else if DUMP_PASS = 1 then LAYOUT_DUMP_TOKENS
                   else if CODE_DUMP then LAYOUT_DUMP_CODE else LAYOUT_DUMP_PROGRAM)
                else if MESSAGE /= 0 then LAYOUT_COMPILE else if EN_FAILED then LAYOUT_ENCODE
-               else if OUTPUT_ERRNO /= 0 then LAYOUT_OS_OUTPUT else if IMAGE_GO and ROOT_COUNT >= 2 and not VIRT then LAYOUT_PRESENCE
+               else if OUTPUT_ERRNO /= 0 then LAYOUT_OS_OUTPUT else if IMAGE_GO and ROOT_COUNT >= 2 and PLATFORM = PLATFORM_MACOS then LAYOUT_PRESENCE
                else LAYOUT_NONE
    | DUMPS_TOKENS := LAYOUT = LAYOUT_DUMP_TOKENS
    | DUMPS_PROGRAM := LAYOUT = LAYOUT_DUMP_PROGRAM
@@ -6601,9 +6745,9 @@ process SIGC =
     constant integer F_STATE_SUFFIX = 21;
     constant integer F_DEFINE = 22;
     constant integer F_SEED = 23;
-    constant integer SEED_LENGTH = 395;
-    constant integer SEED_NAME_COUNT = 57;
-    constant [395] ubyte SEED = "event boolean short integer long ubyte ushort uinteger ulong pointer load store syscall instruction Automaton_Initial_State Automaton_Transition Automaton_IsIn clock' state' cur' on' process where end init true false when default and or xor not modulo shl shr type enum constant next iterate of with if then else procedure node function automaton label on external indices pragmas Interrupt Boot";
+    constant integer SEED_LENGTH = 403;
+    constant integer SEED_NAME_COUNT = 58;
+    constant [403] ubyte SEED = "event boolean short integer long ubyte ushort uinteger ulong pointer load store syscall instruction Automaton_Initial_State Automaton_Transition Automaton_IsIn clock' state' cur' on' process where end init true false when default and or xor not modulo shl shr type enum constant next iterate of with if then else procedure node function automaton label on external indices pragmas Interrupt Boot Machine";
     constant integer N_EVENT = 0;
     constant integer N_BOOLEAN = 1;
     constant integer N_UBYTE = 5;
@@ -6978,55 +7122,62 @@ process SIGC =
     constant integer T_NO_OUTPUT = 48;
     constant integer T_HAS_OUTPUT = 49;
     constant integer T_NOT_STATE = 50;
-    constant [143] short TEMPLATE_PIECE0 = [
+    constant [148] short TEMPLATE_PIECE0 = [
         0, 289, 290, 291, 293, 0, 0, 0, 297, 299, 301, 302, 303, 304, 305, 307, 309, 310, 312, 314, 299, 299, 299, 299,
         299, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 339, 336, 0, 0, 0, 337, 0,
         348, 348, 0, 352, 336, 354, 356, 357, 358, 348, 348, 348, 348, 352, 0, 366, 305, 368, 0, 366, 372, 373, 375, 376,
         378, 379, 381, 382, 0, 0, 385, 386, 387, 388, 389, 390, 392, 393, 379, 395, 397, 0, 399, 379, 379, 379, 379, 379,
         379, 407, 408, 314, 314, 305, 305, 411, 412, 352, 414, 416, 352, 307, 352, 419, 420, 352, 422, 423, 424, 425, 425, 428,
-        430, 425, 307, 434, 435, 436, 437, 440, 441, 442, 444, 445, 446, 448, 450, 451, 307, 307, 307, 456, 458, 459, 460];
-    constant [143] short TEMPLATE_PIECE1 = [
+        430, 425, 307, 434, 435, 436, 437, 440, 441, 442, 444, 445, 446, 448, 450, 451, 307, 307, 307, 456, 458, 459, 460, 462,
+        464, 446, 466, 467];
+    constant [148] short TEMPLATE_PIECE1 = [
         0, 7, 0, 292, 0, 294, 295, 4, 298, 300, 0, 0, 0, 0, 306, 308, 0, 311, 313, 296, 315, 315, 315, 315,
         315, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 300, 338, 340, 342, 343, 344, 345, 346, 347,
         349, 350, 351, 300, 353, 355, 0, 0, 359, 300, 360, 361, 362, 300, 364, 367, 300, 369, 370, 371, 0, 374, 341, 377,
         0, 380, 0, 0, 383, 384, 0, 0, 0, 0, 0, 391, 341, 0, 394, 396, 0, 398, 400, 401, 402, 403, 404, 405,
         406, 0, 0, 300, 409, 300, 410, 0, 0, 413, 415, 0, 315, 417, 418, 0, 0, 421, 0, 0, 0, 426, 427, 429,
-        431, 432, 433, 0, 0, 0, 396, 0, 0, 443, 0, 0, 447, 449, 0, 452, 453, 454, 455, 457, 0, 0, 396];
-    constant [143] short TEMPLATE_PIECE2 = [
+        431, 432, 433, 0, 0, 0, 396, 0, 0, 443, 0, 0, 447, 449, 0, 452, 453, 454, 455, 457, 0, 0, 396, 463,
+        0, 465, 0, 0];
+    constant [148] short TEMPLATE_PIECE2 = [
         0, 0, 0, 0, 0, 0, 0, 296, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 316, 317, 318, 319,
         320, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 341, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 363, 0, 365, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 396, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 319, 0, 0, 0, 0, 0, 0, 0, 0, 396, 0, 0,
-        0, 0, 0, 0, 0, 0, 438, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 461];
-    constant [143] short TEMPLATE_PIECE3 = [
+        0, 0, 0, 0, 0, 0, 438, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 461, 0,
+        0, 0, 0, 0];
+    constant [148] short TEMPLATE_PIECE3 = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         321, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 439, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [143] short TEMPLATE_KIND0 = [
+        0, 0, 0, 0, 0, 0, 439, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0];
+    constant [148] short TEMPLATE_KIND0 = [
         0, 8, 7, 6, 1, 3, 3, 7, 2, 3, 1, 0, 1, 0, 4, 3, 0, 3, 1, 3, 3, 3, 3, 3,
         3, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3,
         3, 3, 3, 3, 3, 3, 0, 0, 3, 3, 3, 3, 3, 9, 3, 3, 10, 3, 3, 3, 0, 3, 4, 5,
         4, 7, 0, 0, 9, 9, 0, 0, 0, 0, 0, 11, 4, 0, 7, 4, 0, 3, 4, 7, 7, 7, 7, 7,
         7, 0, 0, 3, 3, 3, 3, 0, 9, 9, 9, 0, 9, 9, 9, 0, 0, 9, 0, 0, 0, 12, 12, 12,
-        12, 12, 9, 12, 12, 0, 12, 0, 0, 3, 1, 1, 1, 5, 0, 3, 3, 3, 3, 12, 0, 0, 3];
-    constant [143] short TEMPLATE_KIND1 = [
+        12, 12, 9, 12, 12, 0, 12, 0, 0, 3, 1, 1, 1, 5, 0, 3, 3, 3, 3, 12, 0, 0, 3, 1,
+        0, 1, 0, 0];
+    constant [148] short TEMPLATE_KIND1 = [
         0, 0, 0, 1, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4,
         4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 3, 0, 3, 3, 0, 0,
         0, 0, 3, 0, 0, 0, 0, 0, 6, 0, 0, 0, 5, 0, 5, 0, 0, 0, 10, 0, 0, 4, 4, 4,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 4, 0, 0, 4, 0, 0, 4, 0, 0, 4, 0, 0,
         0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0,
-        0, 12, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3];
-    constant [143] short TEMPLATE_KIND2 = [
+        0, 12, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0,
+        0, 0, 0, 0];
+    constant [148] short TEMPLATE_KIND2 = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4,
         5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0,
-        0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0];
     constant integer LAYOUT_NONE = 0;
     constant integer LAYOUT_OS = 1;
     constant integer LAYOUT_COMPILE = 2;
@@ -7067,8 +7218,8 @@ process SIGC =
         ulong(1000000), ulong(10000000), ulong(100000000), ulong(1000000000), ulong(10000000000), ulong(100000000000),
         ulong(1000000000000), ulong(10000000000000), ulong(100000000000000), ulong(1000000000000000), ulong(10000000000000000), ulong(100000000000000000),
         ulong(1000000000000000000), ulong(-8446744073709551616)];
-    constant [8548] ubyte FRAGMENTS = ":: error: error  sigc: error: [Errno ] '...'end of file'none[][[]]]]][][nonenone][CONST [[ENUMCONST ['stateDEFINESEED#.'call[expression at  at error 1 1 program exceeds compiler capacity: OUTPUT:0:0: error:  operand out of range: [, presence inputs: sigc: error: 'utf-8' codec can't decode byte 0xsigc: error: 'utf-8' codec can't decode bytes in position  in position : -memory reservation failedkinds texts lines columns keywordnamesymbolnumberstringeofCONSTSIGNALENUMCONSTCALLDELAYPREVINDEXNEGNOTUWHENCLOCKIFBRANCHDEFAULTWHENXORORANDEQNELTLEGTGEADDSUBMULDIVMODSHLSHRNEXTPAIRRANGEOPEN_PARENOPEN_SQUAREIF_MARKTHEN_MARKEFFECTINPUTCOPYCONVERTTABLEELEMENTGATHERITERARGEVENTBOOLEANINTPOINTERENUMARRAYEXTERNALinputoutputlocalname types.kind types.bytes types.signed types.name types.values types.element types.size models.name models.kind models.parent models.line models.column models.labels signal_names signal_roles signal_types signal_models signal_positions constant_names constant_types constant_values table_types table_values equation_targets equation_ops equation_args equation_positions equation_loops equation_kinds equation_models equation_labels equation_guards guard_models guard_ops guard_args guard_positions guard_context guard_labels guard_signals label_names label_uses loop_names loop_positions loop_models constraint_groups constraint_positions constraint_models constraint_guards dependence_from dependence_to dependence_positions dependence_models dependence_guards rows.op rows.left rows.right rows.value rows.type rows.ctx rows.line rows.column rows.owner rows.loop rows.guard rows.groups rows.group_positions rows.dependence_from rows.dependence_to rows.war rows.snapshotted rows.effects.kind rows.effects.resource rows.effects.param loops.index loops.size loops.defined loops.snapshots loops.count parent sample_rows def_kind def_target def_left def_right def_line def_column def_pending ob_small ob_big ob_line ob_column node_kind node_parent node_depth node_root node_left node_right roots order loop_orders snapshots snapshotted signaltypemodelconstantlabelSRCTOKENSNAMESTYPESVALUESMODELSSIGNALSCONSTANTSTABLESEQUATIONSENTRIESGUARDSLABELSLOOPSGROUPSDEPENDENCESSTACKPATHSLOCALSPARSEFINISHITEMSOUTPUTINSTANCESINSTANTIATELOOKUPSROWSROW_DEPENDENCESSEGMENTSLOWERCLOCKSDEFINITIONSOBLIGATIONSPAIRSCLOCK_NAMESCLOCK_TEXTCLOCK_SORTEDGESSCHEDULE_NODESEFFECTSEFFECT_ORDERUNITSMICRO_OPSCODECODE_LABELSDATACODE_TEXT(||)-->:::=^=/=<=>=..|$+*/()=;,?!<>^{}unexpected character 'program exceeds compiler capacity: expected '', found expected a name, found  is a reserved name is the name of a model is declared twiceinteger literal  does not fit in longconstant  is not declaredexpected an integer constant, found array capacity must be strictly positiveexpected a type, found arrays of event are not supportedtype  is external; signals cannot have that typeinput signal  must be a scalararrays cannot be passed to modelsoutput  has an array type; outputs must be scalarunexpected  after the process modelenumerated value  has type  but its definition is a string but its definition is a list but its definition has an element of type  but its definition has type  but its definition has  elementsa conversion in a constant must name an integer typea constant must be defined by an integer literal, a conversion of one, or a list of themonly definitions are allowed inside iterateiterate cannot be nestediterate is not allowed inside a guarded process--> requires signal namesexpected ':=' or '^=', found the initial value of a delay must be a constantexpected a static parameter, found expected an expression, found expected 'then'expected 'else'unbalanced parenthesisexpected an operator, found label automaton  has no input; its control clock is the upper bound of its inputswrong number of arguments for : expected , found  cannot be placed on  cannot be guarded expects a state name of automaton  is not a label of automaton  needs exactly one Automaton_Initial_State is allowed only in an automatonmodel  has no output and cannot be used in an expression has an output and cannot be called as a process is not a state of automaton signal  cannot be used as a signalconversion to  expects one argumentindices expects a positive constantmodel calls are not allowed inside iterateunsafe model  is called from  takes no static parameters calls itself has  outputs; only models with at most one output can be called expects  static parameters, found the word of  must be an integer constantthe resource of  must be an external type accesses an integer or pointer type, found  must fit in 32 bits':' is supported only as the right operand of nextinput 1 of  must be a pointer, found input 2 of store must have type input  of syscall must be an integer or a pointer, found input 1 of instruction must have type ulong, found operator  is not allowed inside iteratean array value can only be the whole definition of a signal[?] applies only to a signal name[?] is allowed only inside iterate[?] refers to a signal the iterate body does not defineindexing a value that is not an arraya range must start at 0the bound of a range must be an integeran array index must be an integernext expects 'index : value' on its rightconstant index  is outside 0..next expects a value of type $ is not supported on arrays expects scalar operandsoperator if expects operands of comparable types, found  and the condition of if must be boolean cannot be inside an if; gate it by its clock or its inputsno conversion from  to  expects a pointer and an integer offset expects integer operands expects operands of comparable types, found  expects operands of one type expects boolean operands expects unsigned operandsthe condition of when must be booleanthe initial value of a delay must match its type is ambiguous has no value the index of iterate must be an array of integersiterate body cannot define its index  in with is not defined by the iterate bodythe initial value of  cannot read a signal the iterate defineswith initializes an array only from an array constant or an array signal cannot be defined is defined twicea range defines an array of integersan array signal must be defined by a constant, indices, a gather, or next is never defineda range can only be the index of iteratea constant has no clockthe argument of $ cannot be a constantclock of  fits no tree: it relates root clocks  has two definitions that cannot be shown equalclocks of  are defined in terms of each otherthe clocks of guards  depend on each other cannot be shown inside the clock  must have a root of its owncausality cycle between signals causality cycle between effects at causality cycle between clockseffects  on resource  have no order between them; order them with -->arrays need more than 2^64 bytes of address spacepragmas are allowed only on the top modelpragma  is not supported; use Interrupt or Bootexpected 'end pragmas', found Interrupt expects an interrupt number in quotes, found interrupt number  must be a decimal from 16 to 31interrupt  is used twicepragma Boot is used twicepragma object  is not an input signal named by a pragma must be event is named by two pragmas must be named by an Interrupt or Boot pragmathe root clock of  is not the clock of an Interrupt or Boot inputsyscall is not available on QEMU virta program with Interrupt pragmas needs a Boot pragma to enable theminput signals  share one root clock; each Interrupt or Boot input needs its ownnotwhenifdefaultxororandmoduloshlshrnextROOTSAMPLEPRODUCTSUMinvalid start byteinvalid continuation byteunexpected end of data000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeffmovz xmovz wmovk xmovk wadd x immadd w immsub x immsub w immsubs x immsubs w immadd xadds xsub xsubs xand xand worr xorr weor xorn xeor x onelslv xlsrv xsdiv xudiv xmul xmsub xumulh xcsel xcsinc wcsneg xldr xldr wldrsw xldrh wldrsh xldrb wstr xstr wstrh wstrb wldr x regldr w regldrsw x regldrh w regldrsh x regldrb w regstr x regstr w regstrh w regstrb w regldr x poststr x poststr w poststrb w postldrb w prebblb.condcbz wcbz xcbnz xadrpretsvc 0x80wordwfi";
-    constant [803] short FRAGMENT_START = [
+    constant [9133] ubyte FRAGMENTS = ":: error: error  sigc: error: [Errno ] '...'end of file'none[][[]]]]][][nonenone][CONST [[ENUMCONST ['stateDEFINESEED#.'call[expression at  at error 1 1 program exceeds compiler capacity: OUTPUT:0:0: error:  operand out of range: [, presence inputs: sigc: error: 'utf-8' codec can't decode byte 0xsigc: error: 'utf-8' codec can't decode bytes in position  in position : -memory reservation failedkinds texts lines columns keywordnamesymbolnumberstringeofCONSTSIGNALENUMCONSTCALLDELAYPREVINDEXNEGNOTUWHENCLOCKIFBRANCHDEFAULTWHENXORORANDEQNELTLEGTGEADDSUBMULDIVMODSHLSHRNEXTPAIRRANGEOPEN_PARENOPEN_SQUAREIF_MARKTHEN_MARKEFFECTINPUTCOPYCONVERTTABLEELEMENTGATHERITERARGEVENTBOOLEANINTPOINTERENUMARRAYEXTERNALinputoutputlocalname types.kind types.bytes types.signed types.name types.values types.element types.size models.name models.kind models.parent models.line models.column models.labels signal_names signal_roles signal_types signal_models signal_positions constant_names constant_types constant_values table_types table_values equation_targets equation_ops equation_args equation_positions equation_loops equation_kinds equation_models equation_labels equation_guards guard_models guard_ops guard_args guard_positions guard_context guard_labels guard_signals label_names label_uses loop_names loop_positions loop_models constraint_groups constraint_positions constraint_models constraint_guards dependence_from dependence_to dependence_positions dependence_models dependence_guards rows.op rows.left rows.right rows.value rows.type rows.ctx rows.line rows.column rows.owner rows.loop rows.guard rows.groups rows.group_positions rows.dependence_from rows.dependence_to rows.war rows.snapshotted rows.effects.kind rows.effects.resource rows.effects.param loops.index loops.size loops.defined loops.snapshots loops.count parent sample_rows def_kind def_target def_left def_right def_line def_column def_pending ob_small ob_big ob_line ob_column node_kind node_parent node_depth node_root node_left node_right roots order loop_orders snapshots snapshotted signaltypemodelconstantlabelSRCTOKENSNAMESTYPESVALUESMODELSSIGNALSCONSTANTSTABLESEQUATIONSENTRIESGUARDSLABELSLOOPSGROUPSDEPENDENCESSTACKPATHSLOCALSPARSEFINISHITEMSOUTPUTINSTANCESINSTANTIATELOOKUPSROWSROW_DEPENDENCESSEGMENTSLOWERCLOCKSDEFINITIONSOBLIGATIONSPAIRSCLOCK_NAMESCLOCK_TEXTCLOCK_SORTEDGESSCHEDULE_NODESEFFECTSEFFECT_ORDERUNITSMICRO_OPSCODECODE_LABELSDATACODE_TEXT(||)-->:::=^=/=<=>=..|$+*/()=;,?!<>^{}unexpected character 'program exceeds compiler capacity: expected '', found expected a name, found  is a reserved name is the name of a model is declared twiceinteger literal  does not fit in longconstant  is not declaredexpected an integer constant, found array capacity must be strictly positiveexpected a type, found arrays of event are not supportedtype  is external; signals cannot have that typeinput signal  must be a scalararrays cannot be passed to modelsoutput  has an array type; outputs must be scalarunexpected  after the process modelenumerated value  has type  but its definition is a string but its definition is a list but its definition has an element of type  but its definition has type  but its definition has  elementsa conversion in a constant must name an integer typea constant must be defined by an integer literal, a conversion of one, or a list of themonly definitions are allowed inside iterateiterate cannot be nestediterate is not allowed inside a guarded process--> requires signal namesexpected ':=' or '^=', found the initial value of a delay must be a constantexpected a static parameter, found expected an expression, found expected 'then'expected 'else'unbalanced parenthesisexpected an operator, found label automaton  has no input; its control clock is the upper bound of its inputswrong number of arguments for : expected , found  cannot be placed on  cannot be guarded expects a state name of automaton  is not a label of automaton  needs exactly one Automaton_Initial_State is allowed only in an automatonmodel  has no output and cannot be used in an expression has an output and cannot be called as a process is not a state of automaton signal  cannot be used as a signalconversion to  expects one argumentindices expects a positive constantmodel calls are not allowed inside iterateunsafe model  is called from  takes no static parameters calls itself has  outputs; only models with at most one output can be called expects  static parameters, found the word of  must be an integer constantthe resource of  must be an external type accesses an integer or pointer type, found  must fit in 32 bits':' is supported only as the right operand of nextinput 1 of  must be a pointer, found input 2 of store must have type input  of syscall must be an integer or a pointer, found input 1 of instruction must have type ulong, found operator  is not allowed inside iteratean array value can only be the whole definition of a signal[?] applies only to a signal name[?] is allowed only inside iterate[?] refers to a signal the iterate body does not defineindexing a value that is not an arraya range must start at 0the bound of a range must be an integeran array index must be an integernext expects 'index : value' on its rightconstant index  is outside 0..next expects a value of type $ is not supported on arrays expects scalar operandsoperator if expects operands of comparable types, found  and the condition of if must be boolean cannot be inside an if; gate it by its clock or its inputsno conversion from  to  expects a pointer and an integer offset expects integer operands expects operands of comparable types, found  expects operands of one type expects boolean operands expects unsigned operandsthe condition of when must be booleanthe initial value of a delay must match its type is ambiguous has no value the index of iterate must be an array of integersiterate body cannot define its index  in with is not defined by the iterate bodythe initial value of  cannot read a signal the iterate defineswith initializes an array only from an array constant or an array signal cannot be defined is defined twicea range defines an array of integersan array signal must be defined by a constant, indices, a gather, or next is never defineda range can only be the index of iteratea constant has no clockthe argument of $ cannot be a constantclock of  fits no tree: it relates root clocks  has two definitions that cannot be shown equalclocks of  are defined in terms of each otherthe clocks of guards  depend on each other cannot be shown inside the clock  must have a root of its owncausality cycle between signals causality cycle between effects at causality cycle between clockseffects  on resource  have no order between them; order them with -->arrays need more than 2^64 bytes of address spacepragmas are allowed only on the top modelpragma  is not supported; use Interrupt, Boot or Machineexpected 'end pragmas', found Interrupt expects an interrupt number in quotes, found interrupt number  must be a decimal from 16 to 31interrupt  is used twicepragma Boot is used twicepragma object  is not an input signal named by a pragma must be event is named by two pragmas must be named by an Interrupt or Boot pragmathe root clock of  is not the clock of an Interrupt or Boot inputsyscall is not available on QEMU virta program with Interrupt pragmas needs a Boot pragma to enable theminput signals  share one root clock; each Interrupt or Boot input needs its ownmachine  is not supported; use mps2-an385pragma Machine is used twice must be a decimal from 15 to 47syscall is not available on mps2-an385the program needs more than the 4 MiB of RAM on mps2-an385notwhenifdefaultxororandmoduloshlshrnextROOTSAMPLEPRODUCTSUMinvalid start byteinvalid continuation byteunexpected end of data000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeffmovz xmovz wmovk xmovk wadd x immadd w immsub x immsub w immsubs x immsubs w immadd xadds xsub xsubs xand xand worr xorr weor xorn xeor x onelslv xlsrv xsdiv xudiv xmul xmsub xumulh xcsel xcsinc wcsneg xldr xldr wldrsw xldrh wldrsh xldrb wstr xstr wstrh wstrb wldr x regldr w regldrsw x regldrh w regldrsh x regldrb w regstr x regstr w regstrh w regstrb w regldr x poststr x poststr w poststrb w postldrb w prebblb.condcbz wcbz xcbnz xadrpretsvc 0x80wordwfimovwmovtmovw addressmovt addressaddwsubwand.worr.worrs.weor.wadd.w shiftedadds.wadc.wadcs.wsbc.wsbcs.wsubs.wmov.wmvn.wlsl.wlsr.wlsl.w immlsr.w immasr.w immumullmlasubs.w immadds.w immadc.w immsbcs.w immrsb.w immeor.w immorr.w immldr.wldrb.wldrh.wldrsh.wstr.wstrb.wstrh.wldrdstrdldrd poststrd poststrb postldrb postldrb prestr preldr postb.wb.n skipbx lrwfi.wmsr primaskthumb word";
+    constant [864] short FRAGMENT_START = [
         0, 0, 1, 10, 16, 17, 37, 39, 40, 43, 56, 60, 61, 62, 64, 66, 69, 71, 76, 81, 89, 101, 107, 113,
         117, 118, 119, 124, 139, 143, 194, 207, 231, 233, 250, 297, 355, 368, 370, 371, 396, 402, 408, 414, 422, 429, 433, 439,
         445, 451, 454, 459, 465, 474, 478, 483, 487, 492, 495, 498, 503, 508, 510, 516, 523, 527, 530, 532, 535, 537, 539, 541,
@@ -7087,23 +7238,25 @@ process SIGC =
         4319, 4346, 4359, 4364, 4423, 4432, 4458, 4470, 4498, 4514, 4539, 4583, 4603, 4653, 4664, 4690, 4722, 4728, 4779, 4830, 4839, 4869, 4928, 4961,
         4995, 5050, 5087, 5110, 5149, 5182, 5223, 5238, 5253, 5282, 5310, 5334, 5390, 5395, 5430, 5489, 5508, 5512, 5552, 5577, 5622, 5651, 5676, 5702,
         5739, 5787, 5800, 5814, 5863, 5900, 5943, 5964, 6005, 6077, 6095, 6112, 6148, 6221, 6238, 6278, 6301, 6339, 6348, 6386, 6433, 6443, 6478, 6499,
-        6520, 6554, 6582, 6614, 6649, 6679, 6687, 6700, 6748, 6797, 6838, 6845, 6885, 6915, 6970, 6987, 7019, 7029, 7043, 7068, 7082, 7105, 7137, 7161,
-        7206, 7224, 7271, 7308, 7375, 7389, 7454, 7457, 7461, 7463, 7470, 7473, 7475, 7478, 7484, 7487, 7490, 7494, 7498, 7504, 7511, 7514, 7532, 7557,
-        7579, 7581, 7583, 7585, 7587, 7589, 7591, 7593, 7595, 7597, 7599, 7601, 7603, 7605, 7607, 7609, 7611, 7613, 7615, 7617, 7619, 7621, 7623, 7625,
-        7627, 7629, 7631, 7633, 7635, 7637, 7639, 7641, 7643, 7645, 7647, 7649, 7651, 7653, 7655, 7657, 7659, 7661, 7663, 7665, 7667, 7669, 7671, 7673,
-        7675, 7677, 7679, 7681, 7683, 7685, 7687, 7689, 7691, 7693, 7695, 7697, 7699, 7701, 7703, 7705, 7707, 7709, 7711, 7713, 7715, 7717, 7719, 7721,
-        7723, 7725, 7727, 7729, 7731, 7733, 7735, 7737, 7739, 7741, 7743, 7745, 7747, 7749, 7751, 7753, 7755, 7757, 7759, 7761, 7763, 7765, 7767, 7769,
-        7771, 7773, 7775, 7777, 7779, 7781, 7783, 7785, 7787, 7789, 7791, 7793, 7795, 7797, 7799, 7801, 7803, 7805, 7807, 7809, 7811, 7813, 7815, 7817,
-        7819, 7821, 7823, 7825, 7827, 7829, 7831, 7833, 7835, 7837, 7839, 7841, 7843, 7845, 7847, 7849, 7851, 7853, 7855, 7857, 7859, 7861, 7863, 7865,
-        7867, 7869, 7871, 7873, 7875, 7877, 7879, 7881, 7883, 7885, 7887, 7889, 7891, 7893, 7895, 7897, 7899, 7901, 7903, 7905, 7907, 7909, 7911, 7913,
-        7915, 7917, 7919, 7921, 7923, 7925, 7927, 7929, 7931, 7933, 7935, 7937, 7939, 7941, 7943, 7945, 7947, 7949, 7951, 7953, 7955, 7957, 7959, 7961,
-        7963, 7965, 7967, 7969, 7971, 7973, 7975, 7977, 7979, 7981, 7983, 7985, 7987, 7989, 7991, 7993, 7995, 7997, 7999, 8001, 8003, 8005, 8007, 8009,
-        8011, 8013, 8015, 8017, 8019, 8021, 8023, 8025, 8027, 8029, 8031, 8033, 8035, 8037, 8039, 8041, 8043, 8045, 8047, 8049, 8051, 8053, 8055, 8057,
-        8059, 8061, 8063, 8065, 8067, 8069, 8071, 8073, 8075, 8077, 8079, 8081, 8083, 8085, 8087, 8089, 8091, 8097, 8103, 8109, 8115, 8124, 8133, 8142,
-        8151, 8161, 8171, 8176, 8182, 8187, 8193, 8198, 8203, 8208, 8213, 8218, 8223, 8232, 8238, 8244, 8250, 8256, 8261, 8267, 8274, 8280, 8287, 8294,
-        8299, 8304, 8311, 8317, 8324, 8330, 8335, 8340, 8346, 8352, 8361, 8370, 8381, 8391, 8402, 8412, 8421, 8430, 8440, 8450, 8460, 8470, 8480, 8491,
-        8501, 8502, 8504, 8510, 8515, 8520, 8526, 8530, 8533, 8541, 8545];
-    constant [803] short FRAGMENT_LENGTH = [
+        6520, 6554, 6582, 6614, 6649, 6679, 6687, 6700, 6748, 6797, 6838, 6845, 6894, 6924, 6979, 6996, 7028, 7038, 7052, 7077, 7091, 7114, 7146, 7170,
+        7215, 7233, 7280, 7317, 7384, 7398, 7463, 7471, 7504, 7532, 7564, 7602, 7660, 7663, 7667, 7669, 7676, 7679, 7681, 7684, 7690, 7693, 7696, 7700,
+        7704, 7710, 7717, 7720, 7738, 7763, 7785, 7787, 7789, 7791, 7793, 7795, 7797, 7799, 7801, 7803, 7805, 7807, 7809, 7811, 7813, 7815, 7817, 7819,
+        7821, 7823, 7825, 7827, 7829, 7831, 7833, 7835, 7837, 7839, 7841, 7843, 7845, 7847, 7849, 7851, 7853, 7855, 7857, 7859, 7861, 7863, 7865, 7867,
+        7869, 7871, 7873, 7875, 7877, 7879, 7881, 7883, 7885, 7887, 7889, 7891, 7893, 7895, 7897, 7899, 7901, 7903, 7905, 7907, 7909, 7911, 7913, 7915,
+        7917, 7919, 7921, 7923, 7925, 7927, 7929, 7931, 7933, 7935, 7937, 7939, 7941, 7943, 7945, 7947, 7949, 7951, 7953, 7955, 7957, 7959, 7961, 7963,
+        7965, 7967, 7969, 7971, 7973, 7975, 7977, 7979, 7981, 7983, 7985, 7987, 7989, 7991, 7993, 7995, 7997, 7999, 8001, 8003, 8005, 8007, 8009, 8011,
+        8013, 8015, 8017, 8019, 8021, 8023, 8025, 8027, 8029, 8031, 8033, 8035, 8037, 8039, 8041, 8043, 8045, 8047, 8049, 8051, 8053, 8055, 8057, 8059,
+        8061, 8063, 8065, 8067, 8069, 8071, 8073, 8075, 8077, 8079, 8081, 8083, 8085, 8087, 8089, 8091, 8093, 8095, 8097, 8099, 8101, 8103, 8105, 8107,
+        8109, 8111, 8113, 8115, 8117, 8119, 8121, 8123, 8125, 8127, 8129, 8131, 8133, 8135, 8137, 8139, 8141, 8143, 8145, 8147, 8149, 8151, 8153, 8155,
+        8157, 8159, 8161, 8163, 8165, 8167, 8169, 8171, 8173, 8175, 8177, 8179, 8181, 8183, 8185, 8187, 8189, 8191, 8193, 8195, 8197, 8199, 8201, 8203,
+        8205, 8207, 8209, 8211, 8213, 8215, 8217, 8219, 8221, 8223, 8225, 8227, 8229, 8231, 8233, 8235, 8237, 8239, 8241, 8243, 8245, 8247, 8249, 8251,
+        8253, 8255, 8257, 8259, 8261, 8263, 8265, 8267, 8269, 8271, 8273, 8275, 8277, 8279, 8281, 8283, 8285, 8287, 8289, 8291, 8293, 8295, 8297, 8303,
+        8309, 8315, 8321, 8330, 8339, 8348, 8357, 8367, 8377, 8382, 8388, 8393, 8399, 8404, 8409, 8414, 8419, 8424, 8429, 8438, 8444, 8450, 8456, 8462,
+        8467, 8473, 8480, 8486, 8493, 8500, 8505, 8510, 8517, 8523, 8530, 8536, 8541, 8546, 8552, 8558, 8567, 8576, 8587, 8597, 8608, 8618, 8627, 8636,
+        8646, 8656, 8666, 8676, 8686, 8697, 8707, 8708, 8710, 8716, 8721, 8726, 8732, 8736, 8739, 8747, 8751, 8754, 8758, 8762, 8774, 8786, 8790, 8794,
+        8799, 8804, 8810, 8815, 8828, 8834, 8839, 8845, 8850, 8856, 8862, 8867, 8872, 8877, 8882, 8891, 8900, 8909, 8914, 8917, 8927, 8937, 8946, 8956,
+        8965, 8974, 8983, 8988, 8994, 9000, 9007, 9012, 9018, 9024, 9028, 9032, 9041, 9050, 9059, 9068, 9076, 9083, 9091, 9094, 9102, 9107, 9112, 9123];
+    constant [864] short FRAGMENT_LENGTH = [
         0, 1, 9, 6, 1, 20, 2, 1, 3, 13, 4, 1, 1, 2, 2, 3, 2, 5, 5, 8, 12, 6, 6, 4,
         1, 1, 5, 15, 4, 51, 13, 24, 2, 17, 47, 58, 13, 2, 1, 25, 6, 6, 6, 8, 7, 4, 6, 6,
         6, 3, 5, 6, 9, 4, 5, 4, 5, 3, 3, 5, 5, 2, 6, 7, 4, 3, 2, 3, 2, 2, 2, 2,
@@ -7122,8 +7275,9 @@ process SIGC =
         27, 13, 5, 59, 9, 26, 12, 28, 16, 25, 44, 20, 50, 11, 26, 32, 6, 51, 51, 9, 30, 59, 33, 34,
         55, 37, 23, 39, 33, 41, 15, 15, 29, 28, 24, 56, 5, 35, 59, 19, 4, 40, 25, 45, 29, 25, 26, 37,
         48, 13, 14, 49, 37, 43, 21, 41, 72, 18, 17, 36, 73, 17, 40, 23, 38, 9, 38, 47, 10, 35, 21, 21,
-        34, 28, 32, 35, 30, 8, 13, 48, 49, 41, 7, 40, 30, 55, 17, 32, 10, 14, 25, 14, 23, 32, 24, 45,
-        18, 47, 37, 67, 14, 65, 3, 4, 2, 7, 3, 2, 3, 6, 3, 3, 4, 4, 6, 7, 3, 18, 25, 22,
+        34, 28, 32, 35, 30, 8, 13, 48, 49, 41, 7, 49, 30, 55, 17, 32, 10, 14, 25, 14, 23, 32, 24, 45,
+        18, 47, 37, 67, 14, 65, 8, 33, 28, 32, 38, 58, 3, 4, 2, 7, 3, 2, 3, 6, 3, 3, 4, 4,
+        6, 7, 3, 18, 25, 22, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
@@ -7133,11 +7287,12 @@ process SIGC =
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 6, 6, 6, 6, 9, 9, 9, 9,
-        10, 10, 5, 6, 5, 6, 5, 5, 5, 5, 5, 5, 9, 6, 6, 6, 6, 5, 6, 7, 6, 7, 7, 5,
-        5, 7, 6, 7, 6, 5, 5, 6, 6, 9, 9, 11, 10, 11, 10, 9, 9, 10, 10, 10, 10, 10, 11, 10,
-        1, 2, 6, 5, 5, 6, 4, 3, 8, 4, 3];
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 6, 6,
+        6, 6, 9, 9, 9, 9, 10, 10, 5, 6, 5, 6, 5, 5, 5, 5, 5, 5, 9, 6, 6, 6, 6, 5,
+        6, 7, 6, 7, 7, 5, 5, 7, 6, 7, 6, 5, 5, 6, 6, 9, 9, 11, 10, 11, 10, 9, 9, 10,
+        10, 10, 10, 10, 11, 10, 1, 2, 6, 5, 5, 6, 4, 3, 8, 4, 3, 4, 4, 12, 12, 4, 4, 5,
+        5, 6, 5, 13, 6, 5, 6, 5, 6, 6, 5, 5, 5, 5, 9, 9, 9, 5, 3, 10, 10, 9, 10, 9,
+        9, 9, 5, 6, 6, 7, 5, 6, 6, 4, 4, 9, 9, 9, 9, 8, 7, 8, 3, 8, 5, 5, 11, 10];
     constant integer BUILTIN_EVENT = 0;
     constant integer BUILTIN_BOOLEAN = 1;
     constant integer BUILTIN_SHORT = 2;
@@ -7405,8 +7560,8 @@ process SIGC =
         0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1];
     constant [48] short OP_TEXT_FRAGMENT = [
-        0, 0, 0, 0, 273, 0, 0, 38, 462, 463, 286, 464, 464, 465, 463, 466, 467, 468, 279, 268, 284, 269, 285, 270,
-        274, 38, 275, 276, 469, 470, 471, 472, 1, 271, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        0, 0, 0, 0, 273, 0, 0, 38, 468, 469, 286, 470, 470, 471, 469, 472, 473, 474, 279, 268, 284, 269, 285, 270,
+        274, 38, 275, 276, 475, 476, 477, 478, 1, 271, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     constant integer COL_ROWS_OP = 54;
     constant integer COL_ROWS_LEFT = 55;
     constant integer COL_ROWS_RIGHT = 56;
@@ -7543,7 +7698,7 @@ process SIGC =
         72, 73, 74, 75, 76, 77, 78, 1, 2, 3, 4, 5, 6, 7, 22, 23, 79, 80, 81, 82, 83, 84, 85, 86,
         87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102];
     constant [5] short CLOCK_KIND_FRAGMENT = [
-        10, 473, 474, 475, 476];
+        10, 479, 480, 481, 482];
     constant integer ORDER_CLOCKS_START = 88;
     constant integer ORDER_CLOCKS_END = 108;
     constant integer COL_PARENT = 79;
@@ -7786,14 +7941,14 @@ process SIGC =
     constant integer ES_LOCAL3 = 58;
     constant integer ES_LOCAL4 = 59;
     constant integer ES_PUT_OUTPUT = 60;
-    constant integer ES_MALFORMED = 62;
-    constant integer ES_RESERVE_FAILED = 63;
-    constant integer ES_READ_VALUE = 64;
-    constant integer ES_PUT_INT = 65;
-    constant integer ES_PUT_UINT = 66;
-    constant integer ES_PUT_BOOL = 67;
-    constant integer ES_STEP = 68;
-    constant integer ES_READ_DONE = 69;
+    constant integer ES_MALFORMED = 69;
+    constant integer ES_RESERVE_FAILED = 70;
+    constant integer ES_READ_VALUE = 71;
+    constant integer ES_PUT_INT = 72;
+    constant integer ES_PUT_UINT = 73;
+    constant integer ES_PUT_BOOL = 74;
+    constant integer ES_STEP = 75;
+    constant integer ES_READ_DONE = 76;
     constant integer EP_ALWAYS = 0;
     constant integer EP_FLAG = 1;
     constant integer EP_HAS_ARG1 = 2;
@@ -7859,21 +8014,27 @@ process SIGC =
     constant integer ET_OUTPUT = 49;
     constant integer ET_OUTPUT_TAIL = 50;
     constant integer ET_FINISH = 51;
-    constant integer GLOBAL_LABEL_COUNT = 10;
-    constant integer ET_COUNT = 61;
-    constant [61] integer ET_START = [
+    constant integer GLOBAL_LABEL_COUNT = 11;
+    constant integer ET_COUNT = 108;
+    constant [108] integer ET_START = [
         0, 3, 13, 22, 23, 33, 69, 71, 110, 121, 147, 149, 158, 166, 176, 181, 183, 187, 191, 202, 207, 213, 219, 232,
         239, 244, 250, 255, 267, 287, 306, 311, 316, 321, 330, 339, 345, 352, 359, 366, 373, 380, 387, 395, 403, 416, 424, 433,
-        438, 440, 451, 459, 499, 503, 507, 509, 513, 515, 521, 524, 537];
-    constant [61] integer ET_LENGTH = [
+        438, 440, 451, 459, 499, 503, 507, 509, 513, 515, 521, 524, 537, 587, 595, 600, 602, 612, 615, 636, 637, 641, 657, 666,
+        682, 688, 692, 696, 710, 717, 725, 733, 741, 749, 757, 764, 781, 807, 831, 838, 845, 853, 869, 883, 891, 902, 911, 921,
+        936, 962, 971, 990, 1009, 1045, 1056, 1086, 1093, 1095, 1108, 1120];
+    constant [108] integer ET_LENGTH = [
         3, 10, 9, 1, 10, 36, 2, 39, 11, 26, 2, 9, 8, 10, 5, 2, 4, 4, 11, 5, 6, 6, 13, 7,
         5, 6, 5, 12, 20, 19, 5, 5, 5, 9, 9, 6, 7, 7, 7, 7, 7, 7, 8, 8, 13, 8, 9, 5,
-        2, 11, 8, 40, 4, 4, 2, 4, 2, 6, 3, 13, 50];
-    constant [61] integer ET_LABELS = [
+        2, 11, 8, 40, 4, 4, 2, 4, 2, 6, 3, 13, 50, 8, 5, 2, 10, 3, 21, 1, 4, 16, 9, 16,
+        6, 4, 4, 14, 7, 8, 8, 8, 8, 8, 7, 17, 26, 24, 7, 7, 8, 16, 14, 8, 11, 9, 10, 15,
+        26, 9, 19, 19, 36, 11, 30, 7, 2, 13, 12, 93];
+    constant [108] integer ET_LABELS = [
         0, 0, 0, 0, 0, 4, 0, 5, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 1, 1, 1, 1, 1,
         1, 1, 1, 2, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        0, 2, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3];
-    constant [587] integer STEP_KIND = [
+        0, 2, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0, 0, 0, 2, 1, 1, 1, 1, 1, 1, 1, 2, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 2, 1, 1, 1, 0, 2, 1, 4];
+    constant [1213] integer STEP_KIND = [
         0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 6,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0,
         6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 6, 0, 6, 0, 0,
@@ -7898,8 +8059,34 @@ process SIGC =
         0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0,
         0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 6, 0,
         0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [587] integer STEP_WHEN = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 2, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 6, 5, 5, 1, 6, 0, 0, 0, 0, 0, 0, 4, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 1, 0, 0, 0, 6, 1, 0, 0, 0, 0, 3, 2, 4, 0, 3, 2, 2, 0, 3,
+        2, 0, 0, 0, 5, 5, 1, 6, 0, 0, 0, 0, 0, 6, 2, 0, 0, 0, 4, 3, 6, 2, 0, 0,
+        0, 4, 7, 3, 6, 2, 0, 0, 0, 4, 4, 8, 6, 2, 0, 0, 0, 4, 0, 3, 6, 2, 0, 0,
+        0, 0, 0, 3, 6, 2, 0, 0, 0, 5, 7, 3, 6, 2, 0, 0, 0, 2, 3, 6, 2, 0, 0, 0,
+        5, 4, 1, 0, 0, 0, 0, 0, 0, 7, 6, 3, 6, 2, 0, 0, 0, 5, 5, 5, 0, 6, 7, 0,
+        0, 1, 0, 0, 0, 0, 7, 6, 8, 0, 1, 0, 0, 0, 6, 2, 0, 0, 0, 5, 5, 1, 6, 0,
+        0, 0, 0, 0, 5, 4, 4, 1, 0, 0, 0, 0, 8, 6, 6, 2, 0, 0, 0, 4, 3, 6, 2, 0,
+        0, 0, 2, 3, 6, 2, 0, 0, 0, 0, 0, 3, 6, 2, 0, 0, 0, 4, 4, 4, 0, 0, 0, 0,
+        0, 0, 0, 3, 6, 2, 0, 0, 0, 2, 4, 4, 0, 0, 0, 0, 0, 3, 6, 2, 0, 0, 0, 4,
+        4, 3, 6, 2, 0, 0, 0, 4, 4, 0, 0, 0, 3, 6, 2, 0, 0, 0, 4, 4, 0, 3, 6, 2,
+        0, 0, 0, 4, 4, 0, 0, 3, 6, 2, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 3, 6,
+        2, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        3, 6, 2, 0, 0, 0, 4, 4, 0, 3, 6, 2, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 3, 6, 2, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3,
+        6, 2, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 3, 6, 2, 0, 0, 0, 4, 4, 0, 0, 0, 3, 6,
+        2, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 3, 6, 2, 0, 0, 0, 2, 3, 6, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0,
+        6, 0, 0, 6, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0,
+        0, 0, 6, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 6,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    constant [1213] integer STEP_WHEN = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -7924,8 +8111,34 @@ process SIGC =
         0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [587] integer STEP_FORM = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 9, 9, 9, 9, 9,
+        9, 9, 9, 9, 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 9, 9, 9, 9,
+        9, 9, 9, 9, 9, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1,
+        1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1,
+        1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 12, 12, 12, 12, 12,
+        12, 12, 12, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1,
+        1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0,
+        8, 0, 1, 1, 1, 1, 1, 0, 8, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 8, 0, 0, 1, 1,
+        1, 1, 1, 0, 8, 0, 0, 0, 1, 1, 1, 1, 1, 0, 8, 14, 14, 13, 13, 13, 13, 13, 0, 1,
+        1, 1, 1, 1, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 1, 1, 1, 1, 1, 0, 8, 0, 0, 1, 1, 1, 1, 1, 0, 8, 15, 15, 15, 16, 16, 17, 17,
+        0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 8, 15, 15, 15, 16, 16, 17, 17, 0, 0, 0, 0, 0,
+        1, 1, 1, 1, 1, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 8, 0, 0, 0, 0, 1,
+        1, 1, 1, 1, 0, 8, 18, 18, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19, 19, 19, 0, 0,
+        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    constant [1213] integer STEP_FORM = [
         16, 16, 0, 0, 0, 0, 0, 19, 0, 0, 64, 58, 16, 0, 10, 62, 37, 0, 0, 0, 64, 58, 56, 0,
         0, 62, 4, 0, 0, 64, 0, 0, 64, 0, 46, 9, 58, 4, 0, 46, 9, 58, 0, 4, 0, 0, 0, 0,
         0, 46, 7, 9, 58, 27, 61, 25, 11, 58, 4, 4, 56, 0, 60, 8, 58, 60, 12, 0, 63, 0, 4, 62,
@@ -7950,8 +8163,34 @@ process SIGC =
         4, 62, 37, 0, 56, 0, 66, 0, 32, 9, 58, 0, 9, 58, 0, 38, 56, 9, 29, 0, 1, 54, 62, 4,
         12, 0, 0, 0, 46, 38, 4, 13, 58, 56, 0, 8, 58, 1, 54, 12, 0, 16, 6, 4, 4, 0, 0, 24,
         26, 5, 54, 16, 61, 0, 55, 54, 13, 58, 4, 63, 0, 59, 1, 54, 1, 54, 1, 54, 1, 54, 63, 0,
-        1, 54, 1, 54, 1, 54, 1, 54, 1, 54, 63];
-    constant [587] integer STEP_A0 = [
+        1, 54, 1, 54, 1, 54, 1, 54, 1, 54, 63, 67, 121, 67, 68, 67, 104, 67, 104, 69, 70, 69, 70, 104,
+        67, 116, 0, 120, 67, 68, 100, 88, 89, 93, 118, 116, 93, 118, 116, 0, 93, 118, 116, 67, 68, 67, 68, 104,
+        116, 0, 93, 118, 116, 72, 67, 86, 67, 68, 104, 116, 0, 0, 93, 118, 116, 67, 1, 1, 83, 82, 118, 84,
+        118, 84, 94, 95, 93, 96, 118, 116, 0, 0, 0, 0, 0, 109, 110, 93, 118, 116, 71, 1, 1, 83, 82, 118,
+        84, 118, 84, 94, 95, 0, 83, 118, 116, 0, 0, 83, 67, 118, 67, 0, 0, 0, 73, 0, 0, 0, 1048576, 0,
+        0, 93, 118, 116, 0, 0, 0, 0, 109, 110, 93, 118, 116, 0, 0, 93, 118, 116, 1, 1, 0, 0, 93, 118,
+        116, 0, 1, 1, 0, 0, 93, 118, 116, 0, 1, 1, 0, 0, 93, 118, 116, 1, 122, 1, 0, 0, 93, 118,
+        116, 84, 67, 1, 0, 0, 93, 118, 116, 0, 1, 1, 0, 0, 93, 118, 116, 1, 1, 0, 0, 93, 118, 116,
+        0, 1, 1, 67, 67, 83, 82, 118, 116, 1, 0, 1, 0, 0, 93, 118, 116, 0, 0, 0, 67, 0, 1, 67,
+        67, 1, 83, 82, 118, 116, 1, 0, 1, 71, 0, 83, 118, 116, 0, 0, 93, 118, 116, 0, 0, 0, 0, 109,
+        110, 93, 118, 116, 0, 1, 1, 1, 83, 82, 118, 116, 1, 0, 0, 0, 93, 118, 116, 1, 1, 0, 0, 93,
+        118, 116, 1, 1, 0, 0, 93, 118, 116, 67, 67, 1, 0, 0, 93, 118, 116, 0, 1, 1, 93, 84, 84, 118,
+        84, 118, 84, 1, 0, 0, 93, 118, 116, 0, 1, 1, 93, 118, 84, 118, 84, 1, 0, 0, 93, 118, 116, 1,
+        1, 1, 0, 0, 93, 118, 116, 1, 1, 67, 83, 81, 1, 0, 0, 93, 118, 116, 1, 1, 98, 1, 0, 0,
+        93, 118, 116, 1, 1, 85, 85, 1, 0, 0, 93, 118, 116, 1, 1, 1048576, 1048576, 91, 92, 92, 84, 84, 1, 0,
+        0, 93, 118, 116, 1, 1, 90, 90, 76, 76, 83, 81, 76, 76, 83, 81, 76, 114, 117, 115, 76, 76, 83, 81,
+        1, 0, 0, 93, 118, 116, 1, 1, 117, 1, 0, 0, 93, 118, 116, 1, 1, 76, 76, 75, 83, 82, 83, 82,
+        67, 67, 118, 67, 1, 0, 0, 93, 118, 116, 1, 1, 76, 76, 75, 83, 82, 83, 82, 67, 67, 118, 67, 1,
+        0, 0, 93, 118, 116, 1, 1, 90, 90, 76, 76, 83, 81, 76, 76, 83, 81, 114, 114, 114, 117, 115, 109, 84,
+        84, 76, 76, 83, 81, 93, 118, 116, 78, 79, 0, 1, 0, 0, 93, 118, 116, 1, 1, 117, 84, 84, 1, 0,
+        0, 93, 118, 116, 1, 1, 86, 97, 87, 74, 72, 86, 74, 86, 87, 97, 86, 74, 72, 87, 74, 87, 93, 96,
+        118, 67, 118, 67, 1, 0, 0, 93, 118, 116, 1, 1, 0, 69, 70, 67, 111, 0, 93, 118, 116, 1, 117, 116,
+        0, 67, 111, 0, 67, 111, 69, 70, 67, 68, 0, 112, 104, 83, 118, 116, 116, 0, 93, 118, 116, 67, 111, 67,
+        83, 81, 0, 114, 72, 71, 0, 67, 67, 117, 71, 111, 75, 118, 116, 0, 113, 111, 83, 118, 116, 71, 115, 0,
+        93, 118, 116, 67, 111, 67, 111, 67, 111, 67, 111, 119, 0, 67, 111, 67, 111, 67, 111, 67, 111, 67, 111, 119,
+        0, 75, 118, 84, 118, 84, 118, 67, 118, 67, 118, 119, 67, 67, 67, 0, 78, 80, 80, 80, 67, 95, 83, 82,
+        96, 118, 84, 118, 84, 118, 99, 93, 118, 116, 84, 84, 119];
+    constant [1213] integer STEP_A0 = [
         25, 26, 22, 0, 1, 2, 3, 4, 5, 16, 0, 0, 24, 9, 0, 8, 0, 1, 2, 16, 0, 0, 0, 1048576,
         0, 1, 1, 2, 16, 0, 0, 16, 0, 1048576, 9, 31, 0, 19, 11, 9, 31, 0, 11, 19, 1048576, 0, 12, 13,
         1048576, 9, 9, 31, 0, 14, 14, 0, 0, 0, 19, 12, 0, 1048576, 12, 31, 0, 11, 0, 1048576, 0, 1048576, 22, 21,
@@ -7976,8 +8215,34 @@ process SIGC =
         0, 8, 0, 21, 0, 1048576, 0, 9, 21, 31, 0, 1048576, 31, 0, 9, 21, 0, 31, 9, 9, 10, 10, 1, 1,
         2, 9, 11, 1048576, 10, 10, 11, 31, 0, 0, 1048576, 31, 0, 10, 10, 0, 1048576, 9, 31, 11, 15, 12, 1048576, 13,
         14, 14, 14, 9, 9, 1048576, 14, 14, 31, 0, 31, 0, 1048576, 0, 9, 9, 9, 9, 9, 9, 9, 9, 0, 1048576,
-        9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 0];
-    constant [587] integer STEP_A1 = [
+        9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 0, 0, 0, 6, 6, 0, 0, 0, 0, 0, 0, 14, 14, 0,
+        11, 0, 1048576, 0, 6, 6, 11, 11, 11, 15, 0, 0, 15, 0, 0, 1048576, 15, 0, 0, 6, 6, 0, 0, 0,
+        0, 1048576, 15, 0, 0, 0, 1, 1, 6, 6, 1, 0, 1048576, 0, 15, 0, 0, 12, 4, 2, 14, 14, 0, 4,
+        0, 5, 4, 5, 14, 14, 0, 0, 1048576, 6, 7, 9, 1048576, 0, 0, 9, 0, 0, 12, 4, 2, 14, 14, 0,
+        4, 0, 5, 4, 5, 4, 15, 0, 0, 1048576, 6, 15, 0, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0,
+        0, 15, 0, 0, 6, 7, 9, 1048576, 0, 0, 9, 0, 0, 1048576, 0, 15, 0, 0, 0, 0, 1048576, 0, 15, 0,
+        0, 0, 0, 0, 1048576, 0, 15, 0, 0, 6, 2, 2, 1048576, 0, 15, 0, 0, 0, 0, 0, 1048576, 0, 15, 0,
+        0, 0, 1, 0, 1048576, 0, 15, 0, 0, 6, 0, 0, 1048576, 0, 15, 0, 0, 0, 0, 1048576, 0, 15, 0, 0,
+        6, 2, 4, 0, 1, 14, 14, 0, 0, 0, 1048576, 0, 1048576, 0, 15, 0, 0, 6, 7, 8, 9, 1048576, 2, 0,
+        1, 4, 14, 14, 0, 0, 0, 1048576, 0, 9, 14, 15, 0, 0, 1048576, 0, 15, 0, 0, 6, 7, 9, 1048576, 0,
+        0, 9, 0, 0, 6, 2, 0, 4, 14, 14, 0, 0, 0, 1048576, 1048576, 0, 15, 0, 0, 0, 0, 1048576, 0, 15,
+        0, 0, 0, 0, 1048576, 0, 15, 0, 0, 0, 1, 0, 1048576, 0, 15, 0, 0, 0, 2, 4, 15, 0, 1, 0,
+        0, 0, 1, 0, 1048576, 0, 15, 0, 0, 4, 0, 2, 15, 0, 0, 0, 1, 0, 1048576, 0, 15, 0, 0, 0,
+        2, 0, 1048576, 0, 15, 0, 0, 0, 2, 14, 0, 1, 0, 1048576, 0, 15, 0, 0, 0, 2, 0, 0, 1048576, 0,
+        15, 0, 0, 0, 2, 0, 1, 0, 1048576, 0, 15, 0, 0, 0, 2, 0, 1, 4, 5, 5, 0, 1, 0, 1048576,
+        0, 15, 0, 0, 0, 2, 8, 9, 0, 1, 0, 1, 2, 3, 2, 3, 8, 8, 0, 8, 0, 1, 0, 1,
+        0, 1048576, 0, 15, 0, 0, 0, 2, 0, 0, 1048576, 0, 15, 0, 0, 0, 2, 4, 5, 4, 14, 14, 14, 14,
+        0, 1, 0, 0, 0, 1048576, 0, 15, 0, 0, 0, 2, 4, 5, 4, 14, 14, 14, 14, 0, 1, 0, 0, 0,
+        1048576, 0, 15, 0, 0, 0, 2, 8, 9, 0, 1, 0, 1, 2, 3, 2, 3, 3, 2, 8, 0, 8, 4, 0,
+        1, 0, 1, 0, 1, 15, 0, 0, 0, 1, 1048576, 0, 1048576, 0, 15, 0, 0, 0, 2, 0, 0, 1, 0, 1048576,
+        0, 15, 0, 0, 0, 2, 4, 5, 6, 4, 5, 6, 1, 0, 4, 5, 6, 4, 5, 6, 0, 1, 14, 14,
+        0, 0, 0, 1, 0, 1048576, 0, 15, 0, 0, 0, 0, 1048576, 10, 10, 2, 2, 0, 15, 0, 0, 0, 0, 0,
+        1048576, 2, 2, 1048576, 2, 2, 6, 6, 7, 7, 1048576, 2, 2, 15, 0, 0, 0, 1048576, 15, 0, 0, 2, 2, 2,
+        0, 1, 1048576, 14, 13, 12, 1048576, 2, 3, 0, 2, 2, 4, 0, 0, 1048576, 2, 2, 15, 0, 0, 13, 15, 1048576,
+        15, 0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 0, 1048576, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0,
+        1048576, 4, 0, 2, 0, 3, 0, 0, 0, 1, 0, 0, 4, 5, 9, 1048576, 0, 1, 4, 5, 8, 8, 6, 7,
+        8, 0, 4, 0, 5, 0, 0, 9, 0, 0, 2, 3, 0];
+    constant [1213] integer STEP_A1 = [
         31, 31, 0, 0, 1048576, 0, 0, 31, 0, 0, 0, 0, 31, 1048576, 24, 0, 8, 1048576, 0, 0, 0, 0, 0, 0,
         0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 21, 9, 0, 19, 0, 21, 9, 0, 0, 19, 0, 0, 0, 0,
         0, 21, 9, 9, 0, 0, 0, 0, 0, 0, 19, 12, 0, 0, 0, 12, 0, 0, 31, 0, 0, 0, 22, 0,
@@ -8002,8 +8267,34 @@ process SIGC =
         0, 0, 8, 0, 0, 0, 0, 0, 9, 21, 0, 0, 21, 0, 0, 9, 0, 21, 31, 7, 0, 20, 0, 1,
         20, 0, 0, 0, 1, 9, 11, 11, 0, 0, 0, 0, 0, 0, 20, 31, 0, 31, 31, 31, 31, 0, 0, 9,
         13, 14, 11, 31, 0, 0, 11, 20, 11, 0, 31, 0, 0, 0, 0, 20, 0, 20, 0, 20, 0, 20, 0, 0,
-        0, 20, 0, 20, 0, 20, 0, 20, 0, 20, 0];
-    constant [587] integer STEP_A2 = [
+        0, 20, 0, 20, 0, 20, 0, 20, 0, 20, 0, 0, 0, 0, 0, 0, 6, 0, 6, 0, 0, 0, 0, 14,
+        0, 0, 0, 0, 0, 0, 6, 11, 11, 11, 0, 0, 11, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 6,
+        0, 0, 11, 0, 0, 11, 0, 1, 0, 0, 6, 0, 0, 7, 0, 0, 0, 0, 1048576, 1048576, 4, 5, 0, 2,
+        0, 3, 4, 5, 4, 5, 0, 0, 0, 1048576, 1048576, 1048576, 0, 6, 7, 9, 0, 0, 12, 1048576, 1048576, 4, 5, 0,
+        2, 0, 3, 4, 5, 1048576, 12, 0, 0, 0, 1048576, 11, 0, 0, 0, 7, 7, 1048576, 0, 7, 7, 7, 0, 7,
+        7, 0, 0, 0, 1048576, 1048576, 1048576, 0, 6, 7, 9, 0, 0, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 7, 0, 0,
+        0, 1048576, 1048576, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 1048576, 0, 7, 0, 0, 0, 1048576, 0, 1048576, 0, 7, 0, 0,
+        0, 12, 0, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 7, 0, 0, 0,
+        1048576, 1048576, 1048576, 0, 0, 2, 3, 0, 0, 1048576, 0, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 1048576, 0, 0, 1048576, 0,
+        0, 1048576, 2, 3, 0, 0, 1048576, 0, 1048576, 9, 1048576, 9, 0, 0, 0, 7, 0, 0, 0, 1048576, 1048576, 1048576, 0, 6,
+        7, 9, 0, 0, 1048576, 1048576, 1048576, 1048576, 2, 3, 0, 0, 1048576, 0, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 7, 0,
+        0, 0, 1048576, 1048576, 0, 7, 0, 0, 0, 0, 0, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 1048576, 0, 4, 5, 0,
+        2, 0, 3, 1048576, 0, 7, 0, 0, 0, 7, 1048576, 1048576, 4, 0, 2, 0, 3, 1048576, 0, 7, 0, 0, 0, 1048576,
+        1048576, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 14, 14, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 1048576, 0, 7,
+        0, 0, 0, 1048576, 1048576, 0, 1, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 1, 0, 0, 1, 4, 5, 1048576, 0,
+        7, 0, 0, 0, 1048576, 1048576, 1, 3, 0, 1, 0, 1, 2, 3, 2, 3, 8, 13, 0, 13, 0, 1, 0, 1,
+        1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 1, 4, 0, 1, 2, 3,
+        0, 0, 0, 0, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 1, 4, 0, 1, 2, 3, 0, 0, 0, 0, 1048576,
+        0, 7, 0, 0, 0, 1048576, 1048576, 1, 3, 0, 1, 0, 1, 2, 3, 2, 3, 13, 13, 13, 0, 13, 13, 2,
+        3, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 2, 3, 1048576, 0,
+        7, 0, 0, 0, 1048576, 1048576, 1, 2, 0, 4, 2, 0, 4, 0, 0, 2, 1, 4, 2, 1, 4, 1, 2, 3,
+        0, 0, 0, 0, 1048576, 0, 7, 0, 0, 0, 1048576, 1048576, 0, 0, 0, 0, 10, 7, 0, 0, 0, 1048576, 0, 0,
+        0, 0, 10, 0, 0, 10, 0, 0, 0, 0, 0, 6, 7, 6, 0, 0, 0, 0, 1, 0, 0, 0, 10, 0,
+        2, 2, 0, 13, 13, 13, 0, 0, 0, 0, 2, 12, 0, 0, 0, 0, 12, 10, 13, 0, 0, 13, 13, 0,
+        0, 0, 0, 0, 10, 0, 10, 0, 10, 0, 10, 0, 0, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0,
+        0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 4, 5, 0, 8, 4, 5,
+        8, 0, 6, 0, 7, 0, 0, 9, 0, 0, 4, 5, 0];
+    constant [1213] integer STEP_A2 = [
         0, 1, 0, 0, 0, 0, 4098, 31, 0, 197, 0, 0, 0, 0, 9, 0, 0, 0, 3, 74, 0, 0, 0, 0,
         2, 0, 0, 26, 4, 0, 3, 1, 0, 0, 19, 32, 0, 1, 0, 19, 45, 0, 1, 1, 0, 0, 0, 10,
         0, 19, 48, 9, 0, 13, 0, 13, 9, 0, 1, 1, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 1, 0,
@@ -8028,8 +8319,34 @@ process SIGC =
         0, 0, 0, 1024, 0, 0, 0, 2049, 12, 1048576, 0, 0, 1020, 0, 2049, 16, 0, 1048576, 31, 0, 10, 1, 0, 0,
         1, 2304, 0, 0, 11, 0, 1, 2, 0, 0, 0, 0, 0, 45, 1, 0, 0, 0, 32, 0, 0, 10, 0, 12,
         12, 48, 1, 13, 0, 0, -1, 1, 15, 0, 32, 0, 0, 0, 116, 1, 114, 1, 117, 1, 101, 1, 0, 0,
-        102, 1, 97, 1, 108, 1, 115, 1, 101, 1, 0];
-    constant [587] integer STEP_A3 = [
+        102, 1, 97, 1, 108, 1, 115, 1, 101, 1, 0, 1, 0, 16384, 16384, 16, 16, 1, 8, 0, 0, 0, 0, 0,
+        1024, 0, 0, 0, 60676, 57344, 0, 11, 23, 15, 0, 0, 1048576, 0, 0, 0, 15, 0, 0, 60676, 57344, 0, 512, 0,
+        0, 0, 48, 0, 0, 16, 1, 0, 57984, 57344, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 0, 0,
+        0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 1, 0, 0, 1, 0, 0, 2, 3, 0,
+        0, 0, 0, 1, 0, 0, 4, 0, 0, 0, 0, 6, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 2, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 4, 5, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0,
+        0, 0, 4, 5, 0, 0, 6, 0, 8, 1, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8,
+        8, 1, 0, 0, 0, 0, 0, 0, 4, 5, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 2, 3, 2, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 31, 31, 8, 8, 8, 8, 9, 9, 9, 9, 9, 8, 0, 8, 8, 8, 8, 8,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 5, 2, 3, 0, 1,
+        0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 5, 2, 3, 0, 1, 0, 0, 0, 1, 0,
+        0, 0, 0, 0, 0, 0, 0, 31, 31, 8, 8, 8, 8, 9, 9, 9, 9, 4, 4, 8, 0, 8, 8, 0,
+        0, 8, 8, 8, 8, 0, 0, 0, 4, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 2, 32, 5, 6, 32, 5, 6, 2, 2, 32, 5, 6, 32, 5, 6, 2, 64, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 45, 1, 0, 10, 1, 0, 0, 16384, 16384, 0, 1, 0, 10, 0, 0, 0, 0, 0, 0, 0, 45, 1, 0,
+        0, 1, 0, 8, 24, 0, 0, 10, 0, 0, 48, 1, 1, 0, 0, 0, 1, 1, 12, 0, 0, 24, 8, 0,
+        0, 0, 0, 116, 1, 114, 1, 117, 1, 101, 1, 0, 0, 102, 1, 97, 1, 108, 1, 115, 1, 101, 1, 0,
+        0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 1, 4, 5, 0, 0, 2, 3,
+        0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0];
+    constant [1213] integer STEP_A3 = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 8, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0,
@@ -8054,8 +8371,34 @@ process SIGC =
         0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0,
         0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         9, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [587] integer STEP_TARGET = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1048576, 0,
+        1048576, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1048576,
+        0, 1048576, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1,
+        0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1,
+        0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 12, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0,
+        0, 0, 0, 0, 0, 0, 0, 3, 0, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 9, 0,
+        0, 0, 0, 0, 3, 0, 2, 0, 9, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+        1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0,
+        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 5, 5, 5, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1048576, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0,
+        0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0,
+        0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        3, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0];
+    constant [1213] integer STEP_TARGET = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 1048576, 1048576, 0, 0, 0, 0, 1048576, 1048576, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1048576, 0, 1048576, 0, 0, 1048576, 0, 0, 1048576, 0, 1048576, 0, 1048576, 1048576, 0, 0, 0, 0, 0, 0,
@@ -8080,8 +8423,34 @@ process SIGC =
         1048576, 1048576, 1048576, 0, 1048576, 0, 0, 0, 0, 0, 1048576, 0, 0, 1048576, 0, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 1048576, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1048576, 0, 0, 0, 0, 1048576, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [587] integer STEP_TARGET_KIND = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 1048576, 1048576, 1048576, 0,
+        0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 1048576, 0, 0, 0, 0, 0,
+        1048576, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 1048576, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 1048576, 1048576, 0, 0, 1048576, 1048576, 1048576, 0, 1048576,
+        1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 1048576, 0, 0, 1048576, 0, 1048577, 0, 1048576, 0, 0,
+        1048576, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 1048576, 0, 0, 1048576, 0, 0, 1048577, 0, 1048576, 0, 0,
+        1048576, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 1048577, 1048577, 0, 1048576, 0, 0, 1048576,
+        0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0,
+        0, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 1048576, 0, 0, 1048576, 0, 1048577, 0, 1048576, 0,
+        0, 1048576, 1048577, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 1048576, 0, 0, 0, 0, 0, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 0,
+        0, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 1048577, 0, 1048576,
+        0, 0, 1048576, 0, 0, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048577, 0,
+        1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0,
+        1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 1048576, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048577,
+        0, 1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 0, 0, 1048576, 0, 0, 1048577, 0,
+        1048576, 0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 1048577, 0, 1048576, 0, 0, 1048576, 1048577, 1048577, 0, 0, 0, 0, 0, 1048576, 0, 0, 1048576, 1048577, 1048576, 1048576,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 1048576, 0, 0, 0, 1048576, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 1048576, 0, 0, 0, 0, 0, 1048576, 0, 0, 0,
+        0, 0, 1048576, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1048576, 0, 0, 0];
+    constant [1213] integer STEP_TARGET_KIND = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 3, 3, 0, 0, 0, 0, 1, 1, 0,
         0, 10, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 7,
@@ -8106,15 +8475,41 @@ process SIGC =
         11, 3, 3, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 6, 0, 0, 8, 8,
         0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [587] integer STEP_SOURCE0 = [
-        -1, -1, -1, -1, 39, -1, -1, -1, -1, -1, -1, 63, -1, 37, -1, 0, 0, 38, -1, -1, -1, 63, 68, 63,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, 64, -1, -1, 62, -1, -1, -1, -1, 55, -1, -1, 55, -1, -1, -1,
-        56, -1, -1, -1, 57, -1, 62, -1, -1, 62, -1, -1, 56, 57, 62, -1, 62, 58, -1, 58, -1, 68, -1, -1,
-        -1, -1, 55, -1, -1, -1, -1, -1, 62, 56, 62, -1, -1, -1, 56, -1, -1, 57, -1, 40, -1, 55, 62, 57,
-        41, -1, 62, -1, 58, -1, 59, -1, -1, -1, 62, -1, 58, 59, 31, -1, -1, 55, 64, 62, 32, -1, 62, 14,
-        55, -1, -1, 69, 62, -1, -1, -1, -1, -1, -1, -1, -1, -1, 65, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, 69, 26, 54, -1, 33, 35, -1, 36, -1, -1, 54, 53, 22, 23, 17, 55, -1, -1, -1, 55, -1, 33,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 11, 3, 3, 0,
+        0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+        1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 6, 6, 0, 0, 6, 6, 6, 0, 6,
+        6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 6, 0, 0, 1, 0, 4, 0, 6, 0, 0,
+        1, 0, 0, 4, 0, 6, 0, 0, 1, 0, 0, 0, 0, 6, 0, 0, 1, 0, 0, 4, 0, 6, 0, 0,
+        1, 0, 0, 4, 0, 6, 0, 0, 1, 0, 0, 4, 0, 6, 0, 0, 1, 4, 4, 0, 6, 0, 0, 1,
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 4, 0, 6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 6, 0, 0, 1, 0, 0, 0, 0, 0,
+        0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 6, 0, 0, 1, 0, 4, 0, 6, 0,
+        0, 1, 5, 4, 0, 6, 0, 0, 1, 0, 0, 4, 0, 6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 4, 0, 6, 0, 0, 1, 6, 0, 0, 0, 0, 0, 0, 0, 4, 0, 6, 0, 0, 1, 0,
+        0, 4, 0, 6, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 6, 0, 0, 1, 0, 0, 0, 4, 0, 6,
+        0, 0, 1, 0, 0, 0, 0, 4, 0, 6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0,
+        6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+        4, 0, 6, 0, 0, 1, 0, 0, 1, 4, 0, 6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 4, 0, 6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4,
+        0, 6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 4, 0, 6, 0, 0, 1, 0, 0, 1, 0, 0, 4, 0,
+        6, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 4, 0, 6, 0, 0, 1, 4, 5, 0, 8, 8, 0, 0, 6, 0, 0, 1, 4, 1, 1,
+        0, 0, 0, 0, 0, 0, 8, 8, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0];
+    constant [1213] integer STEP_SOURCE0 = [
+        -1, -1, -1, -1, 39, -1, -1, -1, -1, -1, -1, 70, -1, 37, -1, 0, 0, 38, -1, -1, -1, 70, 75, 70,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, 71, -1, -1, 69, -1, -1, -1, -1, 55, -1, -1, 55, -1, -1, -1,
+        56, -1, -1, -1, 57, -1, 69, -1, -1, 69, -1, -1, 56, 57, 69, -1, 69, 58, -1, 58, -1, 75, -1, -1,
+        -1, -1, 55, -1, -1, -1, -1, -1, 69, 56, 69, -1, -1, -1, 56, -1, -1, 57, -1, 40, -1, 55, 69, 57,
+        41, -1, 69, -1, 58, -1, 59, -1, -1, -1, 69, -1, 58, 59, 31, -1, -1, 55, 71, 69, 32, -1, 69, 14,
+        55, -1, -1, 76, 69, -1, -1, -1, -1, -1, -1, -1, -1, -1, 72, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, 76, 26, 54, -1, 33, 35, -1, 36, -1, -1, 54, 53, 22, 23, 17, 55, -1, -1, -1, 55, -1, 33,
         35, -1, 36, -1, 34, -1, 53, 54, 30, -1, -1, -1, 0, -1, 0, 27, 28, -1, 0, 28, 29, 50, 0, 24,
         55, 18, 21, 17, 56, -1, -1, -1, 56, 55, 24, 55, 1, 14, 55, 24, 55, 7, 42, 14, 55, 24, 55, 7,
         8, 43, 55, 24, 55, 8, 9, 10, 11, 12, 13, 7, -1, -1, 14, 55, 24, 55, 7, 5, -1, 14, 55, 24,
@@ -8127,13 +8522,39 @@ process SIGC =
         -1, 14, 55, 24, 55, 1, 2, -1, 51, 14, 55, 24, 55, 1, 2, -1, 52, 14, 55, 24, 55, 1, 2, -1,
         -1, -1, -1, -1, -1, -1, 14, 55, 24, 55, 1, 2, -1, -1, 14, 55, 24, 55, 1, 2, -1, 49, -1, 14,
         55, 24, 55, 14, 14, 55, -1, -1, -1, -1, 24, 55, 14, 60, 56, 55, -1, -1, 56, -1, -1, -1, -1, -1,
-        -1, -1, -1, 68, 65, -1, 66, -1, -1, -1, 66, -1, -1, -1, -1, -1, 55, -1, -1, -1, -1, -1, 55, 56,
-        -1, -1, -1, 56, -1, -1, 67, 57, -1, -1, -1, -1, 57, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0,
-        0, 0, 0, -1, 68, 70, -1, -1, -1, 0, 68, 71, -1, 70, -1, -1, 70, 61, -1, 0, -1, -1, -1, -1,
-        -1, -1, -1, 55, -1, -1, -1, -1, 55, 71, 65, -1, 66, -1, -1, -1, 66, -1, -1, -1, -1, -1, 55, -1,
-        -1, -1, -1, -1, 55, 56, -1, -1, -1, 56, -1, -1, 67, 57, -1, -1, -1, -1, -1, -1, -1, -1, -1, 57,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
-    constant [587] integer STEP_SOURCE1 = [
+        -1, -1, -1, 75, 72, -1, 73, -1, -1, -1, 73, -1, -1, -1, -1, -1, 55, -1, -1, -1, -1, -1, 55, 56,
+        -1, -1, -1, 56, -1, -1, 74, 57, -1, -1, -1, -1, 57, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0,
+        0, 0, 0, -1, 75, 77, -1, -1, -1, 0, 75, 78, -1, 77, -1, -1, 77, 61, -1, 0, -1, -1, -1, -1,
+        -1, -1, -1, 55, -1, -1, -1, -1, 55, 78, 72, -1, 73, -1, -1, -1, 73, -1, -1, -1, -1, -1, 55, -1,
+        -1, -1, -1, -1, 55, 56, -1, -1, -1, 56, -1, -1, 74, 57, -1, -1, -1, -1, -1, -1, -1, -1, -1, 57,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, -1,
+        -1, 75, 77, -1, -1, -1, -1, -1, -1, -1, -1, 77, 0, -1, 75, 78, -1, -1, 55, -1, -1, -1, -1, -1,
+        77, 55, -1, -1, 77, -1, -1, -1, -1, -1, -1, 77, 75, 26, -1, -1, 54, -1, 33, 35, -1, -1, 36, -1,
+        36, -1, -1, -1, -1, -1, -1, 54, 53, 22, 23, 17, 55, -1, -1, -1, -1, 55, -1, 33, 35, -1, -1, 36,
+        -1, 36, -1, -1, -1, 34, -1, -1, 53, 54, 61, -1, -1, -1, -1, 0, 27, 28, -1, 0, 28, 29, 64, 0,
+        24, -1, -1, 55, 18, 21, 17, 56, -1, -1, -1, -1, 56, 55, 24, -1, -1, 55, 1, 14, 55, 24, -1, -1,
+        55, 7, 5, 14, 55, 24, -1, -1, 55, 7, 8, 5, 55, 24, -1, -1, 55, 7, 5, 14, 55, 24, -1, -1,
+        55, -1, -1, 14, 55, 24, -1, -1, 55, 18, 14, 14, 55, 24, -1, -1, 55, 14, 14, 55, 24, -1, -1, 55,
+        18, 2, 15, -1, -1, -1, -1, -1, 56, 14, 56, 14, 55, 24, -1, -1, 55, 18, 19, 20, -1, 56, 68, -1,
+        -1, 15, -1, -1, -1, 57, 67, 57, 67, -1, 16, -1, -1, 56, 55, 24, -1, -1, 55, 18, 20, 17, 56, -1,
+        -1, -1, -1, 56, 20, 3, 4, 16, -1, -1, -1, 57, 67, 57, 55, 24, -1, -1, 55, 0, 14, 55, 24, -1,
+        -1, 55, 14, 14, 55, 24, -1, -1, 55, -1, -1, 14, 55, 24, -1, -1, 55, 1, 3, 4, -1, -1, -1, -1,
+        -1, -1, -1, 14, 55, 24, -1, -1, 55, 25, 1, 2, -1, -1, -1, -1, -1, 14, 55, 24, -1, -1, 55, 1,
+        2, 14, 55, 24, -1, -1, 55, 1, 2, -1, -1, -1, 14, 55, 24, -1, -1, 55, 1, 2, -1, 14, 55, 24,
+        -1, -1, 55, 1, 2, -1, -1, 14, 55, 24, -1, -1, 55, 1, 2, 62, 63, -1, -1, -1, -1, -1, 14, 55,
+        24, -1, -1, 55, 1, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 79, -1, -1, -1, -1, -1,
+        14, 55, 24, -1, -1, 55, 1, 2, 79, 14, 55, 24, -1, -1, 55, 1, 2, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, 65, -1, 14, 55, 24, -1, -1, 55, 1, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, 66, -1, 14,
+        55, 24, -1, -1, 55, 1, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 79, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, 56, -1, -1, 56, 14, 55, 24, -1, -1, 55, 1, 2, 79, -1, -1, 14, 55,
+        24, -1, -1, 55, 1, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, 14, 55, 24, -1, -1, 55, 14, 14, 55, -1, -1, -1, -1, 24, -1, -1, 55, 14, 60, 56,
+        55, -1, -1, 56, -1, -1, -1, -1, -1, -1, 55, -1, -1, -1, -1, 55, 78, 72, -1, -1, 73, -1, -1, -1,
+        -1, -1, 73, -1, -1, -1, 55, -1, -1, 79, -1, -1, -1, -1, 55, 56, -1, -1, -1, -1, 56, -1, -1, 74,
+        -1, -1, 57, -1, -1, -1, -1, -1, -1, -1, -1, -1, 57, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        79, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 58, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, 58, -1, -1, -1];
+    constant [1213] integer STEP_SOURCE1 = [
         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -8158,7 +8579,33 @@ process SIGC =
         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 2, -1, -1, -1, -1,
+        -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1,
+        -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, 1, 0, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1,
+        -1, -1, 0, 0, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1,
+        -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        0, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, 0, -1, -1, -1, -1, -1, 1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
     constant [18] integer LOAD_OFFSET_FORM = [
         0, 0, 36, 0, 34, 35, 0, 0, 32, 33, 0, 0, 0, 0, 0, 0, 31, 31];
     constant [18] integer LOAD_INDEXED_FORM = [
@@ -8232,7 +8679,7 @@ process SIGC =
     constant integer FIELD_PCREL = 1;
     constant integer FIELD_PAGE = 2;
     constant integer FIELD_PAGEOFF = 3;
-    constant [67] long FORM_BASE = [
+    constant [123] long FORM_BASE = [
         3531603968, 1384120320, 4068474880, 1920991232, 2432696320, 285212672,
         3506438144, 1358954496, 4043309056, 1895825408, 2332033024, 2868903936,
         3405774848, 3942645760, 2315255808, 167772160, 2852126720, 704643072,
@@ -8244,76 +8691,153 @@ process SIGC =
         3089135616, 2015393792, 941647872, 4164944896, 4160750592, 3087008768,
         939525120, 943721472, 335544320, 2483027968, 1409286144, 872415232,
         3019898880, 3036676096, 2415919104, 3596551104, 3556773889, 0,
-        3573751935];
-    constant [67] short FORM_SIGNED = [
+        3573751935, 62016, 62144, 62016, 62144, 61952,
+        62112, 59904, 59968, 59984, 60032, 60160,
+        60176, 60224, 60240, 60256, 60272, 60336,
+        59983, 60015, 4026595840, 4026595872, 59983, 1108559,
+        2157135, 64416, 64256, 61872, 61712, 61760,
+        61808, 61888, 61568, 61504, 63696, 63632,
+        63664, 63920, 63680, 63616, 63648, 59856,
+        59840, 59632, 59616, 184612864, 184612880, 218167312,
+        218167360, 184612944, 3087069184, 4160811008, 3204501506, 3204466544,
+        2147742639, 2282812288, 0];
+    constant [123] short FORM_SIGNED = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0];
-    constant [67] short FORM_KIND = [
+        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0,
+        0, 0, 0];
+    constant [123] short FORM_KIND = [
         0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0];
-    constant [67] short FORM_TOP2 = [
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0, 0, 0, 5, 6, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 0, 0,
+        0, 0, 0];
+    constant [123] short FORM_TOP2 = [
         16, 16, 16, 16, 12, 12, 12, 12, 12, 12, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 0, 5, 5, 5,
         5, 5, 5, 5, 5, 5, 5, 15, 14, 14, 13, 13, 12, 15, 14, 13, 12, 5, 5, 5, 5, 5, 5, 5,
-        5, 5, 5, 9, 9, 9, 9, 9, 28, 28, 21, 21, 21, 21, 33, 0, 0, 32, 0];
-    constant [268] short FORM_FIELD_SLOT = [
-        0, 2, 3, 0, 0, 2, 3, 0, 0, 2, 3, 0, 0, 2, 3, 0, 0, 1, 2, 0, 0, 1, 2, 0,
-        0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0,
-        0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0,
-        0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 0, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0,
-        0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 3, 0, 1, 2, 0, 0, 1, 2, 3, 0, 1, 2, 3,
-        0, 1, 2, 3, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0,
-        0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0,
-        0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0,
-        0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0, 0, 1, 2, 0,
-        0, 1, 2, 0, 0, 1, 2, 0, 2, 0, 0, 0, 2, 0, 0, 0, 3, 2, 0, 0, 0, 2, 0, 0,
-        0, 2, 0, 0, 0, 2, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0,
-        0, 0, 0, 0];
-    constant [268] short FORM_FIELD_LOW = [
+        5, 5, 5, 9, 9, 9, 9, 9, 28, 28, 21, 21, 21, 21, 33, 0, 0, 32, 0, 16, 16, 16, 16, 12,
+        12, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 0, 4, 4, 5, 5, 5, 4, 4, 8, 8, 8,
+        8, 8, 8, 8, 12, 12, 12, 12, 12, 12, 12, 10, 10, 10, 10, 8, 8, 8, 8, 8, 23, 23, 0, 0,
+        0, 0, 32];
+    constant [615] short FORM_FIELD_SLOT = [
+        0, 2, 3, 0, 0, 0, 2, 3, 0, 0, 0, 2, 3, 0, 0, 0, 2, 3, 0, 0, 0, 1, 2, 0,
+        0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2,
+        0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1,
+        2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0,
+        1, 2, 0, 0, 0, 1, 0, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0,
+        0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 3, 0, 0, 1, 2, 0, 0, 0, 1, 2, 3,
+        0, 0, 1, 2, 3, 0, 0, 1, 2, 3, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2,
+        0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1,
+        2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0,
+        1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0,
+        0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0,
+        0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0,
+        0, 0, 3, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2,
+        2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        2, 2, 2, 2, 0, 2, 2, 2, 2, 0, 2, 2, 2, 2, 0, 2, 2, 2, 2, 0, 1, 2, 2, 2,
+        0, 1, 2, 2, 2, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0,
+        0, 0, 1, 2, 3, 3, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2,
+        0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+        2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 2, 0, 0, 1, 2, 2, 0, 0, 1, 2, 2, 0, 0,
+        1, 2, 3, 0, 0, 1, 2, 3, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0,
+        0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0,
+        0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2,
+        0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 3, 0, 0, 1, 2, 3, 0, 0, 1, 2, 3, 0, 0, 1,
+        2, 3, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0, 1, 2, 0, 0, 0,
+        1, 2, 0, 0, 2, 2, 2, 0, 0, 2, 2, 2, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 0, 0, 0];
+    constant [615] short FORM_FIELD_LOW = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 1, 0,
-        0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2,
+        0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0,
+        2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0,
-        0, 2, 0, 0, 0, 2, 0, 0, 0, 12, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0];
-    constant [268] short FORM_FIELD_WIDTH = [
-        5, 16, 2, 0, 5, 16, 1, 0, 5, 16, 2, 0, 5, 16, 1, 0, 5, 5, 12, 0, 5, 5, 12, 0,
-        5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 5, 0, 5, 5, 5, 0,
-        5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0,
-        5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 0, 0, 5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0,
-        5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 5, 5, 5, 5, 0, 5, 5, 5, 4, 5, 5, 5, 4,
-        5, 5, 5, 4, 5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 12, 0,
-        5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 12, 0, 5, 5, 5, 0,
-        5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0,
-        5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 5, 0, 5, 5, 9, 0, 5, 5, 9, 0, 5, 5, 9, 0,
-        5, 5, 9, 0, 5, 5, 9, 0, 26, 0, 0, 0, 26, 0, 0, 0, 4, 19, 0, 0, 5, 19, 0, 0,
-        5, 19, 0, 0, 5, 19, 0, 0, 5, 2, 19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0,
-        0, 0, 0, 0];
-    constant [268] short FORM_FIELD_AT = [
-        0, 5, 21, 0, 0, 5, 21, 0, 0, 5, 21, 0, 0, 5, 21, 0, 0, 5, 10, 0, 0, 5, 10, 0,
-        0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 16, 0, 0, 5, 16, 0,
-        0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0,
-        0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 0, 0, 0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0,
-        0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 10, 0, 5, 16, 0, 0, 5, 16, 12, 0, 5, 16, 12,
-        0, 5, 16, 12, 0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 10, 0,
-        0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 10, 0, 0, 5, 16, 0,
-        0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0,
-        0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 16, 0, 0, 5, 12, 0, 0, 5, 12, 0, 0, 5, 12, 0,
-        0, 5, 12, 0, 0, 5, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0,
-        0, 5, 0, 0, 0, 5, 0, 0, 0, 29, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0];
-    constant integer FORM_FIELD_SLOTS = 4;
-    constant [67] short FORM_NAME_FRAGMENT = [
-        736, 737, 738, 739, 740, 741, 742, 743, 744, 745, 746, 747, 748, 749, 750, 751, 752, 753, 754, 755, 756, 757, 758, 759,
-        760, 761, 762, 763, 764, 765, 766, 767, 768, 769, 770, 771, 772, 773, 774, 775, 776, 777, 778, 779, 780, 781, 782, 783,
-        784, 785, 786, 787, 788, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 800, 801, 802];
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0,
+        0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 12,
+        14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 8, 11, 12, 0, 0, 8, 11, 12, 0, 0, 8, 11, 12, 0, 0, 8, 11, 12, 0, 0, 0, 8, 11,
+        0, 0, 0, 8, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0,
+        2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 1, 12, 22, 0, 0, 1, 12, 22, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0];
+    constant [615] short FORM_FIELD_WIDTH = [
+        5, 16, 2, 0, 0, 5, 16, 1, 0, 0, 5, 16, 2, 0, 0, 5, 16, 1, 0, 0, 5, 5, 12, 0,
+        0, 5, 5, 12, 0, 0, 5, 5, 12, 0, 0, 5, 5, 12, 0, 0, 5, 5, 12, 0, 0, 5, 5, 12,
+        0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5,
+        5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5,
+        5, 5, 0, 0, 5, 5, 0, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0,
+        5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 5, 0, 5, 5, 5, 0, 0, 5, 5, 5, 4,
+        0, 5, 5, 5, 4, 0, 5, 5, 5, 4, 0, 5, 5, 12, 0, 0, 5, 5, 12, 0, 0, 5, 5, 12,
+        0, 0, 5, 5, 12, 0, 0, 5, 5, 12, 0, 0, 5, 5, 12, 0, 0, 5, 5, 12, 0, 0, 5, 5,
+        12, 0, 0, 5, 5, 12, 0, 0, 5, 5, 12, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5,
+        5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0,
+        5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 5, 0, 0, 5, 5, 9, 0, 0, 5, 5, 9, 0,
+        0, 5, 5, 9, 0, 0, 5, 5, 9, 0, 0, 5, 5, 9, 0, 0, 26, 0, 0, 0, 0, 26, 0, 0,
+        0, 0, 4, 19, 0, 0, 0, 5, 19, 0, 0, 0, 5, 19, 0, 0, 0, 5, 19, 0, 0, 0, 5, 2,
+        19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4,
+        8, 3, 1, 4, 4, 8, 3, 1, 4, 4, 8, 3, 1, 4, 4, 8, 3, 1, 4, 4, 4, 8, 3, 1,
+        4, 4, 8, 3, 1, 4, 4, 4, 0, 0, 4, 4, 4, 0, 0, 4, 4, 4, 0, 0, 4, 4, 4, 0,
+        0, 4, 4, 4, 2, 3, 4, 4, 4, 0, 0, 4, 4, 4, 0, 0, 4, 4, 4, 0, 0, 4, 4, 4,
+        0, 0, 4, 4, 4, 0, 0, 4, 4, 4, 0, 0, 4, 4, 0, 0, 0, 4, 4, 0, 0, 0, 4, 4,
+        4, 0, 0, 4, 4, 4, 0, 0, 4, 4, 2, 3, 0, 4, 4, 2, 3, 0, 4, 4, 2, 3, 0, 4,
+        4, 4, 4, 0, 4, 4, 4, 4, 0, 4, 4, 8, 0, 0, 4, 4, 8, 0, 0, 4, 4, 8, 0, 0,
+        4, 4, 8, 0, 0, 4, 4, 8, 0, 0, 4, 4, 8, 0, 0, 4, 4, 8, 0, 0, 4, 4, 12, 0,
+        0, 4, 4, 12, 0, 0, 4, 4, 12, 0, 0, 4, 4, 12, 0, 0, 4, 4, 12, 0, 0, 4, 4, 12,
+        0, 0, 4, 4, 12, 0, 0, 4, 4, 8, 4, 0, 4, 4, 8, 4, 0, 4, 4, 8, 4, 0, 4, 4,
+        8, 4, 0, 4, 4, 8, 0, 0, 4, 4, 8, 0, 0, 4, 4, 8, 0, 0, 4, 4, 8, 0, 0, 4,
+        4, 8, 0, 0, 11, 10, 1, 0, 0, 11, 10, 1, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 16, 0, 0, 0];
+    constant [615] short FORM_FIELD_AT = [
+        0, 5, 21, 0, 0, 0, 5, 21, 0, 0, 0, 5, 21, 0, 0, 0, 5, 21, 0, 0, 0, 5, 10, 0,
+        0, 0, 5, 10, 0, 0, 0, 5, 10, 0, 0, 0, 5, 10, 0, 0, 0, 5, 10, 0, 0, 0, 5, 10,
+        0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5,
+        16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0,
+        5, 16, 0, 0, 0, 5, 0, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0,
+        0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 10, 0, 0, 5, 16, 0, 0, 0, 5, 16, 12,
+        0, 0, 5, 16, 12, 0, 0, 5, 16, 12, 0, 0, 5, 10, 0, 0, 0, 5, 10, 0, 0, 0, 5, 10,
+        0, 0, 0, 5, 10, 0, 0, 0, 5, 10, 0, 0, 0, 5, 10, 0, 0, 0, 5, 10, 0, 0, 0, 5,
+        10, 0, 0, 0, 5, 10, 0, 0, 0, 5, 10, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0,
+        5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0,
+        0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 16, 0, 0, 0, 5, 12, 0, 0, 0, 5, 12, 0,
+        0, 0, 5, 12, 0, 0, 0, 5, 12, 0, 0, 0, 5, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 5, 0, 0, 0, 0, 5, 0, 0, 0, 0, 5, 0, 0, 0, 0, 5, 0, 0, 0, 0, 29,
+        5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24,
+        16, 28, 10, 0, 24, 16, 28, 10, 0, 24, 16, 28, 10, 0, 24, 16, 28, 10, 0, 24, 0, 16, 28, 10,
+        24, 0, 16, 28, 10, 24, 0, 16, 0, 0, 24, 0, 16, 0, 0, 24, 0, 16, 0, 0, 24, 0, 16, 0,
+        0, 24, 0, 16, 22, 28, 24, 0, 16, 0, 0, 24, 0, 16, 0, 0, 24, 0, 16, 0, 0, 24, 0, 16,
+        0, 0, 24, 0, 16, 0, 0, 24, 0, 16, 0, 0, 24, 16, 0, 0, 0, 24, 16, 0, 0, 0, 24, 0,
+        16, 0, 0, 24, 0, 16, 0, 0, 24, 16, 22, 28, 0, 24, 16, 22, 28, 0, 24, 16, 22, 28, 0, 28,
+        0, 16, 24, 0, 24, 0, 16, 28, 0, 24, 0, 16, 0, 0, 24, 0, 16, 0, 0, 24, 0, 16, 0, 0,
+        24, 0, 16, 0, 0, 24, 0, 16, 0, 0, 24, 0, 16, 0, 0, 24, 0, 16, 0, 0, 28, 0, 16, 0,
+        0, 28, 0, 16, 0, 0, 28, 0, 16, 0, 0, 28, 0, 16, 0, 0, 28, 0, 16, 0, 0, 28, 0, 16,
+        0, 0, 28, 0, 16, 0, 0, 28, 0, 16, 24, 0, 28, 0, 16, 24, 0, 28, 0, 16, 24, 0, 28, 0,
+        16, 24, 0, 28, 0, 16, 0, 0, 28, 0, 16, 0, 0, 28, 0, 16, 0, 0, 28, 0, 16, 0, 0, 28,
+        0, 16, 0, 0, 16, 0, 10, 0, 0, 16, 0, 10, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0];
+    constant integer FORM_FIELD_SLOTS = 5;
+    constant [123] short FORM_NAME_FRAGMENT = [
+        742, 743, 744, 745, 746, 747, 748, 749, 750, 751, 752, 753, 754, 755, 756, 757, 758, 759, 760, 761, 762, 763, 764, 765,
+        766, 767, 768, 769, 770, 771, 772, 773, 774, 775, 776, 777, 778, 779, 780, 781, 782, 783, 784, 785, 786, 787, 788, 789,
+        790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 800, 801, 802, 803, 804, 805, 806, 807, 808, 809, 810, 811, 812, 813,
+        814, 815, 816, 817, 818, 819, 820, 821, 822, 823, 824, 825, 826, 827, 828, 829, 830, 831, 832, 833, 834, 835, 836, 837,
+        838, 839, 840, 841, 842, 843, 844, 845, 846, 847, 848, 849, 850, 851, 852, 853, 854, 855, 856, 857, 858, 799, 859, 860,
+        861, 862, 863];
     constant integer ROW_PREFIX_FORM_NAME = -1;
     constant integer TEXT_OFFSET = 392;
     constant integer SEGMENT_BYTES = 16384;
@@ -8395,19 +8919,19 @@ process SIGC =
     constant integer UTF8_INVALID_CONTINUATION = 1;
     constant integer UTF8_UNEXPECTED_END = 2;
     constant [3] short UTF8_REASON_FRAGMENT = [
-        477, 478, 479];
+        483, 484, 485];
     constant [256] short HEX_FRAGMENT = [
-        480, 481, 482, 483, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 500, 501, 502, 503,
-        504, 505, 506, 507, 508, 509, 510, 511, 512, 513, 514, 515, 516, 517, 518, 519, 520, 521, 522, 523, 524, 525, 526, 527,
-        528, 529, 530, 531, 532, 533, 534, 535, 536, 537, 538, 539, 540, 541, 542, 543, 544, 545, 546, 547, 548, 549, 550, 551,
-        552, 553, 554, 555, 556, 557, 558, 559, 560, 561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571, 572, 573, 574, 575,
-        576, 577, 578, 579, 580, 581, 582, 583, 584, 585, 586, 587, 588, 589, 590, 591, 592, 593, 594, 595, 596, 597, 598, 599,
-        600, 601, 602, 603, 604, 605, 606, 607, 608, 609, 610, 611, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623,
-        624, 625, 626, 627, 628, 629, 630, 631, 632, 633, 634, 635, 636, 637, 638, 639, 640, 641, 642, 643, 644, 645, 646, 647,
-        648, 649, 650, 651, 652, 653, 654, 655, 656, 657, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668, 669, 670, 671,
-        672, 673, 674, 675, 676, 677, 678, 679, 680, 681, 682, 683, 684, 685, 686, 687, 688, 689, 690, 691, 692, 693, 694, 695,
-        696, 697, 698, 699, 700, 701, 702, 703, 704, 705, 706, 707, 708, 709, 710, 711, 712, 713, 714, 715, 716, 717, 718, 719,
-        720, 721, 722, 723, 724, 725, 726, 727, 728, 729, 730, 731, 732, 733, 734, 735];
+        486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509,
+        510, 511, 512, 513, 514, 515, 516, 517, 518, 519, 520, 521, 522, 523, 524, 525, 526, 527, 528, 529, 530, 531, 532, 533,
+        534, 535, 536, 537, 538, 539, 540, 541, 542, 543, 544, 545, 546, 547, 548, 549, 550, 551, 552, 553, 554, 555, 556, 557,
+        558, 559, 560, 561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571, 572, 573, 574, 575, 576, 577, 578, 579, 580, 581,
+        582, 583, 584, 585, 586, 587, 588, 589, 590, 591, 592, 593, 594, 595, 596, 597, 598, 599, 600, 601, 602, 603, 604, 605,
+        606, 607, 608, 609, 610, 611, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 627, 628, 629,
+        630, 631, 632, 633, 634, 635, 636, 637, 638, 639, 640, 641, 642, 643, 644, 645, 646, 647, 648, 649, 650, 651, 652, 653,
+        654, 655, 656, 657, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668, 669, 670, 671, 672, 673, 674, 675, 676, 677,
+        678, 679, 680, 681, 682, 683, 684, 685, 686, 687, 688, 689, 690, 691, 692, 693, 694, 695, 696, 697, 698, 699, 700, 701,
+        702, 703, 704, 705, 706, 707, 708, 709, 710, 711, 712, 713, 714, 715, 716, 717, 718, 719, 720, 721, 722, 723, 724, 725,
+        726, 727, 728, 729, 730, 731, 732, 733, 734, 735, 736, 737, 738, 739, 740, 741];
     constant integer N_PRAGMAS = 54;
     constant integer N_INTERRUPT = 55;
     constant integer N_BOOT = 56;
@@ -8450,7 +8974,7 @@ process SIGC =
     constant integer TG_STACK = 12;
     constant integer GL_WAIT = 8;
     constant integer ES_ROOT_IRQ = 61;
-    constant integer ES_WAIT = 70;
+    constant integer ES_WAIT = 77;
     constant integer ET_PROLOGUE_VIRT = 52;
     constant integer ET_WINDOW_VIRT = 53;
     constant integer ET_BOOT = 54;
@@ -8469,7 +8993,176 @@ process SIGC =
     constant integer T_INPUT_SHARED = 142;
     constant integer T_BOOT_MISSING = 141;
     constant integer GL_COMPLETE = 9;
-    constant integer ES_COMPLETE = 71;
+    constant integer ES_COMPLETE = 78;
+    constant integer N_MACHINE = 57;
+    constant integer T_MACHINE_UNKNOWN = 143;
+    constant integer T_MACHINE_TWICE = 144;
+    constant integer T_INTERRUPT_NUMBER_MPS2 = 145;
+    constant integer T_SYSCALL_MPS2 = 146;
+    constant integer T_IMAGE_SIZE = 147;
+    constant integer FORM_MOVW_T = 67;
+    constant integer FORM_MOVT_T = 68;
+    constant integer FORM_MOVW_ABS_T = 69;
+    constant integer FORM_MOVT_ABS_T = 70;
+    constant integer FORM_ADDW_T = 71;
+    constant integer FORM_SUBW_T = 72;
+    constant integer FORM_AND_T = 73;
+    constant integer FORM_ORR_T = 74;
+    constant integer FORM_ORRS_T = 75;
+    constant integer FORM_EOR_T = 76;
+    constant integer FORM_ADD_SHIFT_T = 77;
+    constant integer FORM_ADDS_T = 78;
+    constant integer FORM_ADC_T = 79;
+    constant integer FORM_ADCS_T = 80;
+    constant integer FORM_SBC_T = 81;
+    constant integer FORM_SBCS_T = 82;
+    constant integer FORM_SUBS_T = 83;
+    constant integer FORM_MOV_T = 84;
+    constant integer FORM_MVN_T = 85;
+    constant integer FORM_LSL_T = 86;
+    constant integer FORM_LSR_T = 87;
+    constant integer FORM_LSL_IMM_T = 88;
+    constant integer FORM_LSR_IMM_T = 89;
+    constant integer FORM_ASR_IMM_T = 90;
+    constant integer FORM_UMULL_T = 91;
+    constant integer FORM_MLA_T = 92;
+    constant integer FORM_SUBS_IMM_T = 93;
+    constant integer FORM_ADDS_IMM_T = 94;
+    constant integer FORM_ADC_IMM_T = 95;
+    constant integer FORM_SBCS_IMM_T = 96;
+    constant integer FORM_RSB_IMM_T = 97;
+    constant integer FORM_EOR_IMM_T = 98;
+    constant integer FORM_ORR_IMM_T = 99;
+    constant integer FORM_LDR_T = 100;
+    constant integer FORM_LDRB_T = 101;
+    constant integer FORM_LDRH_T = 102;
+    constant integer FORM_LDRSH_T = 103;
+    constant integer FORM_STR_T = 104;
+    constant integer FORM_STRB_T = 105;
+    constant integer FORM_STRH_T = 106;
+    constant integer FORM_LDRD_T = 107;
+    constant integer FORM_STRD_T = 108;
+    constant integer FORM_LDRD_POST_T = 109;
+    constant integer FORM_STRD_POST_T = 110;
+    constant integer FORM_STRB_POST_T = 111;
+    constant integer FORM_LDRB_POST_T = 112;
+    constant integer FORM_LDRB_PRE_DEC_T = 113;
+    constant integer FORM_STR_PRE_DEC_T = 114;
+    constant integer FORM_LDR_POST_T = 115;
+    constant integer FORM_B_W_T = 116;
+    constant integer FORM_BL_T = 117;
+    constant integer FORM_SKIP_T = 118;
+    constant integer FORM_BX_LR_T = 119;
+    constant integer FORM_WFI_T = 120;
+    constant integer FORM_MSR_PRIMASK_T = 121;
+    constant integer FORM_WORD_T = 122;
+    constant integer FIELD_THUMB_PCREL = 4;
+    constant integer FIELD_ABS_LO = 5;
+    constant integer FIELD_ABS_HI = 6;
+    constant [23] uinteger ELF32_WORD = [
+        uinteger(1179403647), uinteger(65793), uinteger(0), uinteger(0), uinteger(2621442), uinteger(1),
+        uinteger(9), uinteger(52), uinteger(0), uinteger(83886592), uinteger(2097204), uinteger(2621441),
+        uinteger(0), uinteger(1), uinteger(84), uinteger(0), uinteger(0), uinteger(0),
+        uinteger(0), uinteger(7), uinteger(4), uinteger(0), uinteger(9)];
+    constant [23] short ELF32_FIELD = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 2, 0];
+    constant integer MPS2_HEADER_BYTES = 92;
+    constant integer MPS2_UNLOADED = 84;
+    constant integer MPS2_RAM_BYTES = 4194304;
+    constant integer MPS2_STACK_BYTES = 64;
+    constant integer VIRT_STACK_BYTES = 32;
+    constant integer PLATFORM_MACOS = 0;
+    constant integer PLATFORM_VIRT = 1;
+    constant integer PLATFORM_MPS2 = 2;
+    constant integer MACHINE_TEXT_LENGTH = 10;
+    constant [10] ubyte MACHINE_TEXT = "mps2-an385";
+    constant integer MK_LOAD_AT = 7;
+    constant integer MK_STORE_AT = 8;
+    constant integer GL_DIVIDE = 10;
+    constant integer ES_BINARY_LO = 62;
+    constant integer ES_BINARY_HI = 63;
+    constant integer ES_PAIR_FORM_THUMB = 64;
+    constant integer ES_SIGNED_CONDITION_THUMB = 65;
+    constant integer ES_UNSIGNED_CONDITION_THUMB = 66;
+    constant integer ES_ELEMENT_ROW = 67;
+    constant integer ES_INDEX_ELEMENT = 68;
+    constant integer ES_DIVIDE = 79;
+    constant integer EP_MUL = 13;
+    constant integer EP_NOT_MUL = 14;
+    constant integer EP_COMPARE_EQUAL = 15;
+    constant integer EP_COMPARE_DIRECT = 16;
+    constant integer EP_COMPARE_SWAPPED = 17;
+    constant integer EP_SHIFT_LEFT = 18;
+    constant integer EP_SHIFT_RIGHT = 19;
+    constant integer ET_PROLOGUE_THUMB = 61;
+    constant integer ET_WINDOW_THUMB = 62;
+    constant integer ET_BOOT_THUMB = 63;
+    constant integer ET_WAIT_THUMB = 64;
+    constant integer ET_DISPATCH_THUMB = 65;
+    constant integer ET_WAIT_TAIL_THUMB = 66;
+    constant integer ET_STEP_THUMB = 67;
+    constant integer ET_LOOP_HEAD_THUMB = 68;
+    constant integer ET_LOOP_MID_THUMB = 69;
+    constant integer ET_SNAPSHOT_THUMB = 70;
+    constant integer ET_LOOP_TAIL_THUMB = 71;
+    constant integer ET_CLOCK_ROOT_THUMB = 72;
+    constant integer ET_CLOCK_SAMPLE_THUMB = 73;
+    constant integer ET_CLOCK_PAIR_THUMB = 74;
+    constant integer ET_ROW_SEED_ARRAY_THUMB = 75;
+    constant integer ET_ROW_SEED_THUMB = 76;
+    constant integer ET_ROW_LOAD_THUMB = 77;
+    constant integer ET_ROW_STORE_THUMB = 78;
+    constant integer ET_ROW_INSTRUCTION_THUMB = 79;
+    constant integer ET_ROW_ITER_RANGE_THUMB = 80;
+    constant integer ET_ROW_ITER_THUMB = 81;
+    constant integer ET_ROW_PREV_THUMB = 82;
+    constant integer ET_ROW_ELEMENT_THUMB = 83;
+    constant integer ET_ROW_GATHER_THUMB = 84;
+    constant integer ET_ROW_NEXT_THUMB = 85;
+    constant integer ET_ROW_CONST_THUMB = 86;
+    constant integer ET_ROW_DELAY_THUMB = 87;
+    constant integer ET_ROW_ONE_THUMB = 88;
+    constant integer ET_ROW_IF_THUMB = 89;
+    constant integer ET_ROW_DEFAULT_THUMB = 90;
+    constant integer ET_ROW_PLAIN_THUMB = 91;
+    constant integer ET_ROW_NEG_THUMB = 92;
+    constant integer ET_ROW_NOT_LOGICAL_THUMB = 93;
+    constant integer ET_ROW_NOT_THUMB = 94;
+    constant integer ET_ROW_BINARY_THUMB = 95;
+    constant integer ET_ROW_DIV_SIGNED_THUMB = 96;
+    constant integer ET_ROW_DIV_THUMB = 97;
+    constant integer ET_ROW_COMPARE_SIGNED_THUMB = 98;
+    constant integer ET_ROW_COMPARE_THUMB = 99;
+    constant integer ET_ROW_MOD_SIGNED_THUMB = 100;
+    constant integer ET_ROW_MOD_THUMB = 101;
+    constant integer ET_ROW_SHIFT_THUMB = 102;
+    constant integer ET_DELAY_THUMB = 103;
+    constant integer ET_OUTPUT_HEAD_THUMB = 104;
+    constant integer ET_OUTPUT_THUMB = 105;
+    constant integer ET_OUTPUT_TAIL_THUMB = 106;
+    constant integer ET_FINISH_THUMB = 107;
+    constant [108] integer THUMB_TEMPLATE = [
+        61, -1, 62, -1, -1, -1, 67, -1, -1, -1, 68, 69, 70, 71, -1, 72, 73, 74, 75, 76, 77, 78, -1, 79,
+        80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103,
+        104, 105, 106, 107, 61, 62, 63, 64, 65, 66, 72, 106, 107, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
+        72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
+        96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107];
+    constant [18] integer THUMB_LOAD_FORM = [
+        0, 0, 101, 101, 102, 103, 0, 0, 100, 100, 0, 0, 0, 0, 0, 0, 107, 107];
+    constant [9] integer THUMB_STORE_FORM = [
+        0, 105, 106, 0, 104, 0, 0, 0, 108];
+    constant [48] integer THUMB_BINARY_LO = [
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 76, 74, 73, -1, -1, -1, -1, -1, -1,
+        78, 83, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
+    constant [48] integer THUMB_BINARY_HI = [
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 76, 74, 73, -1, -1, -1, -1, -1, -1,
+        79, 81, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
+    constant [48] integer THUMB_SIGNED_SKIP = [
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 1, 0, 10, 11, 10, 11,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
+    constant [48] integer THUMB_UNSIGNED_SKIP = [
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 1, 0, 2, 3, 2, 3,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
     type ARGS = external;
     type OS = external;
     type FILE = external;
@@ -8626,7 +9319,9 @@ process SIGC =
     [SIGNAL_CAP] integer SIGNAL_IRQ1;
     [PARSE_CAP] integer PC_INDEX;
     integer PC_PRAGMA, PC_SIGNAL, PC_STEP_MESSAGE, PRAGMA_MESSAGE, PRAGMA_MESSAGE_TOKEN, PRAGMA_ARGUMENT0;
-    boolean VIRT, PRAGMA_CHECKS, PC_NAMING, PC_TOP_INPUT, PC_MATCHES, PC_FOUND, PC_FIRST, PRAGMA_FAILED;
+    boolean PRAGMA_CHECKS, PC_NAMING, PC_TOP_INPUT, PC_MATCHES, PC_FOUND, PC_FIRST, PRAGMA_FAILED, PC_OUT_OF_RANGE,
+      PRAGMAS_STARTED, MACHINE_OK, MACHINE_STATEMENT;
+    integer PLATFORM, INTERRUPT_LOWEST, INTERRUPT_HIGHEST, PC_IRQ, MACHINE_AT, MACHINE_TOKEN;
     integer PRAGMA_KIND, PRAGMA_NAME_HELD, PRAGMA_TOKEN_HELD, INTERRUPT_HIGH, INTERRUPT_LOW, INTERRUPT_VALUE,
       PRAGMA_MESSAGE_HERE, PRAGMA_SLOT, PRAGMA_COUNT;
     boolean IN_PRAGMA_NAME, IN_PRAGMA_OPEN, IN_PRAGMA_OBJECT, IN_PRAGMA_CLOSE, IN_PRAGMA_STATEMENT, PRAGMAS_HERE,
@@ -9055,7 +9750,7 @@ process SIGC =
       ITEM_TOTAL, SK_X, SK_ROW, SK_OP, SK_LEFT, SK_LEFT_ROW, SK_OWNER, SK_VALUE, SK_TOP, SK_CURSOR, UN_PH, UN_J, UN_LS,
       UN_K, UN_PHASE_LENGTH, UN_NODE, UN_L, UN_C, UN_SNAP_COUNT, UN_LO_LENGTH, UN_LOOP_ROW, UN_X, TP_ROW, TP_OP,
       TP_TYPE, TP_KIND, TP_LEFT, TP_RIGHT, TP_LEFT_ROW, TP_RIGHT_ROW, TP_LEFT_LEFT, TP_EFFECT, TP_LT, TP_RT,
-      TP_SIGNED_BYTES, TP_UNSIGNED_BYTES, TP_TEMPLATE, UN_CLOCK_KIND, UN_TEMPLATE, UN_P, UN_SEED_NEXT, UN_AFTER_SNAPS,
+      TP_SIGNED_BYTES, TP_UNSIGNED_BYTES, TP_TEMPLATE, UN_CLOCK_KIND, UN_BASE_TEMPLATE, UN_TEMPLATE, UN_P, UN_SEED_NEXT, UN_AFTER_SNAPS,
       UN_LS_AFTER, UN_K_AFTER, UN_NEXT_PH, UN_NEXT_J, UN_NEXT_LS, UN_NEXT_K, UN_SLOT, UN_TEMPLATE_ROW, UNIT_COUNT,
       UNIT_LABEL_TOTAL, PL_U, PL_K, PL_T, PL_P, PL_LOCAL, PL_STEP, PL_NEXT_U, PL_NEXT_K, PL_KIND, PL_WHEN,
       PL_SOURCE0, PL_SOURCE1, PL_ROW, PL_CLOCK, PL_LOOP, PL_WINDOW, PL_OP, PL_TYPE, PL_LEFT, PL_RIGHT, PL_LEFT_ROW,
@@ -9106,6 +9801,13 @@ process SIGC =
       IM_CODE, IM_DATA, SH_T, SH_BLOCK, SH_B, SH_P, SG_FIELD, SG_HASH_AT, SG_PAGE, SG_HASH_WORD, SG_SHIFT, STAGED_DIR,
       OUTPUT_ERRNO;
     integer HEADER_BYTES, IM_ELF_FIELD, PL_ROOT_IRQ;
+    integer UNLOADED_BYTES, IM_ELF32_FIELD, PL_THUMB_INSTRUCTIONS, EX_BYTES, EX_INDEX_REGISTER, EX_THUMB_COUNT,
+      EX_THUMB_CHUNK, EX_ROLE, EX_LOAD_FORM, EX_STORE_FORM, EX_ADDRESS_REGISTER, EX_THUMB_FORM, EX_THUMB_OP0, EX_THUMB_OP1,
+      EX_THUMB_OP3, EX_THUMB_TK, EX_THUMB_TID, EN_S4, EN_L4, EN_W4, EN_A4;
+    long EX_THUMB_OP2;
+    ulong EN_V4, EN_B4;
+    boolean PL_PAIR, PL_EXTENDS, PL_INDEXED, EX_PAIR, EX_SIGNED, EX_EXTENDS, EX_INDEXED, EX_AT, EX_DUAL, EX_EXTEND_STEP,
+      EX_ABSOLUTE_STEP, EX_MEMORY_STEP, IMAGE_OVER_RAM;
     long TAIL_BYTES, MEMORY_BYTES, IMAGE_BASE;
     boolean RESERVES;
     long TEXT_BASE, DATA_BASE, EN_OFFSET, EN_PC, EN_ADDRESS, EN_OP0, EN_OP1, EN_OP2, EN_OP3, EN_R2_VALUE, EN_FAIL_OP0,

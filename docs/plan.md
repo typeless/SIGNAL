@@ -55,6 +55,7 @@ Every milestone ends with test programs that run on this Mac; a milestone is don
 - Second backend for Cortex-M; capacities are physical (D6).
 - Target: QEMU `mps2-an385` (Cortex-M3), selected by a `Machine` pragma; output ELF32 (D16).
 - Exit check: the M5 test programs, retargeted, pass under `qemu-system-arm` on a Cortex-M machine, and `tests/differential.py` finds no trace difference between Cortex-M and macOS on its seeds (D16).
+- Done 2026-10-26: the exit check passes. `tests/cases/m6/timer.sig`, compiled by stage 2, prints the boot line and the SysTick count on UART0 under QEMU 11.1.2 `mps2-an385`; `python3 tests/differential.py 200` printed `200 seeds passed, 0 failed`; `python3 tests/selfhost.py` printed `stage2 matches stage1`, `stage3 matches stage2`, `run.py: 325 passed, 0 failed` and `diff.py: 282 cases, 0 differ`.
 
 ## Not scheduled
 
