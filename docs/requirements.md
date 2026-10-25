@@ -58,3 +58,4 @@
   - The runtime keeps argc in `x25` and argv in `x26`, set before the first runtime instruction, so an `instruction` effect can read them (D11 preserves `x19`–`x29`).
   - Each pass is checked against a dump of the same pass from `sigc.py`; the exit check is executables byte-identical to `sigc.py`'s on every case, the full suite passing with stage 2, and stage 2 byte-identical to stage 1.
   - `sigc.py` stays in the repository as the frozen stage 0 and is not extended after M4; `tests/backend.py` and its `as`/`ld` oracles are retired.
+- **D14 M5 output format.** Approved 2026-10-25: bare-metal programs for QEMU `virt` are written as ELF executables, loaded with `qemu-system-aarch64 -M virt -kernel`.

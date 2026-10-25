@@ -46,7 +46,7 @@ Every milestone ends with test programs that run on this Mac; a milestone is don
 ## M5 — Bare-metal AArch64
 
 - Startup code and drivers for the QEMU `virt` UART, timer, and interrupt controller, written per D3; an interrupt is an input signal (D2); array capacities are physical memory (D6).
-- Output format (ELF or raw image) is chosen at the start of this milestone.
+- Output format: ELF (D14).
 - Exit check: a timer-interrupt program under `qemu-system-aarch64 -M virt` prints the expected sequence on the UART.
 
 ## M6 — Thumb-2
