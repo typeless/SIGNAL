@@ -1,0 +1,1 @@
+schedule_outer_unordered.sig:19:16: error: effects load at 13:16 and load at 19:16 on resource FILE have no order between them; order them with -->

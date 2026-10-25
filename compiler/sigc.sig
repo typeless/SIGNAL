@@ -1564,9 +1564,9 @@ process SIGC =
                           else if PARSE_FAILED then PARSE_ARGUMENT1 else if LOWER_FAILED then LW_ARGUMENT1
                           else if CLOCK_MESSAGE /= 0 then 0 else INSTANTIATE_ARGUMENT1
    | MESSAGE_ARGUMENT2 := if FINISH_FAILED then FINISH_ARGUMENT2 else if PARSE_FAILED then PARSE_ARGUMENT2
-                          else if LOWER_FAILED then LW_ARGUMENT2 else if CLOCK_MESSAGE /= 0 then 0 else INSTANTIATE_ARGUMENT2
+                          else if LOWER_FAILED then LW_ARGUMENT2 else if CLOCK_MESSAGE /= 0 then SCHEDULE_ARGUMENT2 else INSTANTIATE_ARGUMENT2
    | MESSAGE_INSTANCE := if LOWER_FAILED then LW_INSTANCE else if CLOCK_MESSAGE /= 0 then 0 else PO_INSTANCE
-   | INSTANTIATES := (DUMP_PASS = 0 or DUMP_PASS = 3 or DUMP_PASS = 4 or DUMP_PASS = 5) and FINISHES and PASS_MESSAGE = 0
+   | INSTANTIATES := (DUMP_PASS = 0 or DUMP_PASS = 3 or DUMP_PASS = 4 or DUMP_PASS = 5 or DUMP_PASS = 6) and FINISHES and PASS_MESSAGE = 0
    | SPAN_BOUND := long(SIGNAL_COUNT) + long(FINISH_SIGNAL_COUNT) + long(FINISH_EQUATION_COUNT) + long(FINISH_GROUP_COUNT)
                    + long(LOOP_COUNT) + long(MODEL_COUNT) + long(LABEL_COUNT) + long(USE_COUNT) + long(GUARD_COUNT)
                    + long(FINAL_COUNT)
@@ -2073,10 +2073,10 @@ process SIGC =
    | INSTANTIATE_FAILED := INSTANTIATES and IP_STATE = IP_FAILED
    | INSTANTIATE_INCOMPLETE := INSTANTIATES and IP_STATE /= IP_DONE and IP_STATE /= IP_FAILED
    | FLAT_READY := INSTANTIATES and IP_STATE = IP_DONE
-   | DUMP_RUNS := DUMP_PASS = 2 and FINISHES and PASS_MESSAGE = 0 or DUMP_PASS = 3 and FLAT_READY or ROWS_DUMP and ROWS_READY or CLOCKS_DUMP and CLOCKS_READY
+   | DUMP_RUNS := DUMP_PASS = 2 and FINISHES and PASS_MESSAGE = 0 or DUMP_PASS = 3 and FLAT_READY or ROWS_DUMP and ROWS_READY or CLOCKS_DUMP and CLOCKS_READY or SCHEDULE_DUMP and SCHEDULE_READY
    | FLAT_DUMP := DUMP_PASS = 3
    | ROWS_DUMP := DUMP_PASS = 4
-   | LOWERS := FLAT_READY and (DUMP_PASS = 0 or DUMP_PASS = 4 or DUMP_PASS = 5)
+   | LOWERS := FLAT_READY and (DUMP_PASS = 0 or DUMP_PASS = 4 or DUMP_PASS = 5 or DUMP_PASS = 6)
    | LOWER_BOUND := long(64) + long(2) * long(FLAT_SIGNAL_COUNT) + long(FLAT_LABEL_COUNT) + long(2) * long(TYPE_COUNT)
                     + long(VALUE_COUNT) + long(TABLE_COUNT) + long(POOL_COUNT) + long(FLAT_LOOP_COUNT)
                     + long(6) * long(FLAT_EQUATION_COUNT) + long(2) * long(FLAT_GROUP_COUNT) + long(2) * long(FLAT_MEMBER_COUNT)
@@ -3047,7 +3047,7 @@ process SIGC =
    | EXPAND_INCOMPLETE := POST_READY and XP_STATE /= XS_DONE and XP_STATE /= XS_FAILED
    | ROWS_READY := POST_READY and XP_STATE = XS_DONE
    | CLOCKS_DUMP := DUMP_PASS = 5
-   | CLOCKS_RUN := ROWS_READY and (DUMP_PASS = 0 or CLOCKS_DUMP)
+   | CLOCKS_RUN := ROWS_READY and (DUMP_PASS = 0 or CLOCKS_DUMP or SCHEDULE_DUMP)
    | CP_INDEX := 0 .. (if CLOCKS_RUN then long(ROW_COUNT) - long(1) else long(-1))
    | iterate CP_INDEX of
        (| CP_OP := ROWS_OP[CP_INDEX]
@@ -3747,7 +3747,10 @@ process SIGC =
                           else if CO_DONE and CF_FAILED then T_INPUT_ROOT else if CLOCK_INCOMPLETE then T_CAPACITY else 0
    | CE_STALL := CLOCK_MESSAGE_RAW = T_CLOCK_CYCLE
    | CE_GUARDS := CLOCK_MESSAGE_RAW = T_GUARD_CYCLE
-   | CE_LIST := CE_STALL or CE_GUARDS
+   | SCHED_LIST := CLOCK_MESSAGE_RAW = 0 and (SCHEDULE_MESSAGE = T_SIGNAL_CYCLE or SCHEDULE_MESSAGE = T_EFFECT_CYCLE)
+   | SCHED_PAIR := CLOCK_MESSAGE_RAW = 0 and SCHEDULE_MESSAGE = T_EFFECTS_UNORDERED
+   | CE_LIST := CE_STALL or CE_GUARDS or SCHED_LIST
+   | TX_ARGS := if SCHED_PAIR then 2 else CE_ARGS
    | CE_FITS := CLOCK_MESSAGE_RAW = T_FITS_NO_TREE
    | CE_ARGS := if CE_FITS then 3 else if CLOCK_MESSAGE_RAW = T_NOT_INSIDE then 2
                 else if CLOCK_MESSAGE_RAW = T_TWO_DEFINITIONS then 1 else 0
@@ -3839,13 +3842,18 @@ process SIGC =
    | CE_KEY1 := if CE_FS1 >= 0 then CE_FS1 else FLAT_SIGNAL_COUNT + CE_Q1
    | CE_KEY2 := if CE_FS2 >= 0 then CE_FS2 else FLAT_SIGNAL_COUNT + CE_Q2
    | CE_SWAP := CE_FITS and CE_KEY2 < CE_KEY1
-   | CE_ITEMS := if CE_ARGS > 0 then CE_ARGS else if CE_COUNT > CLOCK_NAME_CAP then CLOCK_NAME_CAP else CE_COUNT
+   | CE_ITEMS := if TX_ARGS > 0 then TX_ARGS else if SCHED_LIST then (if SM_COUNT > CLOCK_NAME_CAP then CLOCK_NAME_CAP else SM_COUNT)
+               else if CE_COUNT > CLOCK_NAME_CAP then CLOCK_NAME_CAP else CE_COUNT
    | CL_INDEX := 0 .. CE_ITEMS - 1
    | iterate CL_INDEX of
-       (| L_M := if CE_ARGS = 0 then CE_ITEM_MEMBER[CL_INDEX] else if CL_INDEX = 0 then CE_MIN0
+       (| L_EFFECT := SCHED_PAIR
+        | L_POSITION := SCHED_LIST and not SM_ITEM_OWNER[CL_INDEX]
+        | L_PLAIN := L_EFFECT or L_POSITION
+        | L_M := if SCHED_LIST then SM_ITEM_VALUE[CL_INDEX] else if SCHED_PAIR then (if CL_INDEX = 0 then EF_FIRST_ROW else EF_SECOND_ROW)
+                 else if CE_ARGS = 0 then CE_ITEM_MEMBER[CL_INDEX] else if CL_INDEX = 0 then CE_MIN0
                  else if CL_INDEX = 1 and not CE_SWAP or CL_INDEX = 2 and CE_SWAP then CE_MIN1 else CE_MIN2
-        | L_SIGNAL := L_M < FLAT_SIGNAL_COUNT
-        | L_SAMPLE := L_M >= ROW_COUNT
+        | L_SIGNAL := not L_PLAIN and L_M < FLAT_SIGNAL_COUNT
+        | L_SAMPLE := not L_PLAIN and L_M >= ROW_COUNT
         | L_ROW := if L_SAMPLE then SAMPLE_ROW[L_M - ROW_COUNT] else L_M
         | L_FLAT := L_SIGNAL or L_SAMPLE and L_ROW < FLAT_SIGNAL_COUNT
         | L_BRACKET := L_FLAT and not L_SIGNAL
@@ -3856,15 +3864,16 @@ process SIGC =
         | L_BASE := L_NAME_KEY modulo NAME_CAP
         | L_SUFFIX := L_NAME_KEY / NAME_CAP
         | L_TOKEN := ROWS_TOKEN[L_ROW]
-        | L_P := if L_BRACKET then F_OPEN else if L_FLAT then 0 else F_EXPRESSION_AT
-        | L_A := if L_PREFIXED then MODEL_NAME[INSTANCE_MODEL[L_INSTANCE]] else -1
-        | L_F1 := if L_PREFIXED then F_HASH else 0
+        | L_P := if L_PLAIN then 0 else if L_BRACKET then F_OPEN else if L_FLAT then 0 else F_EXPRESSION_AT
+        | L_A := if L_EFFECT then EFFECT_KIND[integer(ROWS_VALUE[L_M])] modulo NAME_CAP
+                 else if L_PREFIXED then MODEL_NAME[INSTANCE_MODEL[L_INSTANCE]] else -1
+        | L_F1 := if L_EFFECT then F_AT else if L_PREFIXED then F_HASH else 0
         | L_N1 := if L_PREFIXED then INSTANCE_ORDINAL[L_INSTANCE] else if L_TOKEN < 0 then 1 else TOKEN_LINE[L_TOKEN]
         | L_F2 := if L_PREFIXED then F_DOT else if L_FLAT then 0 else F_COLON
         | L_B := if L_FLAT then L_BASE else -1
         | L_F3 := if L_FLAT and L_SUFFIX > 0 and L_BASE /= N_ON_MARK then F_QUOTE else 0
         | L_N2 := if L_FLAT then L_SUFFIX else if L_TOKEN < 0 then 1 else TOKEN_COLUMN[L_TOKEN]
-        | L_S := if L_FLAT and not L_BRACKET then 0 else F_CLOSE
+        | L_S := if L_PLAIN or L_FLAT and not L_BRACKET then 0 else F_CLOSE
         | L_D1_ALL := 1 + integer(L_N1 >= 10) + integer(L_N1 >= 100) + integer(L_N1 >= 1000) + integer(L_N1 >= 10000) + integer(L_N1 >= 100000) + integer(L_N1 >= 1000000) + integer(L_N1 >= 10000000) + integer(L_N1 >= 100000000) + integer(L_N1 >= 1000000000)
         | L_D2_ALL := 1 + integer(L_N2 >= 10) + integer(L_N2 >= 100) + integer(L_N2 >= 1000) + integer(L_N2 >= 10000) + integer(L_N2 >= 100000) + integer(L_N2 >= 1000000) + integer(L_N2 >= 10000000) + integer(L_N2 >= 100000000) + integer(L_N2 >= 1000000000)
         | L_D1 := if L_PREFIXED or not L_FLAT then L_D1_ALL else 0
@@ -3889,12 +3898,13 @@ process SIGC =
         | CI_D2 := CI_D2[?] next CL_INDEX : L_D2
         | CI_S := CI_S[?] next CL_INDEX : L_S
         | CI_END := CI_END[?] next CL_INDEX : CL_TOTAL
-        | CI_KEY := CI_KEY[?] next CL_INDEX : if CE_ARGS > 0 then long(CL_INDEX) else CE_ITEM_KEY[CL_INDEX]
+        | CI_KEY := CI_KEY[?] next CL_INDEX : if TX_ARGS > 0 then long(CL_INDEX) else if SCHED_LIST then SM_ITEM_KEY[CL_INDEX]
+                                            else CE_ITEM_KEY[CL_INDEX]
         | CI_INCLUDED := CI_INCLUDED[?] next CL_INDEX : not (CE_STALL and CE_SIGNAL_COUNT > 0 and not CE_ITEM_SIGNAL[CL_INDEX])
         |)
      with (| CL_TOTAL := 0 | CL_LONGEST := 0 |)
      end
-   | CE_OVERFLOW := CE_COUNT > CLOCK_NAME_CAP or CL_TOTAL > CLOCK_TEXT_CAP
+   | CE_OVERFLOW := CE_COUNT > CLOCK_NAME_CAP or SCHED_LIST and SM_COUNT > CLOCK_NAME_CAP or CL_TOTAL > CLOCK_TEXT_CAP
    | CR_INDEX := 0 .. (if CE_OVERFLOW then -1 else CL_TOTAL - 1)
    | iterate CR_INDEX of
        (| CR_ITEM := if CR_INDEX >= CI_END[CR_ITEM[?]] then CR_ITEM[?] + 1 else CR_ITEM[?]
@@ -3967,7 +3977,7 @@ process SIGC =
         | J_O := CJ_O[?]
         | J_LIVE := J_R < CE_INCLUDED_COUNT
         | J_ITEM := CE_ORDER[J_R]
-        | J_SKIPS := CE_DUPLICATE[J_ITEM]
+        | J_SKIPS := CE_DUPLICATE[J_ITEM] and not SCHED_LIST
         | J_START := if J_ITEM = 0 then 0 else CI_END[J_ITEM - 1]
         | J_SEPARATOR := if CE_LIST and CJ_EMITTED[?] > 0 then 2 else 0
         | J_EMITS := J_LIVE and not J_SKIPS and J_O < J_SEPARATOR + CI_END[J_ITEM] - J_START
@@ -3987,19 +3997,450 @@ process SIGC =
                          or CK_DONE and CO_STATE /= OS_DONE and CO_STATE /= OS_FAILED
    | CLOCKS_READY := CO_DONE and not CF_FAILED
    | CF_SIGNAL_SOURCE := FLAT_SIGNAL_SOURCE[CF_SIGNAL]
-   | CLOCK_MESSAGE := if CE_OVERFLOW then T_CAPACITY else CLOCK_MESSAGE_RAW
+   | SCHEDULE_ARGUMENT2 := if SCHED_PAIR then EFFECT_RESOURCE[integer(ROWS_VALUE[EF_FIRST_ROW])] else 0
+   | CLOCK_MESSAGE := if CE_OVERFLOW then T_CAPACITY else if CLOCK_MESSAGE_RAW /= 0 then CLOCK_MESSAGE_RAW else SCHEDULE_MESSAGE
    | CLOCK_TOKEN := if CE_GUARDS then CE_GUARD_TOKEN else if CLOCKS_RUN and CK_STATE = KS_FAILED then CK_TOKEN else if CK_DONE and CO_STATE = OS_FAILED then CO_TOKEN
                     else if CO_DONE and CF_FAILED then
                       (if CF_SIGNAL_SOURCE < 0 then FINISH_SIGNAL_TOKEN[-CF_SIGNAL_SOURCE - 1] else SIGNAL_TOKEN[CF_SIGNAL_SOURCE])
-                    else -1
+                    else SCHEDULE_TOKEN
    | CLOCK_ARGUMENT0 := if CE_OVERFLOW then F_CAP_CLOCK_NAMES else if CLOCKS_RUN and CK_STATE = KS_FAILED then CK_ARGUMENT0 else if CK_DONE and CO_STATE = OS_FAILED then F_CAP_PAIRS
                         else if CO_DONE and CF_FAILED then
                           (if CF_SIGNAL_SOURCE < 0 then FINISH_SIGNAL_NAME[-CF_SIGNAL_SOURCE - 1] else SIGNAL_NAME[CF_SIGNAL_SOURCE])
-                        else F_CAP_CLOCKS
+                        else if CLOCK_MESSAGE_RAW = 0 and SCHEDULE_MESSAGE /= 0 then SCHEDULE_ARGUMENT0 else F_CAP_CLOCKS
+   | SCHEDULE_DUMP := DUMP_PASS = 6
+   | SCHEDULE_RUN := CLOCKS_READY and (DUMP_PASS = 0 or SCHEDULE_DUMP)
+   | SCHED_LOOP_BASE := ROW_COUNT + CLOCK_TOTAL
+   | SCHED_NODES := SCHED_LOOP_BASE + FLAT_LOOP_COUNT
+   | SE_CLOCK_END := 3 * ROW_COUNT + 2 * CLOCK_TOTAL
+   | SE_DEP_END := SE_CLOCK_END + DEPENDENCE_TOTAL
+   | SE_INDEX := 0 .. (if SCHEDULE_RUN and SCHED_NODES < SCHED_NODE_CAP then SE_DEP_END + FLAT_LOOP_COUNT - 1 else -1)
+   | iterate SE_INDEX of
+       (| E_IN_ROWS := SE_INDEX < 3 * ROW_COUNT
+        | E_IN_CLOCKS := not E_IN_ROWS and SE_INDEX < SE_CLOCK_END
+        | E_IN_DEPS := SE_INDEX >= SE_CLOCK_END and SE_INDEX < SE_DEP_END
+        | E_IN_LOOPS := SE_INDEX >= SE_DEP_END
+        | E_ROW := SE_INDEX / 3
+        | E_SUB := SE_INDEX modulo 3
+        | E_CLOCK := (SE_INDEX - 3 * ROW_COUNT) / 2
+        | E_CSUB := (SE_INDEX - 3 * ROW_COUNT) modulo 2
+        | E_D := SE_INDEX - SE_CLOCK_END
+        | E_L := SE_INDEX - SE_DEP_END
+        | E_ROW_OP := ROWS_OP[E_ROW]
+        | E_LEFT := ROWS_LEFT[E_ROW]
+        | E_RIGHT := ROWS_RIGHT[E_ROW]
+        | E_SEED := E_ROW_OP = OP_SEED
+        | E_MONO := OP_MONOCHRONOUS[E_ROW_OP] = 1
+        | E_LEFT_EDGE := E_SEED or E_ROW_OP /= OP_PREV and (E_ROW_OP = OP_COPY or E_ROW_OP = OP_EFFECT or E_MONO or E_ROW_OP = OP_WHEN or E_ROW_OP = OP_DEFAULT)
+        | E_RIGHT_EDGE := E_SEED or E_RIGHT >= 0 and (E_MONO or E_ROW_OP = OP_DEFAULT and not ROWS_CTX[E_LEFT])
+        | E_KIND := NODE_KIND[E_CLOCK]
+        | E_SAMPLE := E_KIND = CLK_SAMPLE
+        | E_BINARY := E_KIND = CLK_PRODUCT or E_KIND = CLK_SUM
+        | E_HAS := if E_IN_ROWS then E_SUB = 0 or E_SUB = 1 and E_LEFT_EDGE or E_SUB = 2 and E_RIGHT_EDGE
+                 else if E_IN_CLOCKS then E_SAMPLE or E_BINARY else E_IN_DEPS
+        | E_FROM := if E_IN_ROWS then (if E_SUB = 0 then ROW_COUNT + CLOCK_REP[E_ROW] else if E_SUB = 1 then E_LEFT
+                                      else if E_SEED then E_ROW else E_RIGHT)
+                  else if E_IN_CLOCKS then
+                    (if E_CSUB = 0 then ROW_COUNT + (if E_SAMPLE then NODE_PARENT1[E_CLOCK] else NODE_LEFT1[E_CLOCK]) - 1
+                     else if E_SAMPLE then NODE_LEFT1[E_CLOCK] - 1 else ROW_COUNT + NODE_RIGHT1[E_CLOCK] - 1)
+                  else if E_IN_DEPS then DEPENDENCE_FROM_ROW[E_D] else LOOP_INDEX[E_L]
+        | E_TO := if E_IN_ROWS then (if E_SUB = 2 and E_SEED then E_RIGHT else E_ROW)
+                else if E_IN_CLOCKS then ROW_COUNT + E_CLOCK else if E_IN_DEPS then DEPENDENCE_TO_ROW[E_D]
+                else SCHED_LOOP_BASE + E_L
+        | E_GLOBAL := E_HAS and not E_IN_LOOPS
+        | E_SFROM := (if E_FROM < ROW_COUNT and ROWS_LOOP[E_FROM] >= 0 then SCHED_LOOP_BASE + ROWS_LOOP[E_FROM] else E_FROM)
+        | E_STO := (if E_TO < ROW_COUNT and ROWS_LOOP[E_TO] >= 0 then SCHED_LOOP_BASE + ROWS_LOOP[E_TO] else E_TO)
+        | E_OUTER := E_GLOBAL and (E_FROM = E_TO or E_SFROM /= E_STO)
+                   or E_IN_LOOPS and ROWS_OP[ROWS_LEFT[LOOP_INDEX[E_L]]] = OP_RANGE
+        | E_OFROM := if E_IN_LOOPS then E_FROM else E_SFROM
+        | E_OTO := if E_IN_LOOPS then E_TO else E_STO
+        | E_INNER := E_GLOBAL and (E_FROM < ROW_COUNT and ROWS_LOOP[E_FROM] >= 0 and ROWS_OP[E_FROM] /= OP_SEED) and (E_TO < ROW_COUNT and ROWS_LOOP[E_TO] >= 0 and ROWS_OP[E_TO] /= OP_SEED) and ROWS_LOOP[E_FROM] = ROWS_LOOP[E_TO]
+        | E_GSLOT := if E_GLOBAL and SG_COUNT[?] < EDGE_CAP then SG_COUNT[?] else -1
+        | E_OSLOT := if E_OUTER and SO_COUNT[?] < EDGE_CAP then SO_COUNT[?] else -1
+        | SG_FROM := SG_FROM[?] next E_GSLOT : E_FROM
+        | SG_TO := SG_TO[?] next E_GSLOT : E_TO
+        | SG_COUNT := SG_COUNT[?] + integer(E_GLOBAL)
+        | SO_FROM := SO_FROM[?] next E_OSLOT : E_OFROM
+        | SO_TO := SO_TO[?] next E_OSLOT : E_OTO
+        | SO_COUNT := SO_COUNT[?] + integer(E_OUTER)
+        | SG_OUT := SG_OUT[?] next (if E_GLOBAL then E_FROM else -1) : SG_OUT[?][E_FROM] + 1
+        | SG_IN := SG_IN[?] next (if E_GLOBAL then E_TO else -1) : SG_IN[?][E_TO] + 1
+        | SO_OUT := SO_OUT[?] next (if E_OUTER then E_OFROM else -1) : SO_OUT[?][E_OFROM] + 1
+        | SO_IN := SO_IN[?] next (if E_OUTER then E_OTO else -1) : SO_IN[?][E_OTO] + 1
+        | SI_IN := SI_IN[?] next (if E_INNER then E_TO else -1) : SI_IN[?][E_TO] + 1
+        | E_ROW0 := E_IN_ROWS and E_SUB = 0
+        | E_MEMBER := (E_ROW < ROW_COUNT and ROWS_LOOP[E_ROW] >= 0 and ROWS_OP[E_ROW] /= OP_SEED)
+        | E_LOOP := ROWS_LOOP[E_ROW]
+        | LOOP_MEMBERS := LOOP_MEMBERS[?] next (if E_ROW0 and E_MEMBER then E_LOOP else -1) : LOOP_MEMBERS[?][E_LOOP] + 1
+        | E_GATHERS := E_ROW0 and E_MEMBER and E_ROW_OP = OP_GATHER and ROWS_OP[E_LEFT] = OP_PREV and ROWS_LEFT[E_LEFT] = ROWS_OWNER[E_ROW]
+        | SNAP_GATHER1 := SNAP_GATHER1[?] next (if E_GATHERS then ROWS_OWNER[E_ROW] else -1) : E_LOOP + 1
+        | E_EFFECT := E_ROW0 and E_ROW_OP = OP_EFFECT
+        | E_RESOURCE := EFFECT_RESOURCE[integer(ROWS_VALUE[E_ROW])]
+        | SE_EROW := SE_EROW[?] next (if E_EFFECT and SE_ECOUNT[?] < EFFECT_ORDER_CAP then SE_ECOUNT[?] else -1) : E_ROW
+        | SE_ECOUNT := SE_ECOUNT[?] + integer(E_EFFECT)
+        | RES_COUNT := RES_COUNT[?] next (if E_EFFECT then E_RESOURCE else -1) : RES_COUNT[?][E_RESOURCE] + 1
+        |)
+     with (| SG_COUNT := 0 | SO_COUNT := 0 | SE_ECOUNT := 0 |)
+     end
+   | SCHED_OVERFLOW := SCHEDULE_RUN and (SCHED_NODES >= SCHED_NODE_CAP or SG_COUNT > EDGE_CAP or SO_COUNT > EDGE_CAP
+                                       or SE_ECOUNT > EFFECT_ORDER_CAP)
+   | SCHED_GO := SCHEDULE_RUN and not SCHED_OVERFLOW
+   | SWC_INDEX := 0 .. (if SCHED_GO then WAR_COUNT - 1 else -1)
+   | iterate SWC_INDEX of
+       (| W_READER := WAR_READER[SWC_INDEX]
+        | W_WRITER := WAR_WRITER[SWC_INDEX]
+        | W_KEPT := (W_READER < ROW_COUNT and ROWS_LOOP[W_READER] >= 0 and ROWS_OP[W_READER] /= OP_SEED) and SNAP_GATHER1[WAR_SIGNAL[SWC_INDEX]] /= ROWS_LOOP[W_READER] + 1
+        | SW_OUT := SW_OUT[?] next (if W_KEPT then W_READER else -1) : SW_OUT[?][W_READER] + 1
+        | SW_IN := SW_IN[?] next (if W_KEPT then W_WRITER else -1) : SW_IN[?][W_WRITER] + 1
+        |)
+     end
+   | SN_INDEX := 0 .. (if SCHED_GO then SCHED_NODES else -1)
+   | iterate SN_INDEX of
+       (| SG_START := SG_START[?] next SN_INDEX : SN_G[?]
+        | SN_G := SN_G[?] + SG_OUT[SN_INDEX]
+        | SG_PSTART := SG_PSTART[?] next SN_INDEX : SN_GP[?]
+        | SN_GP := SN_GP[?] + SG_IN[SN_INDEX]
+        | SO_START := SO_START[?] next SN_INDEX : SN_O[?]
+        | SN_O := SN_O[?] + SO_OUT[SN_INDEX]
+        | SO_PSTART := SO_PSTART[?] next SN_INDEX : SN_OP[?]
+        | SN_OP := SN_OP[?] + SO_IN[SN_INDEX]
+        | SW_START := SW_START[?] next SN_INDEX : SN_W[?]
+        | SN_W := SN_W[?] + SW_OUT[SN_INDEX]
+        |)
+     with (| SN_G := 0 | SN_GP := 0 | SN_O := 0 | SN_OP := 0 | SN_W := 0 |)
+     end
+   | SPL_MAX := if SG_COUNT > WAR_COUNT then SG_COUNT else WAR_COUNT
+   | SPL_INDEX := 0 .. (if SCHED_GO then SPL_MAX - 1 else -1)
+   | iterate SPL_INDEX of
+       (| P_G := SPL_INDEX < SG_COUNT
+        | P_GF := SG_FROM[SPL_INDEX]
+        | P_GT := SG_TO[SPL_INDEX]
+        | SG_SUCC := SG_SUCC[?] next (if P_G then SG_START[P_GF] + SG_SFILL[?][P_GF] else -1) : P_GT
+        | SG_SFILL := SG_SFILL[?] next (if P_G then P_GF else -1) : SG_SFILL[?][P_GF] + 1
+        | SG_PRED := SG_PRED[?] next (if P_G then SG_PSTART[P_GT] + SG_PFILL[?][P_GT] else -1) : P_GF
+        | SG_PFILL := SG_PFILL[?] next (if P_G then P_GT else -1) : SG_PFILL[?][P_GT] + 1
+        | P_O := SPL_INDEX < SO_COUNT
+        | P_OF := SO_FROM[SPL_INDEX]
+        | P_OT := SO_TO[SPL_INDEX]
+        | SO_SUCC := SO_SUCC[?] next (if P_O then SO_START[P_OF] + SO_SFILL[?][P_OF] else -1) : P_OT
+        | SO_SFILL := SO_SFILL[?] next (if P_O then P_OF else -1) : SO_SFILL[?][P_OF] + 1
+        | SO_PRED := SO_PRED[?] next (if P_O then SO_PSTART[P_OT] + SO_PFILL[?][P_OT] else -1) : P_OF
+        | SO_PFILL := SO_PFILL[?] next (if P_O then P_OT else -1) : SO_PFILL[?][P_OT] + 1
+        | P_WR := WAR_READER[SPL_INDEX]
+        | P_W := SPL_INDEX < WAR_COUNT and (P_WR < ROW_COUNT and ROWS_LOOP[P_WR] >= 0 and ROWS_OP[P_WR] /= OP_SEED) and SNAP_GATHER1[WAR_SIGNAL[SPL_INDEX]] /= ROWS_LOOP[P_WR] + 1
+        | SW_SUCC := SW_SUCC[?] next (if P_W then SW_START[P_WR] + SW_FILL[?][P_WR] else -1) : WAR_WRITER[SPL_INDEX]
+        | SW_FILL := SW_FILL[?] next (if P_W then P_WR else -1) : SW_FILL[?][P_WR] + 1
+        |)
+     end
+   | SKO_INDEX := 0 .. (if SCHED_GO then 2 * (SCHED_NODES) + (SO_COUNT) + 1 else -1)
+   | iterate SKO_INDEX of
+       (| SKO_IN_INIT := SKO_CURSOR[?] < SCHED_NODES
+        | SKO_INIT_NODE := SKO_CURSOR[?]
+        | SKO_INIT_PRESENT := SKO_IN_INIT and (if SKO_INIT_NODE < ROW_COUNT then ROWS_LOOP[SKO_INIT_NODE] < 0 else if SKO_INIT_NODE < SCHED_LOOP_BASE then NODE_KIND[SKO_INIT_NODE - ROW_COUNT] /= CLK_NONE else true)
+        | SKO_INIT_PUSH := SKO_INIT_PRESENT and SO_IN[SKO_INIT_NODE] = 0
+        | SKO_NODE_NOW := SKO_NODE[?]
+        | SKO_K := SKO_STEP[?]
+        | SKO_LEN0 := if SKO_NODE_NOW >= 0 then SO_START[SKO_NODE_NOW + 1] - SO_START[SKO_NODE_NOW] else 0
+        | SKO_EXPANDING := not SKO_IN_INIT and SKO_K < SKO_LEN0
+        | SKO_S := SO_SUCC[SO_START[SKO_NODE_NOW] + SKO_K]
+        | SKO_COUNTS := SKO_EXPANDING and true
+        | SKO_NEW_DEC := SKO_DEC[?][SKO_S] + 1
+        | SKO_DEC := SKO_DEC[?] next (if SKO_COUNTS then SKO_S else -1) : SKO_NEW_DEC
+        | SKO_SUCC_PUSH := SKO_COUNTS and SO_IN[SKO_S] = SKO_NEW_DEC
+        | SKO_POPS := not SKO_IN_INIT and not SKO_EXPANDING and SKO_TOP[?] > 0
+        | SKO_POPPED := SKO_STACK[?][SKO_TOP[?] - 1]
+        | SKO_PUSH := SKO_INIT_PUSH or SKO_SUCC_PUSH
+        | SKO_STACK := SKO_STACK[?] next (if SKO_PUSH then SKO_TOP[?] else -1) : (if SKO_IN_INIT then SKO_INIT_NODE else SKO_S)
+        | SKO_TOP := SKO_TOP[?] + integer(SKO_PUSH) - integer(SKO_POPS)
+        | SKO_ORDER := SKO_ORDER[?] next (if SKO_POPS then SKO_COUNT[?] else -1) : SKO_POPPED
+        | SKO_COUNT := SKO_COUNT[?] + integer(SKO_POPS)
+        | SKO_PRESENT := SKO_PRESENT[?] + integer(SKO_INIT_PRESENT)
+        | SKO_MARK := SKO_MARK[?] next (if SKO_POPS then SKO_POPPED else -1) : true
+        | SKO_NODE := if SKO_POPS then SKO_POPPED else SKO_NODE_NOW
+        | SKO_STEP := if SKO_POPS then 0 else SKO_K + integer(SKO_EXPANDING)
+        | SKO_CURSOR := SKO_CURSOR[?] + integer(SKO_IN_INIT)
+        |)
+     with (| SKO_CURSOR := 0 | SKO_NODE := -1 | SKO_STEP := 0 | SKO_TOP := 0 | SKO_COUNT := 0 | SKO_PRESENT := 0 |)
+     end
+   | SKO_FAILED := SCHED_GO and SKO_COUNT < SKO_PRESENT
+   | SKA_RUN := SCHED_GO and not SKO_FAILED and FLAT_LOOP_COUNT > 0
+   | SKA_INDEX := 0 .. (if SKA_RUN then 2 * (ROW_COUNT) + (SG_COUNT + WAR_COUNT) + 1 else -1)
+   | iterate SKA_INDEX of
+       (| SKA_IN_INIT := SKA_CURSOR[?] < ROW_COUNT
+        | SKA_INIT_NODE := SKA_CURSOR[?]
+        | SKA_INIT_PRESENT := SKA_IN_INIT and (SKA_INIT_NODE < ROW_COUNT and ROWS_LOOP[SKA_INIT_NODE] >= 0 and ROWS_OP[SKA_INIT_NODE] /= OP_SEED)
+        | SKA_INIT_PUSH := SKA_INIT_PRESENT and (SI_IN[SKA_INIT_NODE] + SW_IN[SKA_INIT_NODE]) = 0
+        | SKA_NODE_NOW := SKA_NODE[?]
+        | SKA_K := SKA_STEP[?]
+        | SKA_LEN0 := if SKA_NODE_NOW >= 0 then SG_START[SKA_NODE_NOW + 1] - SG_START[SKA_NODE_NOW] else 0
+        | SKA_LEN1 := if SKA_NODE_NOW >= 0 then (if SKA_NODE_NOW < ROW_COUNT then SW_START[SKA_NODE_NOW + 1] - SW_START[SKA_NODE_NOW] else 0) else 0
+        | SKA_EXPANDING := not SKA_IN_INIT and SKA_K < SKA_LEN0 + SKA_LEN1
+        | SKA_IN_SEG0 := SKA_K < SKA_LEN0
+        | SKA_S := if SKA_IN_SEG0 then SG_SUCC[SG_START[SKA_NODE_NOW] + SKA_K]
+                  else SW_SUCC[SW_START[SKA_NODE_NOW] + SKA_K - SKA_LEN0]
+        | SKA_COUNTS := SKA_EXPANDING and (if SKA_IN_SEG0 then ((SKA_NODE_NOW < ROW_COUNT and ROWS_LOOP[SKA_NODE_NOW] >= 0 and ROWS_OP[SKA_NODE_NOW] /= OP_SEED) and (SKA_S < ROW_COUNT and ROWS_LOOP[SKA_S] >= 0 and ROWS_OP[SKA_S] /= OP_SEED) and ROWS_LOOP[SKA_S] = ROWS_LOOP[SKA_NODE_NOW]) else true)
+        | SKA_NEW_DEC := SKA_DEC[?][SKA_S] + 1
+        | SKA_DEC := SKA_DEC[?] next (if SKA_COUNTS then SKA_S else -1) : SKA_NEW_DEC
+        | SKA_SUCC_PUSH := SKA_COUNTS and (SI_IN[SKA_S] + SW_IN[SKA_S]) = SKA_NEW_DEC
+        | SKA_POPS := not SKA_IN_INIT and not SKA_EXPANDING and SKA_TOP[?] > 0
+        | SKA_POPPED := SKA_STACK[?][SKA_TOP[?] - 1]
+        | SKA_PUSH := SKA_INIT_PUSH or SKA_SUCC_PUSH
+        | SKA_STACK := SKA_STACK[?] next (if SKA_PUSH then SKA_TOP[?] else -1) : (if SKA_IN_INIT then SKA_INIT_NODE else SKA_S)
+        | SKA_TOP := SKA_TOP[?] + integer(SKA_PUSH) - integer(SKA_POPS)
+        | SKA_ORDER := SKA_ORDER[?] next (if SKA_POPS then SKA_COUNT[?] else -1) : SKA_POPPED
+        | SKA_COUNT := SKA_COUNT[?] + integer(SKA_POPS)
+        | SKA_PRESENT := SKA_PRESENT[?] + integer(SKA_INIT_PRESENT)
+        | SKA_POP_LOOP := if SKA_POPS and SKA_POPPED < ROW_COUNT then ROWS_LOOP[SKA_POPPED] else -1
+        | SKA_LOOP_POPS := SKA_LOOP_POPS[?] next SKA_POP_LOOP : SKA_LOOP_POPS[?][SKA_POP_LOOP] + 1
+        | SKA_NODE := if SKA_POPS then SKA_POPPED else SKA_NODE_NOW
+        | SKA_STEP := if SKA_POPS then 0 else SKA_K + integer(SKA_EXPANDING)
+        | SKA_CURSOR := SKA_CURSOR[?] + integer(SKA_IN_INIT)
+        |)
+     with (| SKA_CURSOR := 0 | SKA_NODE := -1 | SKA_STEP := 0 | SKA_TOP := 0 | SKA_COUNT := 0 | SKA_PRESENT := 0 |)
+     end
+   | SKB_RUN := SKA_RUN and SKA_COUNT < SKA_PRESENT
+   | SKB_INDEX := 0 .. (if SKB_RUN then 2 * (ROW_COUNT) + (SG_COUNT) + 1 else -1)
+   | iterate SKB_INDEX of
+       (| SKB_IN_INIT := SKB_CURSOR[?] < ROW_COUNT
+        | SKB_INIT_NODE := SKB_CURSOR[?]
+        | SKB_INIT_PRESENT := SKB_IN_INIT and ((SKB_INIT_NODE < ROW_COUNT and ROWS_LOOP[SKB_INIT_NODE] >= 0 and ROWS_OP[SKB_INIT_NODE] /= OP_SEED) and (SKA_LOOP_POPS[ROWS_LOOP[SKB_INIT_NODE]] < LOOP_MEMBERS[ROWS_LOOP[SKB_INIT_NODE]]))
+        | SKB_INIT_PUSH := SKB_INIT_PRESENT and SI_IN[SKB_INIT_NODE] = 0
+        | SKB_NODE_NOW := SKB_NODE[?]
+        | SKB_K := SKB_STEP[?]
+        | SKB_LEN0 := if SKB_NODE_NOW >= 0 then SG_START[SKB_NODE_NOW + 1] - SG_START[SKB_NODE_NOW] else 0
+        | SKB_EXPANDING := not SKB_IN_INIT and SKB_K < SKB_LEN0
+        | SKB_S := SG_SUCC[SG_START[SKB_NODE_NOW] + SKB_K]
+        | SKB_COUNTS := SKB_EXPANDING and ((SKB_NODE_NOW < ROW_COUNT and ROWS_LOOP[SKB_NODE_NOW] >= 0 and ROWS_OP[SKB_NODE_NOW] /= OP_SEED) and (SKB_S < ROW_COUNT and ROWS_LOOP[SKB_S] >= 0 and ROWS_OP[SKB_S] /= OP_SEED) and ROWS_LOOP[SKB_S] = ROWS_LOOP[SKB_NODE_NOW])
+        | SKB_NEW_DEC := SKB_DEC[?][SKB_S] + 1
+        | SKB_DEC := SKB_DEC[?] next (if SKB_COUNTS then SKB_S else -1) : SKB_NEW_DEC
+        | SKB_SUCC_PUSH := SKB_COUNTS and SI_IN[SKB_S] = SKB_NEW_DEC
+        | SKB_POPS := not SKB_IN_INIT and not SKB_EXPANDING and SKB_TOP[?] > 0
+        | SKB_POPPED := SKB_STACK[?][SKB_TOP[?] - 1]
+        | SKB_PUSH := SKB_INIT_PUSH or SKB_SUCC_PUSH
+        | SKB_STACK := SKB_STACK[?] next (if SKB_PUSH then SKB_TOP[?] else -1) : (if SKB_IN_INIT then SKB_INIT_NODE else SKB_S)
+        | SKB_TOP := SKB_TOP[?] + integer(SKB_PUSH) - integer(SKB_POPS)
+        | SKB_ORDER := SKB_ORDER[?] next (if SKB_POPS then SKB_COUNT[?] else -1) : SKB_POPPED
+        | SKB_COUNT := SKB_COUNT[?] + integer(SKB_POPS)
+        | SKB_PRESENT := SKB_PRESENT[?] + integer(SKB_INIT_PRESENT)
+        | SKB_MARK := SKB_MARK[?] next (if SKB_POPS then SKB_POPPED else -1) : true
+        | SKB_POP_LOOP := if SKB_POPS and SKB_POPPED < ROW_COUNT then ROWS_LOOP[SKB_POPPED] else -1
+        | SKB_LOOP_POPS := SKB_LOOP_POPS[?] next SKB_POP_LOOP : SKB_LOOP_POPS[?][SKB_POP_LOOP] + 1
+        | SKB_NODE := if SKB_POPS then SKB_POPPED else SKB_NODE_NOW
+        | SKB_STEP := if SKB_POPS then 0 else SKB_K + integer(SKB_EXPANDING)
+        | SKB_CURSOR := SKB_CURSOR[?] + integer(SKB_IN_INIT)
+        |)
+     with (| SKB_CURSOR := 0 | SKB_NODE := -1 | SKB_STEP := 0 | SKB_TOP := 0 | SKB_COUNT := 0 | SKB_PRESENT := 0 |)
+     end
+   | SKB_FAILED := SKB_RUN and SKB_COUNT < SKB_PRESENT
+   | SL_INDEX := 0 .. (if SKA_RUN then FLAT_LOOP_COUNT - 1 else -1)
+   | iterate SL_INDEX of
+       (| L_FAILED1 := (SKA_LOOP_POPS[SL_INDEX] < LOOP_MEMBERS[SL_INDEX])
+        | L_FAILED2 := L_FAILED1 and SKB_LOOP_POPS[SL_INDEX] < LOOP_MEMBERS[SL_INDEX]
+        | SL_ERROR_LOOP := if SL_ERROR_LOOP[?] < 0 and L_FAILED2 then SL_INDEX else SL_ERROR_LOOP[?]
+        | L_POPS := if L_FAILED1 then SKB_LOOP_POPS[SL_INDEX] else SKA_LOOP_POPS[SL_INDEX]
+        | LO_START := LO_START[?] next SL_INDEX : LO_SUM[?]
+        | LO_LENGTH := LO_LENGTH[?] next SL_INDEX : L_POPS
+        | LO_SUM := LO_SUM[?] + L_POPS
+        |)
+     with (| SL_ERROR_LOOP := -1 | LO_SUM := 0 |)
+     end
+   | SC_OUTER := SKO_FAILED
+   | SC_INNER := SKB_FAILED
+   | SC_RUN := SC_OUTER or SC_INNER
+   | SC_N := if SC_OUTER then SCHED_NODES else ROW_COUNT
+   | SCA_INDEX := 0 .. (if SC_RUN then SC_N + (if SC_OUTER then SO_COUNT else SG_COUNT) - 1 else -1)
+   | iterate SCA_INDEX of
+       (| A_NODE := SCA_NODE[?]
+        | A_K := SCA_K[?]
+        | A_LEN := if SC_OUTER then SO_START[A_NODE + 1] - SO_START[A_NODE] else SG_START[A_NODE + 1] - SG_START[A_NODE]
+        | A_EXPANDING := A_K < A_LEN
+        | A_S := if SC_OUTER then SO_SUCC[SO_START[A_NODE] + A_K] else SG_SUCC[SG_START[A_NODE] + A_K]
+        | A_HIT := A_EXPANDING and (SC_OUTER or ((A_NODE < ROW_COUNT and ROWS_LOOP[A_NODE] >= 0 and ROWS_OP[A_NODE] /= OP_SEED) and (A_S < ROW_COUNT and ROWS_LOOP[A_S] >= 0 and ROWS_OP[A_S] /= OP_SEED) and ROWS_LOOP[A_S] = ROWS_LOOP[A_NODE])) and (if SC_OUTER then ((if A_S < ROW_COUNT then ROWS_LOOP[A_S] < 0 else if A_S < SCHED_LOOP_BASE then NODE_KIND[A_S - ROW_COUNT] /= CLK_NONE else true) and not SKO_MARK[A_S]) else (((A_S < ROW_COUNT and ROWS_LOOP[A_S] >= 0 and ROWS_OP[A_S] /= OP_SEED) and (SKA_LOOP_POPS[ROWS_LOOP[A_S]] < LOOP_MEMBERS[ROWS_LOOP[A_S]])) and not SKB_MARK[A_S]))
+        | A_ACC := SCA_ACC[?] + integer(A_HIT)
+        | SC_OUTC := SC_OUTC[?] next (if A_EXPANDING then -1 else A_NODE) : A_ACC
+        | SCA_NODE := A_NODE + integer(not A_EXPANDING)
+        | SCA_K := if A_EXPANDING then A_K + 1 else 0
+        | SCA_ACC := if A_EXPANDING then A_ACC else 0
+        |)
+     with (| SCA_NODE := 0 | SCA_K := 0 | SCA_ACC := 0 |)
+     end
+   | SCB_INDEX := 0 .. (if SC_RUN then 2 * (SC_N) + ((if SC_OUTER then SO_COUNT else SG_COUNT)) + 1 else -1)
+   | iterate SCB_INDEX of
+       (| SCB_IN_INIT := SCB_CURSOR[?] < SC_N
+        | SCB_INIT_NODE := SCB_CURSOR[?]
+        | SCB_INIT_PRESENT := SCB_IN_INIT and (if SC_OUTER then ((if SCB_INIT_NODE < ROW_COUNT then ROWS_LOOP[SCB_INIT_NODE] < 0 else if SCB_INIT_NODE < SCHED_LOOP_BASE then NODE_KIND[SCB_INIT_NODE - ROW_COUNT] /= CLK_NONE else true) and not SKO_MARK[SCB_INIT_NODE]) else (((SCB_INIT_NODE < ROW_COUNT and ROWS_LOOP[SCB_INIT_NODE] >= 0 and ROWS_OP[SCB_INIT_NODE] /= OP_SEED) and (SKA_LOOP_POPS[ROWS_LOOP[SCB_INIT_NODE]] < LOOP_MEMBERS[ROWS_LOOP[SCB_INIT_NODE]])) and not SKB_MARK[SCB_INIT_NODE]))
+        | SCB_INIT_PUSH := SCB_INIT_PRESENT and SC_OUTC[SCB_INIT_NODE] = 0
+        | SCB_NODE_NOW := SCB_NODE[?]
+        | SCB_K := SCB_STEP[?]
+        | SCB_LEN0 := if SCB_NODE_NOW >= 0 then (if SC_OUTER then SO_PSTART[SCB_NODE_NOW + 1] - SO_PSTART[SCB_NODE_NOW] else SG_PSTART[SCB_NODE_NOW + 1] - SG_PSTART[SCB_NODE_NOW]) else 0
+        | SCB_EXPANDING := not SCB_IN_INIT and SCB_K < SCB_LEN0
+        | SCB_S := (if SC_OUTER then SO_PRED[SO_PSTART[SCB_NODE_NOW] + SCB_K] else SG_PRED[SG_PSTART[SCB_NODE_NOW] + SCB_K])
+        | SCB_COUNTS := SCB_EXPANDING and ((SC_OUTER or ((SCB_NODE_NOW < ROW_COUNT and ROWS_LOOP[SCB_NODE_NOW] >= 0 and ROWS_OP[SCB_NODE_NOW] /= OP_SEED) and (SCB_S < ROW_COUNT and ROWS_LOOP[SCB_S] >= 0 and ROWS_OP[SCB_S] /= OP_SEED) and ROWS_LOOP[SCB_S] = ROWS_LOOP[SCB_NODE_NOW])) and (if SC_OUTER then ((if SCB_S < ROW_COUNT then ROWS_LOOP[SCB_S] < 0 else if SCB_S < SCHED_LOOP_BASE then NODE_KIND[SCB_S - ROW_COUNT] /= CLK_NONE else true) and not SKO_MARK[SCB_S]) else (((SCB_S < ROW_COUNT and ROWS_LOOP[SCB_S] >= 0 and ROWS_OP[SCB_S] /= OP_SEED) and (SKA_LOOP_POPS[ROWS_LOOP[SCB_S]] < LOOP_MEMBERS[ROWS_LOOP[SCB_S]])) and not SKB_MARK[SCB_S])))
+        | SCB_NEW_DEC := SCB_DEC[?][SCB_S] + 1
+        | SCB_DEC := SCB_DEC[?] next (if SCB_COUNTS then SCB_S else -1) : SCB_NEW_DEC
+        | SCB_SUCC_PUSH := SCB_COUNTS and SC_OUTC[SCB_S] = SCB_NEW_DEC
+        | SCB_POPS := not SCB_IN_INIT and not SCB_EXPANDING and SCB_TOP[?] > 0
+        | SCB_POPPED := SCB_STACK[?][SCB_TOP[?] - 1]
+        | SCB_PUSH := SCB_INIT_PUSH or SCB_SUCC_PUSH
+        | SCB_STACK := SCB_STACK[?] next (if SCB_PUSH then SCB_TOP[?] else -1) : (if SCB_IN_INIT then SCB_INIT_NODE else SCB_S)
+        | SCB_TOP := SCB_TOP[?] + integer(SCB_PUSH) - integer(SCB_POPS)
+        | SCB_ORDER := SCB_ORDER[?] next (if SCB_POPS then SCB_COUNT[?] else -1) : SCB_POPPED
+        | SCB_COUNT := SCB_COUNT[?] + integer(SCB_POPS)
+        | SCB_PRESENT := SCB_PRESENT[?] + integer(SCB_INIT_PRESENT)
+        | SCB_MARK := SCB_MARK[?] next (if SCB_POPS then SCB_POPPED else -1) : true
+        | SCB_NODE := if SCB_POPS then SCB_POPPED else SCB_NODE_NOW
+        | SCB_STEP := if SCB_POPS then 0 else SCB_K + integer(SCB_EXPANDING)
+        | SCB_CURSOR := SCB_CURSOR[?] + integer(SCB_IN_INIT)
+        |)
+     with (| SCB_CURSOR := 0 | SCB_NODE := -1 | SCB_STEP := 0 | SCB_TOP := 0 | SCB_COUNT := 0 | SCB_PRESENT := 0 |)
+     end
+   | SM_INDEX := 0 .. (if SC_RUN then ROW_COUNT - 1 else -1)
+   | iterate SM_INDEX of
+       (| M_NODE := if SC_OUTER then (if SM_INDEX < ROW_COUNT and ROWS_LOOP[SM_INDEX] >= 0 then SCHED_LOOP_BASE + ROWS_LOOP[SM_INDEX] else SM_INDEX) else SM_INDEX
+        | M_IN := (if SC_OUTER then ((if M_NODE < ROW_COUNT then ROWS_LOOP[M_NODE] < 0 else if M_NODE < SCHED_LOOP_BASE then NODE_KIND[M_NODE - ROW_COUNT] /= CLK_NONE else true) and not SKO_MARK[M_NODE]) else (((M_NODE < ROW_COUNT and ROWS_LOOP[M_NODE] >= 0 and ROWS_OP[M_NODE] /= OP_SEED) and (SKA_LOOP_POPS[ROWS_LOOP[M_NODE]] < LOOP_MEMBERS[ROWS_LOOP[M_NODE]])) and not SKB_MARK[M_NODE])) and not SCB_MARK[M_NODE] and (SC_OUTER or ROWS_LOOP[SM_INDEX] = SL_ERROR_LOOP)
+        | M_OWNER := ROWS_OWNER[SM_INDEX]
+        | M_OWNS := M_IN and M_OWNER >= 0
+        | M_NEW := M_OWNS and not SM_SEEN[?][M_OWNER]
+        | SM_SEEN := SM_SEEN[?] next (if M_OWNS then M_OWNER else -1) : true
+        | M_EFFECT := M_IN and not M_OWNS and ROWS_OP[SM_INDEX] = OP_EFFECT
+        | M_APPENDS := M_NEW or M_EFFECT
+        | M_SLOT := if M_APPENDS and SM_COUNT[?] < CLOCK_NAME_CAP then SM_COUNT[?] else -1
+        | M_ROW := if M_NEW then M_OWNER else SM_INDEX
+        | M_KEY := (if ROWS_TOKEN[M_ROW] < 0 then long(16777217) else long(TOKEN_LINE[ROWS_TOKEN[M_ROW]]) * long(16777216) + long(TOKEN_COLUMN[ROWS_TOKEN[M_ROW]]))
+        | SM_ITEM_VALUE := SM_ITEM_VALUE[?] next M_SLOT : M_ROW
+        | SM_ITEM_KEY := SM_ITEM_KEY[?] next M_SLOT : (if M_NEW then long(0) else M_KEY)
+        | SM_ITEM_OWNER := SM_ITEM_OWNER[?] next M_SLOT : M_NEW
+        | SM_COUNT := SM_COUNT[?] + integer(M_APPENDS)
+        | SM_OWNERS := SM_OWNERS[?] + integer(M_NEW)
+        | M_SELF_KEY := (if ROWS_TOKEN[SM_INDEX] < 0 then long(16777217) else long(TOKEN_LINE[ROWS_TOKEN[SM_INDEX]]) * long(16777216) + long(TOKEN_COLUMN[ROWS_TOKEN[SM_INDEX]]))
+        | M_OWNER_BETTER := M_NEW and M_KEY < SM_OWNER_KEY[?]
+        | SM_OWNER_KEY := if M_OWNER_BETTER then M_KEY else SM_OWNER_KEY[?]
+        | SM_OWNER_TOKEN := if M_OWNER_BETTER then ROWS_TOKEN[M_ROW] else SM_OWNER_TOKEN[?]
+        | M_EFFECT_BETTER := M_EFFECT and M_KEY < SM_EFFECT_KEY[?]
+        | SM_EFFECT_KEY := if M_EFFECT_BETTER then M_KEY else SM_EFFECT_KEY[?]
+        | SM_EFFECT_TOKEN := if M_EFFECT_BETTER then ROWS_TOKEN[M_ROW] else SM_EFFECT_TOKEN[?]
+        | M_ROW_BETTER := M_IN and M_SELF_KEY < SM_ROW_KEY[?]
+        | SM_ROW_KEY := if M_ROW_BETTER then M_SELF_KEY else SM_ROW_KEY[?]
+        | SM_ROW_TOKEN := if M_ROW_BETTER then ROWS_TOKEN[SM_INDEX] else SM_ROW_TOKEN[?]
+        |)
+     with (| SM_COUNT := 0 | SM_OWNERS := 0 | SM_OWNER_KEY := long(9223372036854775807) | SM_OWNER_TOKEN := -1
+           | SM_EFFECT_KEY := long(9223372036854775807) | SM_EFFECT_TOKEN := -1
+           | SM_ROW_KEY := long(9223372036854775807) | SM_ROW_TOKEN := -1 |)
+     end
+   | EF_E := SE_ECOUNT
+   | EF_RUN := SCHED_GO and not SKO_FAILED and not SKB_FAILED and EF_E >= 2
+   | EF_BOUND := long(EF_E) * long(SCHED_LOOP_BASE + SG_COUNT + SCHED_NODES + SO_COUNT + EF_E + 8) + long(EF_E) * long(EF_E) + long(2)
+   | EF_INDEX := 0 .. (if EF_RUN then EF_BOUND else long(-1))
+   | iterate EF_INDEX of
+       (| F_I := EF_I[?]
+        | F_PH := EF_PH[?]
+        | F_ROW := SE_EROW[F_I]
+        | F_RES := EFFECT_RESOURCE[integer(ROWS_VALUE[F_ROW])]
+        | F_ACTIVE := RES_COUNT[F_RES] >= 2
+        | F_STAMP := F_I + 1
+        | F_SUP := (if F_ROW < ROW_COUNT and ROWS_LOOP[F_ROW] >= 0 then SCHED_LOOP_BASE + ROWS_LOOP[F_ROW] else F_ROW)
+        | F_START1 := F_PH = 0 and F_I < EF_E and F_ACTIVE
+        | F_SKIP := F_PH = 0 and F_I < EF_E and not F_ACTIVE
+        | F_TO_PAIRS := F_PH = 0 and F_I >= EF_E
+        | F_START2 := F_PH = 2
+        | F_DFS := F_PH = 1 or F_PH = 3
+        | F_NODE := EF_NODE[?]
+        | F_K := EF_K[?]
+        | F_LEN := if F_NODE < 0 then 0 else if F_PH = 1 then SG_START[F_NODE + 1] - SG_START[F_NODE]
+                 else SO_START[F_NODE + 1] - SO_START[F_NODE]
+        | F_EXPANDING := F_DFS and F_K < F_LEN
+        | F_S := if F_PH = 1 then SG_SUCC[SG_START[F_NODE] + F_K] else SO_SUCC[SO_START[F_NODE] + F_K]
+        | F_VISITS := F_EXPANDING and (if F_PH = 1 then VIS1[?][F_S] else VIS2[?][F_S]) /= F_STAMP
+        | F_POPS := F_DFS and not F_EXPANDING and EF_TOP[?] > 0
+        | F_DFS_ENDS := F_DFS and not F_EXPANDING and EF_TOP[?] = 0
+        | F_PUSH := F_START1 or F_START2 or F_VISITS
+        | F_PUSHED := if F_START1 then F_ROW else if F_START2 then F_SUP else F_S
+        | VIS1 := VIS1[?] next (if F_START1 or F_VISITS and F_PH = 1 then F_PUSHED else -1) : F_STAMP
+        | VIS2 := VIS2[?] next (if F_START2 or F_VISITS and F_PH = 3 then F_PUSHED else -1) : F_STAMP
+        | EF_STACK := EF_STACK[?] next (if F_PUSH then EF_TOP[?] else -1) : F_PUSHED
+        | EF_TOP := EF_TOP[?] + integer(F_PUSH) - integer(F_POPS)
+        | F_SCAN := F_PH = 4
+        | F_J := EF_J[?]
+        | F_JROW := SE_EROW[F_J]
+        | F_JSUP := (if F_JROW < ROW_COUNT and ROWS_LOOP[F_JROW] >= 0 then SCHED_LOOP_BASE + ROWS_LOOP[F_JROW] else F_JROW)
+        | F_REACHED := VIS1[?][F_JROW] = F_STAMP or F_JSUP /= F_SUP and VIS2[?][F_JSUP] = F_STAMP
+        | EF_ORDERED := EF_ORDERED[?] next (if F_SCAN then F_I * EF_E + F_J else -1) : F_REACHED
+        | F_SCAN_ENDS := F_SCAN and F_J = EF_E - 1
+        | F_PAIRS := F_PH = 5
+        | F_PI := F_J / EF_E
+        | F_PJ := F_J modulo EF_E
+        | F_PAIR_FAILS := F_PAIRS and F_PI < F_PJ
+                        and EFFECT_RESOURCE[integer(ROWS_VALUE[SE_EROW[F_PI]])] = EFFECT_RESOURCE[integer(ROWS_VALUE[SE_EROW[F_PJ]])]
+                        and not EF_ORDERED[?][F_PI * EF_E + F_PJ] and not EF_ORDERED[?][F_PJ * EF_E + F_PI]
+        | F_PAIRS_END := F_PAIRS and (F_PAIR_FAILS or F_J = EF_E * EF_E - 1)
+        | EF_FIRST := if F_PAIR_FAILS then F_PI else EF_FIRST[?]
+        | EF_SECOND := if F_PAIR_FAILS then F_PJ else EF_SECOND[?]
+        | EF_PH := if F_START1 then 1 else if F_SKIP then 0 else if F_TO_PAIRS then 5 else if F_START2 then 3
+                 else if F_DFS_ENDS then F_PH + 1 else if F_SCAN_ENDS then 0 else if F_PAIRS_END then 6 else F_PH
+        | EF_I := F_I + integer(F_SKIP or F_SCAN_ENDS)
+        | EF_J := if F_SCAN or F_PAIRS then F_J + 1 else 0
+        | EF_NODE := if F_POPS then EF_STACK[?][EF_TOP[?] - 1] else if F_DFS_ENDS or F_START1 or F_START2 then -1 else F_NODE
+        | EF_K := if F_POPS then 0 else F_K + integer(F_EXPANDING)
+        |)
+     with (| EF_I := 0 | EF_PH := 0 | EF_J := 0 | EF_NODE := -1 | EF_K := 0 | EF_TOP := 0 | EF_FIRST := -1 | EF_SECOND := -1 |)
+     end
+   | EF_FAILED := EF_RUN and EF_FIRST >= 0
+   | EF_FIRST_ROW := SE_EROW[EF_FIRST]
+   | EF_SECOND_ROW := SE_EROW[EF_SECOND]
+   | SCHEDULE_MESSAGE := if not SCHEDULE_RUN then 0 else if SCHED_OVERFLOW then T_CAPACITY
+                       else if SC_RUN then (if SM_OWNERS > 0 then T_SIGNAL_CYCLE else if SM_COUNT > 0 then T_EFFECT_CYCLE
+                                            else T_CLOCK_CAUSALITY)
+                       else if EF_FAILED then T_EFFECTS_UNORDERED else 0
+   | SCHEDULE_TOKEN := if SCHEDULE_MESSAGE = T_SIGNAL_CYCLE then SM_OWNER_TOKEN
+                     else if SCHEDULE_MESSAGE = T_EFFECT_CYCLE then SM_EFFECT_TOKEN
+                     else if SCHEDULE_MESSAGE = T_CLOCK_CAUSALITY then SM_ROW_TOKEN
+                     else if SCHEDULE_MESSAGE = T_EFFECTS_UNORDERED then ROWS_TOKEN[EF_SECOND_ROW] else -1
+   | SCHEDULE_ARGUMENT0 := if SCHED_NODES >= SCHED_NODE_CAP then F_CAP_SCHEDULE_NODES
+                         else if SE_ECOUNT > EFFECT_ORDER_CAP then F_CAP_EFFECTS else F_CAP_EDGES
+   | SCHEDULE_READY := SCHEDULE_RUN and SCHEDULE_MESSAGE = 0
+   | SWS_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY and SKB_RUN then WAR_COUNT - 1 else -1)
+   | iterate SWS_INDEX of
+       (| WS_READER := WAR_READER[SWS_INDEX]
+        | WS_MARKS := (WS_READER < ROW_COUNT and ROWS_LOOP[WS_READER] >= 0 and ROWS_OP[WS_READER] /= OP_SEED) and (SKA_LOOP_POPS[ROWS_LOOP[WS_READER]] < LOOP_MEMBERS[ROWS_LOOP[WS_READER]])
+        | WAR_SNAP1 := WAR_SNAP1[?] next (if WS_MARKS then WAR_SIGNAL[SWS_INDEX] else -1) : ROWS_LOOP[WS_READER] + 1
+        |)
+     end
+   | SSC_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY then FLAT_SIGNAL_COUNT - 1 else -1)
+   | iterate SSC_INDEX of
+       (| C_L1 := if SNAP_GATHER1[SSC_INDEX] > 0 then SNAP_GATHER1[SSC_INDEX] else WAR_SNAP1[SSC_INDEX]
+        | SNAP_LOOP_COUNT := SNAP_LOOP_COUNT[?] next C_L1 - 1 : SNAP_LOOP_COUNT[?][C_L1 - 1] + 1
+        | SNAPPED_ALL := SNAPPED_ALL[?] next (if C_L1 > 0 then SNAP_TOTAL[?] else -1) : SSC_INDEX
+        | SNAP_TOTAL := SNAP_TOTAL[?] + integer(C_L1 > 0)
+        |)
+     with SNAP_TOTAL := 0
+     end
+   | SNS_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY then FLAT_LOOP_COUNT - 1 else -1)
+   | iterate SNS_INDEX of
+       (| SNAP_START := SNAP_START[?] next SNS_INDEX : SNS_SUM[?]
+        | SNS_SUM := SNS_SUM[?] + SNAP_LOOP_COUNT[SNS_INDEX]
+        |)
+     with SNS_SUM := 0
+     end
+   | SNP_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY then FLAT_SIGNAL_COUNT - 1 else -1)
+   | iterate SNP_INDEX of
+       (| N_L := (if SNAP_GATHER1[SNP_INDEX] > 0 then SNAP_GATHER1[SNP_INDEX] else WAR_SNAP1[SNP_INDEX]) - 1
+        | SNAP_LIST := SNAP_LIST[?] next (if N_L >= 0 then SNAP_START[N_L] + SNAP_FILL[?][N_L] else -1) : SNP_INDEX
+        | SNAP_FILL := SNAP_FILL[?] next N_L : SNAP_FILL[?][N_L] + 1
+        |)
+     end
+   | LOP_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY and SKA_RUN then SKA_COUNT + SKB_COUNT - 1 else -1)
+   | iterate LOP_INDEX of
+       (| O_FIRST_RUN := LOP_INDEX < SKA_COUNT
+        | O_NODE := if O_FIRST_RUN then SKA_ORDER[LOP_INDEX] else SKB_ORDER[LOP_INDEX - SKA_COUNT]
+        | O_LOOP := ROWS_LOOP[O_NODE]
+        | O_TAKES := O_LOOP >= 0 and (not O_FIRST_RUN or not (SKA_LOOP_POPS[O_LOOP] < LOOP_MEMBERS[O_LOOP]))
+        | LO_LIST := LO_LIST[?] next (if O_TAKES then LO_START[O_LOOP] + LO_FILL[?][O_LOOP] else -1) : O_NODE
+        | LO_FILL := LO_FILL[?] next (if O_TAKES then O_LOOP else -1) : LO_FILL[?][O_LOOP] + 1
+        |)
+     end
    | MERGE_BOUND := long(SIGNAL_COUNT) + long(FINISH_SIGNAL_COUNT) + long(EQUATION_COUNT) + long(FINISH_EQUATION_COUNT)
                     + long(GROUP_COUNT) + long(FINISH_GROUP_COUNT) + long(3) * long(CLOSED_COUNT) + long(LABEL_COUNT)
                     + long(MODEL_COUNT) + long(USE_COUNT) + long(TABLE_COUNT) + long(8)
-   | MERGE_INDEX := 0 .. (if DUMP_RUNS and not ROWS_DUMP and not CLOCKS_DUMP then MERGE_BOUND else long(-1))
+   | MERGE_INDEX := 0 .. (if DUMP_RUNS and not ROWS_DUMP and not CLOCKS_DUMP and not SCHEDULE_DUMP then MERGE_BOUND else long(-1))
    | iterate MERGE_INDEX of
        (| SIGNAL_RANK_NOW := SIGNAL_RANK[?]
         | SIGNAL_RANK_OPEN := SIGNAL_RANK_NOW < CLOSED_COUNT
@@ -4089,9 +4530,11 @@ process SIGC =
                         + NEW_TABLE_ELEMENTS
    | CLOCKS_DUMP_BOUND := long(1024) + long(16) * long(CLOCK_TOTAL) + long(2) * long(K_SAMPLE_COUNT) + long(18) * long(DEF_COUNT)
                           + long(8) * long(OB_COUNT) + long(2) * long(ROOT_COUNT)
-   | DUMP_BOUND := if CLOCKS_DUMP then CLOCKS_DUMP_BOUND else if ROWS_DUMP then ROWS_DUMP_BOUND else if FLAT_DUMP then FLAT_DUMP_BOUND else PROGRAM_DUMP_BOUND
-   | DUMP_COLUMN_START := if CLOCKS_DUMP then ORDER_CLOCKS_START else if ROWS_DUMP then ORDER_ROWS_START else ORDER_PROGRAM_START
-   | DUMP_COLUMN_END := if CLOCKS_DUMP then ORDER_CLOCKS_END else if ROWS_DUMP then ORDER_ROWS_END else ORDER_PROGRAM_END
+   | SCHEDULE_DUMP_BOUND := long(64) + long(4) * long(SKO_COUNT) + long(4) * long(ROW_COUNT) + long(8) * long(FLAT_LOOP_COUNT)
+                          + long(4) * long(FLAT_SIGNAL_COUNT)
+   | DUMP_BOUND := if SCHEDULE_DUMP then SCHEDULE_DUMP_BOUND else if CLOCKS_DUMP then CLOCKS_DUMP_BOUND else if ROWS_DUMP then ROWS_DUMP_BOUND else if FLAT_DUMP then FLAT_DUMP_BOUND else PROGRAM_DUMP_BOUND
+   | DUMP_COLUMN_START := if SCHEDULE_DUMP then ORDER_SCHEDULE_START else if CLOCKS_DUMP then ORDER_CLOCKS_START else if ROWS_DUMP then ORDER_ROWS_START else ORDER_PROGRAM_START
+   | DUMP_COLUMN_END := if SCHEDULE_DUMP then ORDER_SCHEDULE_END else if CLOCKS_DUMP then ORDER_CLOCKS_END else if ROWS_DUMP then ORDER_ROWS_END else ORDER_PROGRAM_END
    | DUMP_INDEX := 0 .. (if DUMP_RUNS then DUMP_BOUND else long(-1))
    | iterate DUMP_INDEX of
        (| WALK_COLUMN_NOW := WALK_COLUMN[?]
@@ -4132,7 +4575,8 @@ process SIGC =
         | CLOCKS_COLUMN_ROWS := if COL = COL_SAMPLE_ROWS then K_SAMPLE_COUNT else if COL <= COL_NODE_RIGHT and COL >= COL_NODE_KIND or COL = COL_PARENT then CLOCK_TOTAL
                                 else if COL >= COL_OB_SMALL and COL <= COL_OB_COLUMN then OB_COUNT
                                 else if COL = COL_ROOTS then ROOT_COUNT else DEF_COUNT
-        | COLUMN_ROWS := if CLOCKS_DUMP then CLOCKS_COLUMN_ROWS else if ROWS_DUMP then ROWS_COLUMN_ROWS else if FLAT_DUMP then FLAT_COLUMN_ROWS else if COL = COL_NAME then 1
+        | SCHEDULE_COLUMN_ROWS := if COL = COL_ORDER then SKO_COUNT else if COL = COL_SNAPSHOTTED then SNAP_TOTAL else FLAT_LOOP_COUNT
+        | COLUMN_ROWS := if SCHEDULE_DUMP then SCHEDULE_COLUMN_ROWS else if CLOCKS_DUMP then CLOCKS_COLUMN_ROWS else if ROWS_DUMP then ROWS_COLUMN_ROWS else if FLAT_DUMP then FLAT_COLUMN_ROWS else if COL = COL_NAME then 1
                          else if COL <= COL_TYPES_SIZE then TYPE_COUNT
                          else if COL <= COL_MODELS_LABELS then MODEL_COUNT
                          else if COL <= COL_SIGNAL_POSITIONS then DUMP_SIGNAL_COUNT
@@ -4223,7 +4667,8 @@ process SIGC =
                                  else if COL = COL_NODE_PARENT then NODE_PARENT1[R] - 1 else if COL = COL_NODE_DEPTH then NODE_DEPTH[R]
                                  else if COL = COL_NODE_ROOT then NODE_ROOT1[R] - 1 else if COL = COL_NODE_LEFT then NODE_LEFT1[R] - 1
                                  else if COL = COL_NODE_RIGHT then NODE_RIGHT1[R] - 1 else ROOT_LIST[R]
-        | ROW_NUMBER_VALUE := if COL >= COL_PARENT then long(CLOCKS_NUMBER_VALUE) else if COL >= COL_ROWS_OP then ROWS_NUMBER_VALUE
+        | ROW_NUMBER_VALUE := if COL = COL_ORDER then long(SKO_ORDER[R]) else if COL = COL_SNAPSHOTTED then long(SNAPPED_ALL[R])
+                              else if COL >= COL_PARENT then long(CLOCKS_NUMBER_VALUE) else if COL >= COL_ROWS_OP then ROWS_NUMBER_VALUE
                               else if COL = COL_TYPES_BYTES then long(if DUMP_TYPE_NEW then 8 else TYPE_BYTES[R])
                               else if COL = COL_TYPES_SIGNED then long(integer(not DUMP_TYPE_NEW and TYPE_SIGNED[R]))
                               else if COL = COL_TYPES_ELEMENT then long(DUMP_TYPE_ELEMENT)
@@ -4312,6 +4757,7 @@ process SIGC =
                               else EQUATION_FINAL_END[EQUATION_SOURCE])
                            else GUARD_FINAL_END[R]
         | RUN_START := if COL = COL_ROWS_GROUPS then FLAT_GROUP_MEMBER_FIRST[R]
+                       else if COL = COL_LOOP_ORDERS then LO_START[R] else if COL = COL_SNAPSHOTS then SNAP_START[R]
                        else if COL = COL_ROWS_WAR then 0
                        else if COL = COL_LOOPS_DEFINED then LOOP_DEF_START[R]
                        else if COL = COL_TYPES_VALUES then TYPE_VALUE_START[R]
@@ -4320,6 +4766,7 @@ process SIGC =
                        else if LIST_KIND = LIST_OPS or LIST_KIND = LIST_ARGS then ENTRY_RUN_START
                        else PATH_FIRST
         | RUN_LENGTH := if COL = COL_ROWS_GROUPS then FLAT_GROUP_MEMBER_TOTAL[R]
+                        else if COL = COL_LOOP_ORDERS then LO_LENGTH[R] else if COL = COL_SNAPSHOTS then SNAP_LOOP_COUNT[R]
                         else if COL = COL_ROWS_WAR then 3
                         else if COL = COL_LOOPS_DEFINED then LOOP_DEF_TOTAL[R]
                         else if COL = COL_TYPES_VALUES then (if DUMP_TYPE_NEW then 0 else TYPE_VALUE_COUNT[R])
@@ -4330,6 +4777,7 @@ process SIGC =
         | LIST_AT := RUN_START + WALK_REL - INHERITED_LENGTH
         | NODE_ON_KEY := N_ON_MARK + (PATH_VALUE[LIST_AT] - MODEL_GUARD_START[GUARD_MODEL[PATH_VALUE[LIST_AT]]] + 1) * NAME_CAP
         | LIST_VALUE := if COL = COL_ROWS_GROUPS then long(GROUP_MEMBER_ROW[LIST_AT])
+                        else if COL = COL_LOOP_ORDERS then long(LO_LIST[LIST_AT]) else if COL = COL_SNAPSHOTS then long(SNAP_LIST[LIST_AT])
                         else if COL = COL_ROWS_WAR then
                           long(if WALK_REL = 0 then WAR_READER[R] else if WALK_REL = 1 then WAR_WRITER[R] else WAR_SIGNAL[R])
                         else if COL = COL_LOOPS_DEFINED then long(DEFINED_LIST[LIST_AT])
@@ -4491,7 +4939,7 @@ process SIGC =
    | MESSAGE := if FRONT_MESSAGE /= 0 then FRONT_MESSAGE else if DUMP_OVERFLOW then T_CAPACITY else 0
    | MESSAGE_ARGUMENT0 := if FRONT_MESSAGE /= 0 then PASS_ARGUMENT0 else F_CAP_ITEMS
    | LAYOUT := if not USAGE_OK then LAYOUT_NONE else if ERRNO /= 0 then LAYOUT_OS
-               else if DUMP_PASS = 1 or DUMP_PASS = 2 or DUMP_PASS = 3 or DUMP_PASS = 4 or DUMP_PASS = 5 then
+               else if DUMP_PASS = 1 or DUMP_PASS = 2 or DUMP_PASS = 3 or DUMP_PASS = 4 or DUMP_PASS = 5 or DUMP_PASS = 6 then
                  (if MESSAGE /= 0 then LAYOUT_DUMP_ERROR else if DUMP_PASS = 1 then LAYOUT_DUMP_TOKENS else LAYOUT_DUMP_PROGRAM)
                else if MESSAGE /= 0 then LAYOUT_COMPILE else LAYOUT_NONE
    | DUMPS_TOKENS := LAYOUT = LAYOUT_DUMP_TOKENS
@@ -4743,6 +5191,10 @@ process SIGC =
     constant integer GRID_CAP = 4096;
     constant integer CLOCK_NAME_CAP = 256;
     constant integer CLOCK_TEXT_CAP = 65536;
+    constant integer EDGE_CAP = 16777216;
+    constant integer SCHED_NODE_CAP = 5308417;
+    constant integer EFFECT_ORDER_CAP = 1024;
+    constant integer EFFECT_PAIR_CAP = 1048576;
     constant ulong HASH_K1 = ulong(2685821657736338717);
     constant ulong HASH_K2 = ulong(4354685564936845355);
     constant integer HASH_SHIFT = 42;
@@ -4980,8 +5432,8 @@ process SIGC =
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     constant [32] short SYMBOL_FRAGMENT = [
-        235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258,
-        259, 260, 24, 11, 12, 1, 261, 262];
+        243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266,
+        267, 268, 24, 11, 12, 1, 269, 270];
     constant integer OP_CONST = 0;
     constant integer OP_SIGNAL = 1;
     constant integer OP_ENUMCONST = 2;
@@ -5021,8 +5473,8 @@ process SIGC =
     constant integer OP_IF_MARK = 36;
     constant integer OP_THEN_MARK = 37;
     constant [48] short OP_FRAGMENT = [
-        38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61,
-        62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 23, 84];
+        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62,
+        63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 23, 85];
     constant [48] short OP_IS_OPENER = [
         0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -5067,7 +5519,7 @@ process SIGC =
     constant integer TK_ARRAY = 5;
     constant integer TK_EXTERNAL = 6;
     constant [7] short TYPE_KIND_FRAGMENT = [
-        85, 86, 87, 88, 89, 90, 91];
+        86, 87, 88, 89, 90, 91, 92];
     constant [10] short BUILTIN_KIND = [
         0, 1, 2, 2, 2, 2, 2, 2, 2, 3];
     constant [10] short BUILTIN_BYTES = [
@@ -5078,12 +5530,12 @@ process SIGC =
     constant integer ROLE_OUTPUT = 1;
     constant integer ROLE_LOCAL = 2;
     constant [3] short ROLE_FRAGMENT = [
-        92, 93, 94];
-    constant integer F_ROLE_SIGNAL = 194;
-    constant integer F_ROLE_TYPE = 195;
-    constant integer F_ROLE_MODEL = 196;
-    constant integer F_ROLE_CONSTANT = 197;
-    constant integer F_ROLE_LABEL = 198;
+        93, 94, 95];
+    constant integer F_ROLE_SIGNAL = 199;
+    constant integer F_ROLE_TYPE = 200;
+    constant integer F_ROLE_MODEL = 201;
+    constant integer F_ROLE_CONSTANT = 202;
+    constant integer F_ROLE_LABEL = 203;
     constant integer COL_NAME = 0;
     constant integer COL_TYPES_KIND = 1;
     constant integer COL_TYPES_BYTES = 2;
@@ -5138,39 +5590,39 @@ process SIGC =
     constant integer COL_DEPENDENCE_POSITIONS = 51;
     constant integer COL_DEPENDENCE_MODELS = 52;
     constant integer COL_DEPENDENCE_GUARDS = 53;
-    constant [99] short COLUMN_FRAGMENT = [
-        95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118,
-        119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-        143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166,
-        167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190,
-        191, 192, 193];
-    constant integer F_CAP_SRC = 199;
-    constant integer F_CAP_TOKENS = 200;
-    constant integer F_CAP_NAMES = 201;
-    constant integer F_CAP_TYPES = 202;
-    constant integer F_CAP_VALUES = 203;
-    constant integer F_CAP_MODELS = 204;
-    constant integer F_CAP_SIGNALS = 205;
-    constant integer F_CAP_CONSTANTS = 206;
-    constant integer F_CAP_TABLES = 207;
-    constant integer F_CAP_EQUATIONS = 208;
-    constant integer F_CAP_ENTRIES = 209;
-    constant integer F_CAP_GUARDS = 210;
-    constant integer F_CAP_LABELS = 211;
-    constant integer F_CAP_LOOPS = 212;
-    constant integer F_CAP_GROUPS = 213;
-    constant integer F_CAP_DEPENDENCES = 214;
-    constant integer F_CAP_STACK = 215;
-    constant integer F_CAP_PATHS = 216;
-    constant integer F_CAP_LOCALS = 217;
-    constant integer F_CAP_PARSE = 218;
-    constant integer F_CAP_FINISH = 219;
-    constant integer F_CAP_ITEMS = 220;
-    constant integer F_CAP_OUTPUT = 221;
+    constant [103] short COLUMN_FRAGMENT = [
+        96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119,
+        120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+        144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
+        168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
+        192, 193, 194, 195, 196, 197, 198];
+    constant integer F_CAP_SRC = 204;
+    constant integer F_CAP_TOKENS = 205;
+    constant integer F_CAP_NAMES = 206;
+    constant integer F_CAP_TYPES = 207;
+    constant integer F_CAP_VALUES = 208;
+    constant integer F_CAP_MODELS = 209;
+    constant integer F_CAP_SIGNALS = 210;
+    constant integer F_CAP_CONSTANTS = 211;
+    constant integer F_CAP_TABLES = 212;
+    constant integer F_CAP_EQUATIONS = 213;
+    constant integer F_CAP_ENTRIES = 214;
+    constant integer F_CAP_GUARDS = 215;
+    constant integer F_CAP_LABELS = 216;
+    constant integer F_CAP_LOOPS = 217;
+    constant integer F_CAP_GROUPS = 218;
+    constant integer F_CAP_DEPENDENCES = 219;
+    constant integer F_CAP_STACK = 220;
+    constant integer F_CAP_PATHS = 221;
+    constant integer F_CAP_LOCALS = 222;
+    constant integer F_CAP_PARSE = 223;
+    constant integer F_CAP_FINISH = 224;
+    constant integer F_CAP_ITEMS = 225;
+    constant integer F_CAP_OUTPUT = 226;
     constant [4] short SECTION_FRAGMENT = [
-        28, 29, 30, 31];
+        29, 30, 31, 32];
     constant [6] short KIND_FRAGMENT = [
-        32, 33, 34, 35, 36, 37];
+        33, 34, 35, 36, 37, 38];
     constant integer A_NONE = 0;
     constant integer A_TOKEN = 1;
     constant integer A_LITERAL = 2;
@@ -5230,55 +5682,55 @@ process SIGC =
     constant integer T_NO_OUTPUT = 48;
     constant integer T_HAS_OUTPUT = 49;
     constant integer T_NOT_STATE = 50;
-    constant [123] short TEMPLATE_PIECE0 = [
-        0, 263, 264, 265, 267, 0, 0, 0, 271, 273, 275, 276, 277, 278, 279, 281, 283, 284, 286, 288, 273, 273, 273, 273,
-        273, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 313, 310, 0, 0, 0, 311, 0,
-        322, 322, 0, 326, 310, 328, 330, 331, 332, 322, 322, 322, 322, 326, 0, 340, 279, 342, 0, 340, 346, 347, 349, 350,
-        352, 353, 355, 356, 0, 0, 359, 360, 361, 362, 363, 364, 366, 367, 353, 369, 371, 0, 373, 353, 353, 353, 353, 353,
-        353, 381, 382, 288, 288, 279, 279, 385, 386, 326, 388, 390, 326, 281, 326, 393, 394, 326, 396, 397, 398, 399, 399, 402,
-        404, 399, 281];
-    constant [123] short TEMPLATE_PIECE1 = [
-        0, 7, 0, 266, 0, 268, 269, 4, 272, 274, 0, 0, 0, 0, 280, 282, 0, 285, 287, 270, 289, 289, 289, 289,
-        289, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 274, 312, 314, 316, 317, 318, 319, 320, 321,
-        323, 324, 325, 274, 327, 329, 0, 0, 333, 274, 334, 335, 336, 274, 338, 341, 274, 343, 344, 345, 0, 348, 315, 351,
-        0, 354, 0, 0, 357, 358, 0, 0, 0, 0, 0, 365, 315, 0, 368, 370, 0, 372, 374, 375, 376, 377, 378, 379,
-        380, 0, 0, 274, 383, 274, 384, 0, 0, 387, 389, 0, 289, 391, 392, 0, 0, 395, 0, 0, 0, 400, 401, 403,
-        405, 406, 407];
-    constant [123] short TEMPLATE_PIECE2 = [
-        0, 0, 0, 0, 0, 0, 0, 270, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 290, 291, 292, 293,
-        294, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 315, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 337, 0, 339, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 370, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 293, 0, 0, 0, 0, 0, 0, 0, 0, 370, 0, 0,
-        0, 0, 0];
-    constant [123] short TEMPLATE_PIECE3 = [
+    constant [127] short TEMPLATE_PIECE0 = [
+        0, 271, 272, 273, 275, 0, 0, 0, 279, 281, 283, 284, 285, 286, 287, 289, 291, 292, 294, 296, 281, 281, 281, 281,
+        281, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 321, 318, 0, 0, 0, 319, 0,
+        330, 330, 0, 334, 318, 336, 338, 339, 340, 330, 330, 330, 330, 334, 0, 348, 287, 350, 0, 348, 354, 355, 357, 358,
+        360, 361, 363, 364, 0, 0, 367, 368, 369, 370, 371, 372, 374, 375, 361, 377, 379, 0, 381, 361, 361, 361, 361, 361,
+        361, 389, 390, 296, 296, 287, 287, 393, 394, 334, 396, 398, 334, 289, 334, 401, 402, 334, 404, 405, 406, 407, 407, 410,
+        412, 407, 289, 416, 417, 418, 419];
+    constant [127] short TEMPLATE_PIECE1 = [
+        0, 7, 0, 274, 0, 276, 277, 4, 280, 282, 0, 0, 0, 0, 288, 290, 0, 293, 295, 278, 297, 297, 297, 297,
+        297, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 282, 320, 322, 324, 325, 326, 327, 328, 329,
+        331, 332, 333, 282, 335, 337, 0, 0, 341, 282, 342, 343, 344, 282, 346, 349, 282, 351, 352, 353, 0, 356, 323, 359,
+        0, 362, 0, 0, 365, 366, 0, 0, 0, 0, 0, 373, 323, 0, 376, 378, 0, 380, 382, 383, 384, 385, 386, 387,
+        388, 0, 0, 282, 391, 282, 392, 0, 0, 395, 397, 0, 297, 399, 400, 0, 0, 403, 0, 0, 0, 408, 409, 411,
+        413, 414, 415, 0, 0, 0, 378];
+    constant [127] short TEMPLATE_PIECE2 = [
+        0, 0, 0, 0, 0, 0, 0, 278, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 298, 299, 300, 301,
+        302, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 323, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 345, 0, 347, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 378, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 301, 0, 0, 0, 0, 0, 0, 0, 0, 378, 0, 0,
+        0, 0, 0, 0, 0, 0, 420];
+    constant [127] short TEMPLATE_PIECE3 = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        295, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        303, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0];
-    constant [123] short TEMPLATE_KIND0 = [
+        0, 0, 0, 0, 0, 0, 421];
+    constant [127] short TEMPLATE_KIND0 = [
         0, 8, 7, 6, 1, 3, 3, 7, 2, 3, 1, 0, 1, 0, 4, 3, 0, 3, 1, 3, 3, 3, 3, 3,
         3, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3,
         3, 3, 3, 3, 3, 3, 0, 0, 3, 3, 3, 3, 3, 9, 3, 3, 10, 3, 3, 3, 0, 3, 4, 5,
         4, 7, 0, 0, 9, 9, 0, 0, 0, 0, 0, 11, 4, 0, 7, 4, 0, 3, 4, 7, 7, 7, 7, 7,
         7, 0, 0, 3, 3, 3, 3, 0, 9, 9, 9, 0, 9, 9, 9, 0, 0, 9, 0, 0, 0, 12, 12, 12,
-        12, 12, 9];
-    constant [123] short TEMPLATE_KIND1 = [
+        12, 12, 9, 12, 12, 0, 12];
+    constant [127] short TEMPLATE_KIND1 = [
         0, 0, 0, 1, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4,
         4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 3, 0, 3, 3, 0, 0,
         0, 0, 3, 0, 0, 0, 0, 0, 6, 0, 0, 0, 5, 0, 5, 0, 0, 0, 10, 0, 0, 4, 4, 4,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 4, 0, 0, 4, 0, 0, 4, 0, 0, 4, 0, 0,
         0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0,
-        0, 12, 0];
-    constant [123] short TEMPLATE_KIND2 = [
+        0, 12, 0, 0, 0, 0, 12];
+    constant [127] short TEMPLATE_KIND2 = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4,
         5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0,
-        0, 0, 0];
+        0, 0, 0, 0, 0, 0, 4];
     constant integer LAYOUT_NONE = 0;
     constant integer LAYOUT_OS = 1;
     constant integer LAYOUT_COMPILE = 2;
@@ -5319,45 +5771,47 @@ process SIGC =
         ulong(1000000), ulong(10000000), ulong(100000000), ulong(1000000000), ulong(10000000000), ulong(100000000000),
         ulong(1000000000000), ulong(10000000000000), ulong(100000000000000), ulong(1000000000000000), ulong(10000000000000000), ulong(100000000000000000),
         ulong(1000000000000000000), ulong(-8446744073709551616)];
-    constant [6258] ubyte FRAGMENTS = ":: error: error  sigc: error: [Errno ] '...'end of file'none[][[]]]]][][nonenone][CONST [[ENUMCONST ['stateDEFINESEED#.'call[expression at kinds texts lines columns keywordnamesymbolnumberstringeofCONSTSIGNALENUMCONSTCALLDELAYPREVINDEXNEGNOTUWHENCLOCKIFBRANCHDEFAULTWHENXORORANDEQNELTLEGTGEADDSUBMULDIVMODSHLSHRNEXTPAIRRANGEOPEN_PARENOPEN_SQUAREIF_MARKTHEN_MARKEFFECTINPUTCOPYCONVERTTABLEELEMENTGATHERITERARGEVENTBOOLEANINTPOINTERENUMARRAYEXTERNALinputoutputlocalname types.kind types.bytes types.signed types.name types.values types.element types.size models.name models.kind models.parent models.line models.column models.labels signal_names signal_roles signal_types signal_models signal_positions constant_names constant_types constant_values table_types table_values equation_targets equation_ops equation_args equation_positions equation_loops equation_kinds equation_models equation_labels equation_guards guard_models guard_ops guard_args guard_positions guard_context guard_labels guard_signals label_names label_uses loop_names loop_positions loop_models constraint_groups constraint_positions constraint_models constraint_guards dependence_from dependence_to dependence_positions dependence_models dependence_guards rows.op rows.left rows.right rows.value rows.type rows.ctx rows.line rows.column rows.owner rows.loop rows.guard rows.groups rows.group_positions rows.dependence_from rows.dependence_to rows.war rows.snapshotted rows.effects.kind rows.effects.resource rows.effects.param loops.index loops.size loops.defined loops.snapshots loops.count parent sample_rows def_kind def_target def_left def_right def_line def_column def_pending ob_small ob_big ob_line ob_column node_kind node_parent node_depth node_root node_left node_right roots signaltypemodelconstantlabelSRCTOKENSNAMESTYPESVALUESMODELSSIGNALSCONSTANTSTABLESEQUATIONSENTRIESGUARDSLABELSLOOPSGROUPSDEPENDENCESSTACKPATHSLOCALSPARSEFINISHITEMSOUTPUTINSTANCESINSTANTIATELOOKUPSROWSROW_DEPENDENCESSEGMENTSLOWERCLOCKSDEFINITIONSOBLIGATIONSCLOCK_ROUNDSPAIRSCLOCK_NAMES(||)-->:::=^=/=<=>=..|$+-*/()=;,?!<>^{}unexpected character 'program exceeds compiler capacity: expected '', found expected a name, found  is a reserved name is the name of a model is declared twiceinteger literal  does not fit in longconstant  is not declaredexpected an integer constant, found array capacity must be strictly positiveexpected a type, found arrays of event are not supportedtype  is external; signals cannot have that typeinput signal  must be a scalararrays cannot be passed to modelsoutput  has an array type; outputs must be scalarunexpected  after the process modelenumerated value  has type  but its definition is a string but its definition is a list but its definition has an element of type  but its definition has type  but its definition has  elementsa conversion in a constant must name an integer typea constant must be defined by an integer literal, a conversion of one, or a list of themonly definitions are allowed inside iterateiterate cannot be nestediterate is not allowed inside a guarded process--> requires signal namesexpected ':=' or '^=', found the initial value of a delay must be a constantexpected a static parameter, found expected an expression, found expected 'then'expected 'else'unbalanced parenthesisexpected an operator, found label automaton  has no input; its control clock is the upper bound of its inputswrong number of arguments for : expected , found  cannot be placed on  cannot be guarded expects a state name of automaton  is not a label of automaton  needs exactly one Automaton_Initial_State is allowed only in an automatonmodel  has no output and cannot be used in an expression has an output and cannot be called as a process is not a state of automaton signal  cannot be used as a signalconversion to  expects one argumentindices expects a positive constantmodel calls are not allowed inside iterateunsafe model  is called from  takes no static parameters calls itself has  outputs; only models with at most one output can be called expects  static parameters, found the word of  must be an integer constantthe resource of  must be an external type accesses an integer or pointer type, found  must fit in 32 bits':' is supported only as the right operand of nextinput 1 of  must be a pointer, found input 2 of store must have type input  of syscall must be an integer or a pointer, found input 1 of instruction must have type ulong, found operator  is not allowed inside iteratean array value can only be the whole definition of a signal[?] applies only to a signal name[?] is allowed only inside iterate[?] refers to a signal the iterate body does not defineindexing a value that is not an arraya range must start at 0the bound of a range must be an integeran array index must be an integernext expects 'index : value' on its rightconstant index  is outside 0..next expects a value of type $ is not supported on arrays expects scalar operandsoperator if expects operands of comparable types, found  and the condition of if must be boolean cannot be inside an if; gate it by its clock or its inputsno conversion from  to  expects a pointer and an integer offset expects integer operands expects operands of comparable types, found  expects operands of one type expects boolean operands expects unsigned operandsthe condition of when must be booleanthe initial value of a delay must match its type is ambiguous has no value the index of iterate must be an array of integersiterate body cannot define its index  in with is not defined by the iterate bodythe initial value of  cannot read a signal the iterate defineswith initializes an array only from an array constant or an array signal cannot be defined is defined twicea range defines an array of integersan array signal must be defined by a constant, indices, a gather, or next is never defineda range can only be the index of iteratea constant has no clockthe argument of $ cannot be a constantclock of  fits no tree: it relates root clocks  has two definitions that cannot be shown equalclocks of  are defined in terms of each otherthe clocks of guards  depend on each other cannot be shown inside the clock  must have a root of its ownnotwhenifdefaultxororandmoduloshlshrnextROOTSAMPLEPRODUCTSUM";
-    constant [423] short FRAGMENT_START = [
+    constant [6494] ubyte FRAGMENTS = ":: error: error  sigc: error: [Errno ] '...'end of file'none[][[]]]]][][nonenone][CONST [[ENUMCONST ['stateDEFINESEED#.'call[expression at  at kinds texts lines columns keywordnamesymbolnumberstringeofCONSTSIGNALENUMCONSTCALLDELAYPREVINDEXNEGNOTUWHENCLOCKIFBRANCHDEFAULTWHENXORORANDEQNELTLEGTGEADDSUBMULDIVMODSHLSHRNEXTPAIRRANGEOPEN_PARENOPEN_SQUAREIF_MARKTHEN_MARKEFFECTINPUTCOPYCONVERTTABLEELEMENTGATHERITERARGEVENTBOOLEANINTPOINTERENUMARRAYEXTERNALinputoutputlocalname types.kind types.bytes types.signed types.name types.values types.element types.size models.name models.kind models.parent models.line models.column models.labels signal_names signal_roles signal_types signal_models signal_positions constant_names constant_types constant_values table_types table_values equation_targets equation_ops equation_args equation_positions equation_loops equation_kinds equation_models equation_labels equation_guards guard_models guard_ops guard_args guard_positions guard_context guard_labels guard_signals label_names label_uses loop_names loop_positions loop_models constraint_groups constraint_positions constraint_models constraint_guards dependence_from dependence_to dependence_positions dependence_models dependence_guards rows.op rows.left rows.right rows.value rows.type rows.ctx rows.line rows.column rows.owner rows.loop rows.guard rows.groups rows.group_positions rows.dependence_from rows.dependence_to rows.war rows.snapshotted rows.effects.kind rows.effects.resource rows.effects.param loops.index loops.size loops.defined loops.snapshots loops.count parent sample_rows def_kind def_target def_left def_right def_line def_column def_pending ob_small ob_big ob_line ob_column node_kind node_parent node_depth node_root node_left node_right roots order loop_orders snapshots snapshotted signaltypemodelconstantlabelSRCTOKENSNAMESTYPESVALUESMODELSSIGNALSCONSTANTSTABLESEQUATIONSENTRIESGUARDSLABELSLOOPSGROUPSDEPENDENCESSTACKPATHSLOCALSPARSEFINISHITEMSOUTPUTINSTANCESINSTANTIATELOOKUPSROWSROW_DEPENDENCESSEGMENTSLOWERCLOCKSDEFINITIONSOBLIGATIONSCLOCK_ROUNDSPAIRSCLOCK_NAMESEDGESSCHEDULE_NODESEFFECTS(||)-->:::=^=/=<=>=..|$+-*/()=;,?!<>^{}unexpected character 'program exceeds compiler capacity: expected '', found expected a name, found  is a reserved name is the name of a model is declared twiceinteger literal  does not fit in longconstant  is not declaredexpected an integer constant, found array capacity must be strictly positiveexpected a type, found arrays of event are not supportedtype  is external; signals cannot have that typeinput signal  must be a scalararrays cannot be passed to modelsoutput  has an array type; outputs must be scalarunexpected  after the process modelenumerated value  has type  but its definition is a string but its definition is a list but its definition has an element of type  but its definition has type  but its definition has  elementsa conversion in a constant must name an integer typea constant must be defined by an integer literal, a conversion of one, or a list of themonly definitions are allowed inside iterateiterate cannot be nestediterate is not allowed inside a guarded process--> requires signal namesexpected ':=' or '^=', found the initial value of a delay must be a constantexpected a static parameter, found expected an expression, found expected 'then'expected 'else'unbalanced parenthesisexpected an operator, found label automaton  has no input; its control clock is the upper bound of its inputswrong number of arguments for : expected , found  cannot be placed on  cannot be guarded expects a state name of automaton  is not a label of automaton  needs exactly one Automaton_Initial_State is allowed only in an automatonmodel  has no output and cannot be used in an expression has an output and cannot be called as a process is not a state of automaton signal  cannot be used as a signalconversion to  expects one argumentindices expects a positive constantmodel calls are not allowed inside iterateunsafe model  is called from  takes no static parameters calls itself has  outputs; only models with at most one output can be called expects  static parameters, found the word of  must be an integer constantthe resource of  must be an external type accesses an integer or pointer type, found  must fit in 32 bits':' is supported only as the right operand of nextinput 1 of  must be a pointer, found input 2 of store must have type input  of syscall must be an integer or a pointer, found input 1 of instruction must have type ulong, found operator  is not allowed inside iteratean array value can only be the whole definition of a signal[?] applies only to a signal name[?] is allowed only inside iterate[?] refers to a signal the iterate body does not defineindexing a value that is not an arraya range must start at 0the bound of a range must be an integeran array index must be an integernext expects 'index : value' on its rightconstant index  is outside 0..next expects a value of type $ is not supported on arrays expects scalar operandsoperator if expects operands of comparable types, found  and the condition of if must be boolean cannot be inside an if; gate it by its clock or its inputsno conversion from  to  expects a pointer and an integer offset expects integer operands expects operands of comparable types, found  expects operands of one type expects boolean operands expects unsigned operandsthe condition of when must be booleanthe initial value of a delay must match its type is ambiguous has no value the index of iterate must be an array of integersiterate body cannot define its index  in with is not defined by the iterate bodythe initial value of  cannot read a signal the iterate defineswith initializes an array only from an array constant or an array signal cannot be defined is defined twicea range defines an array of integersan array signal must be defined by a constant, indices, a gather, or next is never defineda range can only be the index of iteratea constant has no clockthe argument of $ cannot be a constantclock of  fits no tree: it relates root clocks  has two definitions that cannot be shown equalclocks of  are defined in terms of each otherthe clocks of guards  depend on each other cannot be shown inside the clock  must have a root of its owncausality cycle between signals causality cycle between effects at causality cycle between clockseffects  on resource  have no order between them; order them with -->notwhenifdefaultxororandmoduloshlshrnextROOTSAMPLEPRODUCTSUM";
+    constant [437] short FRAGMENT_START = [
         0, 0, 1, 10, 16, 17, 37, 39, 40, 43, 56, 60, 61, 62, 64, 66, 69, 71, 76, 81, 89, 101, 107, 113,
-        117, 118, 119, 124, 139, 145, 151, 157, 165, 172, 176, 182, 188, 194, 197, 202, 208, 217, 221, 226, 230, 235, 238, 241,
-        246, 251, 253, 259, 266, 270, 273, 275, 278, 280, 282, 284, 286, 288, 290, 293, 296, 299, 302, 305, 308, 311, 315, 319,
-        324, 334, 345, 352, 361, 367, 372, 376, 383, 388, 395, 401, 405, 408, 413, 420, 423, 430, 434, 439, 447, 452, 458, 463,
-        468, 479, 491, 504, 515, 528, 542, 553, 565, 577, 591, 603, 617, 631, 644, 657, 670, 684, 701, 716, 731, 747, 759, 772,
-        789, 802, 816, 835, 850, 865, 881, 897, 913, 926, 936, 947, 963, 977, 990, 1004, 1016, 1027, 1038, 1053, 1065, 1083, 1104, 1122,
-        1140, 1156, 1170, 1191, 1209, 1227, 1235, 1245, 1256, 1267, 1277, 1286, 1296, 1308, 1319, 1329, 1340, 1352, 1373, 1394, 1413, 1422, 1439, 1457,
-        1479, 1498, 1510, 1521, 1535, 1551, 1563, 1570, 1582, 1591, 1602, 1611, 1621, 1630, 1641, 1653, 1662, 1669, 1677, 1687, 1697, 1709, 1720, 1730,
-        1740, 1751, 1757, 1763, 1767, 1772, 1780, 1785, 1788, 1794, 1799, 1804, 1810, 1816, 1823, 1832, 1838, 1847, 1854, 1860, 1866, 1871, 1877, 1888,
-        1893, 1898, 1904, 1909, 1915, 1920, 1926, 1935, 1946, 1953, 1957, 1972, 1980, 1985, 1991, 2002, 2013, 2025, 2030, 2041, 2043, 2045, 2048, 2050,
-        2052, 2054, 2056, 2058, 2060, 2062, 2063, 2064, 2065, 2066, 2067, 2068, 2069, 2070, 2071, 2072, 2073, 2074, 2075, 2076, 2077, 2078, 2079, 2080,
-        2102, 2137, 2147, 2156, 2179, 2198, 2221, 2239, 2255, 2276, 2285, 2301, 2337, 2377, 2400, 2433, 2438, 2481, 2494, 2511, 2544, 2551, 2593, 2604,
-        2628, 2645, 2655, 2686, 2715, 2758, 2787, 2811, 2820, 2872, 2960, 3003, 3027, 3074, 3099, 3128, 3175, 3210, 3240, 3255, 3270, 3292, 3320, 3326,
-        3336, 3401, 3431, 3442, 3450, 3471, 3489, 3524, 3553, 3595, 3627, 3633, 3683, 3731, 3760, 3767, 3794, 3808, 3829, 3864, 3906, 3919, 3935, 3962,
-        3975, 3980, 4039, 4048, 4074, 4086, 4114, 4130, 4155, 4199, 4219, 4269, 4280, 4306, 4338, 4344, 4395, 4446, 4455, 4485, 4544, 4577, 4611, 4666,
-        4703, 4726, 4765, 4798, 4839, 4854, 4869, 4898, 4926, 4950, 5006, 5011, 5046, 5105, 5124, 5128, 5168, 5193, 5238, 5267, 5292, 5318, 5355, 5403,
-        5416, 5430, 5479, 5516, 5559, 5580, 5621, 5693, 5711, 5728, 5764, 5837, 5854, 5894, 5917, 5955, 5964, 6002, 6049, 6059, 6094, 6115, 6136, 6170,
-        6198, 6201, 6205, 6207, 6214, 6217, 6219, 6222, 6228, 6231, 6234, 6238, 6242, 6248, 6255];
-    constant [423] short FRAGMENT_LENGTH = [
+        117, 118, 119, 124, 139, 143, 149, 155, 161, 169, 176, 180, 186, 192, 198, 201, 206, 212, 221, 225, 230, 234, 239, 242,
+        245, 250, 255, 257, 263, 270, 274, 277, 279, 282, 284, 286, 288, 290, 292, 294, 297, 300, 303, 306, 309, 312, 315, 319,
+        323, 328, 338, 349, 356, 365, 371, 376, 380, 387, 392, 399, 405, 409, 412, 417, 424, 427, 434, 438, 443, 451, 456, 462,
+        467, 472, 483, 495, 508, 519, 532, 546, 557, 569, 581, 595, 607, 621, 635, 648, 661, 674, 688, 705, 720, 735, 751, 763,
+        776, 793, 806, 820, 839, 854, 869, 885, 901, 917, 930, 940, 951, 967, 981, 994, 1008, 1020, 1031, 1042, 1057, 1069, 1087, 1108,
+        1126, 1144, 1160, 1174, 1195, 1213, 1231, 1239, 1249, 1260, 1271, 1281, 1290, 1300, 1312, 1323, 1333, 1344, 1356, 1377, 1398, 1417, 1426, 1443,
+        1461, 1483, 1502, 1514, 1525, 1539, 1555, 1567, 1574, 1586, 1595, 1606, 1615, 1625, 1634, 1645, 1657, 1666, 1673, 1681, 1691, 1701, 1713, 1724,
+        1734, 1744, 1755, 1761, 1767, 1779, 1789, 1801, 1807, 1811, 1816, 1824, 1829, 1832, 1838, 1843, 1848, 1854, 1860, 1867, 1876, 1882, 1891, 1898,
+        1904, 1910, 1915, 1921, 1932, 1937, 1942, 1948, 1953, 1959, 1964, 1970, 1979, 1990, 1997, 2001, 2016, 2024, 2029, 2035, 2046, 2057, 2069, 2074,
+        2085, 2090, 2104, 2111, 2113, 2115, 2118, 2120, 2122, 2124, 2126, 2128, 2130, 2132, 2133, 2134, 2135, 2136, 2137, 2138, 2139, 2140, 2141, 2142,
+        2143, 2144, 2145, 2146, 2147, 2148, 2149, 2150, 2172, 2207, 2217, 2226, 2249, 2268, 2291, 2309, 2325, 2346, 2355, 2371, 2407, 2447, 2470, 2503,
+        2508, 2551, 2564, 2581, 2614, 2621, 2663, 2674, 2698, 2715, 2725, 2756, 2785, 2828, 2857, 2881, 2890, 2942, 3030, 3073, 3097, 3144, 3169, 3198,
+        3245, 3280, 3310, 3325, 3340, 3362, 3390, 3396, 3406, 3471, 3501, 3512, 3520, 3541, 3559, 3594, 3623, 3665, 3697, 3703, 3753, 3801, 3830, 3837,
+        3864, 3878, 3899, 3934, 3976, 3989, 4005, 4032, 4045, 4050, 4109, 4118, 4144, 4156, 4184, 4200, 4225, 4269, 4289, 4339, 4350, 4376, 4408, 4414,
+        4465, 4516, 4525, 4555, 4614, 4647, 4681, 4736, 4773, 4796, 4835, 4868, 4909, 4924, 4939, 4968, 4996, 5020, 5076, 5081, 5116, 5175, 5194, 5198,
+        5238, 5263, 5308, 5337, 5362, 5388, 5425, 5473, 5486, 5500, 5549, 5586, 5629, 5650, 5691, 5763, 5781, 5798, 5834, 5907, 5924, 5964, 5987, 6025,
+        6034, 6072, 6119, 6129, 6164, 6185, 6206, 6240, 6268, 6300, 6335, 6365, 6373, 6386, 6434, 6437, 6441, 6443, 6450, 6453, 6455, 6458, 6464, 6467,
+        6470, 6474, 6478, 6484, 6491];
+    constant [437] short FRAGMENT_LENGTH = [
         0, 1, 9, 6, 1, 20, 2, 1, 3, 13, 4, 1, 1, 2, 2, 3, 2, 5, 5, 8, 12, 6, 6, 4,
-        1, 1, 5, 15, 6, 6, 6, 8, 7, 4, 6, 6, 6, 3, 5, 6, 9, 4, 5, 4, 5, 3, 3, 5,
-        5, 2, 6, 7, 4, 3, 2, 3, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 5,
-        10, 11, 7, 9, 6, 5, 4, 7, 5, 7, 6, 4, 3, 5, 7, 3, 7, 4, 5, 8, 5, 6, 5, 5,
-        11, 12, 13, 11, 13, 14, 11, 12, 12, 14, 12, 14, 14, 13, 13, 13, 14, 17, 15, 15, 16, 12, 13, 17,
-        13, 14, 19, 15, 15, 16, 16, 16, 13, 10, 11, 16, 14, 13, 14, 12, 11, 11, 15, 12, 18, 21, 18, 18,
-        16, 14, 21, 18, 18, 8, 10, 11, 11, 10, 9, 10, 12, 11, 10, 11, 12, 21, 21, 19, 9, 17, 18, 22,
-        19, 12, 11, 14, 16, 12, 7, 12, 9, 11, 9, 10, 9, 11, 12, 9, 7, 8, 10, 10, 12, 11, 10, 10,
-        11, 6, 6, 4, 5, 8, 5, 3, 6, 5, 5, 6, 6, 7, 9, 6, 9, 7, 6, 6, 5, 6, 11, 5,
-        5, 6, 5, 6, 5, 6, 9, 11, 7, 4, 15, 8, 5, 6, 11, 11, 12, 5, 11, 2, 2, 3, 2, 2,
-        2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 22,
-        35, 10, 9, 23, 19, 23, 18, 16, 21, 9, 16, 36, 40, 23, 33, 5, 43, 13, 17, 33, 7, 42, 11, 24,
-        17, 10, 31, 29, 43, 29, 24, 9, 52, 88, 43, 24, 47, 25, 29, 47, 35, 30, 15, 15, 22, 28, 6, 10,
-        65, 30, 11, 8, 21, 18, 35, 29, 42, 32, 6, 50, 48, 29, 7, 27, 14, 21, 35, 42, 13, 16, 27, 13,
-        5, 59, 9, 26, 12, 28, 16, 25, 44, 20, 50, 11, 26, 32, 6, 51, 51, 9, 30, 59, 33, 34, 55, 37,
-        23, 39, 33, 41, 15, 15, 29, 28, 24, 56, 5, 35, 59, 19, 4, 40, 25, 45, 29, 25, 26, 37, 48, 13,
-        14, 49, 37, 43, 21, 41, 72, 18, 17, 36, 73, 17, 40, 23, 38, 9, 38, 47, 10, 35, 21, 21, 34, 28,
-        3, 4, 2, 7, 3, 2, 3, 6, 3, 3, 4, 4, 6, 7, 3];
+        1, 1, 5, 15, 4, 6, 6, 6, 8, 7, 4, 6, 6, 6, 3, 5, 6, 9, 4, 5, 4, 5, 3, 3,
+        5, 5, 2, 6, 7, 4, 3, 2, 3, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4,
+        5, 10, 11, 7, 9, 6, 5, 4, 7, 5, 7, 6, 4, 3, 5, 7, 3, 7, 4, 5, 8, 5, 6, 5,
+        5, 11, 12, 13, 11, 13, 14, 11, 12, 12, 14, 12, 14, 14, 13, 13, 13, 14, 17, 15, 15, 16, 12, 13,
+        17, 13, 14, 19, 15, 15, 16, 16, 16, 13, 10, 11, 16, 14, 13, 14, 12, 11, 11, 15, 12, 18, 21, 18,
+        18, 16, 14, 21, 18, 18, 8, 10, 11, 11, 10, 9, 10, 12, 11, 10, 11, 12, 21, 21, 19, 9, 17, 18,
+        22, 19, 12, 11, 14, 16, 12, 7, 12, 9, 11, 9, 10, 9, 11, 12, 9, 7, 8, 10, 10, 12, 11, 10,
+        10, 11, 6, 6, 12, 10, 12, 6, 4, 5, 8, 5, 3, 6, 5, 5, 6, 6, 7, 9, 6, 9, 7, 6,
+        6, 5, 6, 11, 5, 5, 6, 5, 6, 5, 6, 9, 11, 7, 4, 15, 8, 5, 6, 11, 11, 12, 5, 11,
+        5, 14, 7, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 22, 35, 10, 9, 23, 19, 23, 18, 16, 21, 9, 16, 36, 40, 23, 33, 5,
+        43, 13, 17, 33, 7, 42, 11, 24, 17, 10, 31, 29, 43, 29, 24, 9, 52, 88, 43, 24, 47, 25, 29, 47,
+        35, 30, 15, 15, 22, 28, 6, 10, 65, 30, 11, 8, 21, 18, 35, 29, 42, 32, 6, 50, 48, 29, 7, 27,
+        14, 21, 35, 42, 13, 16, 27, 13, 5, 59, 9, 26, 12, 28, 16, 25, 44, 20, 50, 11, 26, 32, 6, 51,
+        51, 9, 30, 59, 33, 34, 55, 37, 23, 39, 33, 41, 15, 15, 29, 28, 24, 56, 5, 35, 59, 19, 4, 40,
+        25, 45, 29, 25, 26, 37, 48, 13, 14, 49, 37, 43, 21, 41, 72, 18, 17, 36, 73, 17, 40, 23, 38, 9,
+        38, 47, 10, 35, 21, 21, 34, 28, 32, 35, 30, 8, 13, 48, 3, 4, 2, 7, 3, 2, 3, 6, 3, 3,
+        4, 4, 6, 7, 3];
     constant integer BUILTIN_EVENT = 0;
     constant integer BUILTIN_BOOLEAN = 1;
     constant integer BUILTIN_SHORT = 2;
@@ -5487,18 +5941,18 @@ process SIGC =
     constant integer LIST_NUMBERS = 2;
     constant integer LIST_OPS = 3;
     constant integer LIST_ARGS = 4;
-    constant [99] short COLUMN_SHAPE = [
+    constant [103] short COLUMN_SHAPE = [
         0, 2, 1, 1, 4, 7, 1, 1, 0, 0, 1, 1, 1, 7, 0, 2, 1, 1, 3, 0, 1, 1, 1, 7,
         0, 7, 7, 3, 1, 2, 1, 7, 7, 1, 7, 7, 3, 7, 7, 0, 0, 5, 0, 3, 1, 8, 3, 1,
         7, 6, 6, 3, 1, 7, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 7, 3, 1, 1, 7, 1, 0,
         1, 1, 1, 1, 7, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1,
-        1, 1, 1];
-    constant [99] short COLUMN_LIST_KIND = [
+        1, 1, 1, 1, 7, 7, 1];
+    constant [103] short COLUMN_LIST_KIND = [
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
         0, 3, 4, 0, 0, 0, 0, 1, 2, 0, 3, 4, 0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0,
         0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0];
+        0, 0, 0, 0, 2, 2, 0];
     constant integer SA_NAME = 0;
     constant integer SA_NUMBER = 1;
     constant integer SA_FRAGMENT = 2;
@@ -5579,8 +6033,8 @@ process SIGC =
     constant integer F_CALL_SUFFIX = 26;
     constant integer N_INDICES = 53;
     constant integer OP_EFFECT = 38;
-    constant integer F_CAP_INSTANCES = 222;
-    constant integer F_CAP_INSTANTIATE = 223;
+    constant integer F_CAP_INSTANCES = 227;
+    constant integer F_CAP_INSTANTIATE = 228;
     constant integer T_SIGNAL_UNDECLARED = 51;
     constant integer T_LABEL_AS_SIGNAL = 52;
     constant integer T_CONVERSION_ONE = 53;
@@ -5625,8 +6079,8 @@ process SIGC =
         0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1];
     constant [48] short OP_TEXT_FRAGMENT = [
-        0, 0, 0, 0, 246, 0, 0, 248, 408, 409, 260, 410, 410, 411, 409, 412, 413, 414, 253, 241, 258, 242, 259, 243,
-        247, 248, 249, 250, 415, 416, 417, 418, 1, 244, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        0, 0, 0, 0, 254, 0, 0, 256, 422, 423, 268, 424, 424, 425, 423, 426, 427, 428, 261, 249, 266, 250, 267, 251,
+        255, 256, 257, 258, 429, 430, 431, 432, 1, 252, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     constant integer COL_ROWS_OP = 54;
     constant integer COL_ROWS_LEFT = 55;
     constant integer COL_ROWS_RIGHT = 56;
@@ -5652,11 +6106,11 @@ process SIGC =
     constant integer COL_LOOPS_DEFINED = 76;
     constant integer COL_LOOPS_SNAPSHOTS = 77;
     constant integer COL_LOOPS_COUNT = 78;
-    constant integer F_CAP_LOOKUPS = 224;
-    constant integer F_CAP_ROWS = 225;
-    constant integer F_CAP_ROW_DEPENDENCES = 226;
-    constant integer F_CAP_SEGMENTS = 227;
-    constant integer F_CAP_LOWER = 228;
+    constant integer F_CAP_LOOKUPS = 229;
+    constant integer F_CAP_ROWS = 230;
+    constant integer F_CAP_ROW_DEPENDENCES = 231;
+    constant integer F_CAP_SEGMENTS = 232;
+    constant integer F_CAP_LOWER = 233;
     constant integer A_FLAT = 9;
     constant integer A_TEXT = 10;
     constant integer A_LONG = 11;
@@ -5756,14 +6210,14 @@ process SIGC =
     constant integer ORDER_PROGRAM_END = 54;
     constant integer ORDER_ROWS_START = 54;
     constant integer ORDER_ROWS_END = 88;
-    constant [108] short DUMP_ORDER = [
+    constant [112] short DUMP_ORDER = [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
         24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
         48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
         72, 73, 74, 75, 76, 77, 78, 1, 2, 3, 4, 5, 6, 7, 22, 23, 79, 80, 81, 82, 83, 84, 85, 86,
-        87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98];
+        87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102];
     constant [5] short CLOCK_KIND_FRAGMENT = [
-        10, 419, 420, 421, 422];
+        10, 433, 434, 435, 436];
     constant integer ORDER_CLOCKS_START = 88;
     constant integer ORDER_CLOCKS_END = 108;
     constant integer COL_PARENT = 79;
@@ -5786,12 +6240,12 @@ process SIGC =
     constant integer COL_NODE_LEFT = 96;
     constant integer COL_NODE_RIGHT = 97;
     constant integer COL_ROOTS = 98;
-    constant integer F_CAP_CLOCKS = 229;
-    constant integer F_CAP_DEFINITIONS = 230;
-    constant integer F_CAP_OBLIGATIONS = 231;
-    constant integer F_CAP_CLOCK_ROUNDS = 232;
-    constant integer F_CAP_PAIRS = 233;
-    constant integer F_CAP_CLOCK_NAMES = 234;
+    constant integer F_CAP_CLOCKS = 234;
+    constant integer F_CAP_DEFINITIONS = 235;
+    constant integer F_CAP_OBLIGATIONS = 236;
+    constant integer F_CAP_CLOCK_ROUNDS = 237;
+    constant integer F_CAP_PAIRS = 238;
+    constant integer F_CAP_CLOCK_NAMES = 239;
     constant integer A_CLOCK = 12;
     constant integer T_NO_CLOCK = 115;
     constant integer T_DELAY_CONSTANT = 116;
@@ -5822,6 +6276,20 @@ process SIGC =
     constant integer CLK_PRODUCT = 3;
     constant integer CLK_SUM = 4;
     constant integer F_EXPRESSION_AT = 27;
+    constant integer F_AT = 28;
+    constant integer ORDER_SCHEDULE_START = 108;
+    constant integer ORDER_SCHEDULE_END = 112;
+    constant integer COL_ORDER = 99;
+    constant integer COL_LOOP_ORDERS = 100;
+    constant integer COL_SNAPSHOTS = 101;
+    constant integer COL_SNAPSHOTTED = 102;
+    constant integer F_CAP_EDGES = 240;
+    constant integer F_CAP_SCHEDULE_NODES = 241;
+    constant integer F_CAP_EFFECTS = 242;
+    constant integer T_SIGNAL_CYCLE = 123;
+    constant integer T_EFFECT_CYCLE = 124;
+    constant integer T_CLOCK_CAUSALITY = 125;
+    constant integer T_EFFECTS_UNORDERED = 126;
     type ARGS = external;
     type OS = external;
     type FILE = external;
@@ -6304,4 +6772,50 @@ process SIGC =
     long CLOCKS_DUMP_BOUND, CP_STEPS, CK_TOTAL_BOUND, CK_DEF_BOUND, CK_ROUND_BOUND, CK_BOUND, E1_KEY;
     ubyte CR_NAME_BYTE, CR_BYTE, J_BYTE;
     ulong CR_DIGIT;
+    [EDGE_CAP] integer SG_FROM, SG_TO, SO_FROM, SO_TO, SG_SUCC, SG_PRED, SO_SUCC, SO_PRED;
+    [SCHED_NODE_CAP] integer SG_OUT, SG_IN, SO_OUT, SO_IN, SI_IN, SG_START, SG_PSTART, SO_START, SO_PSTART, SG_SFILL,
+      SG_PFILL, SO_SFILL, SO_PFILL, SKO_DEC, SKO_STACK, SKO_ORDER, SCB_DEC, SCB_STACK, SCB_ORDER, SC_OUTC, VIS1, VIS2,
+      EF_STACK;
+    [SCHED_NODE_CAP] boolean SKO_MARK, SCB_MARK;
+    [ROWS_CAP] integer SW_OUT, SW_IN, SW_START, SW_FILL, SKA_DEC, SKA_STACK, SKA_ORDER, SKB_DEC, SKB_STACK, SKB_ORDER,
+      SNAP_GATHER1, WAR_SNAP1, SNAPPED_ALL, SNAP_LIST, LO_LIST;
+    [ROWS_CAP] boolean SKB_MARK, SM_SEEN;
+    [ROW_DEPENDENCE_CAP] integer SW_SUCC;
+    [LOOP_CAP] integer LOOP_MEMBERS, SKA_LOOP_POPS, SKB_LOOP_POPS, LO_START, LO_LENGTH, SNAP_LOOP_COUNT, SNAP_START,
+      SNAP_FILL, LO_FILL;
+    [EFFECT_ORDER_CAP] integer SE_EROW;
+    [EFFECT_PAIR_CAP] boolean EF_ORDERED;
+    [TYPE_CAP] integer RES_COUNT;
+    [CLOCK_NAME_CAP] integer SM_ITEM_VALUE;
+    [CLOCK_NAME_CAP] long SM_ITEM_KEY;
+    [CLOCK_NAME_CAP] boolean SM_ITEM_OWNER;
+    [PARSE_CAP] integer SE_INDEX, SWC_INDEX, SN_INDEX, SPL_INDEX, SKO_INDEX, SKA_INDEX, SKB_INDEX, SL_INDEX,
+      SCA_INDEX, SCB_INDEX, SM_INDEX, EF_INDEX, SWS_INDEX, SSC_INDEX, SNS_INDEX, SNP_INDEX, LOP_INDEX;
+    integer TX_ARGS, SCHEDULE_ARGUMENT2, SCHEDULE_COLUMN_ROWS, SCHED_LOOP_BASE, SCHED_NODES, SE_CLOCK_END, SE_DEP_END,
+      E_ROW, E_SUB, E_CLOCK, E_CSUB, E_D, E_L, E_ROW_OP, E_LEFT, E_RIGHT, E_KIND, E_FROM, E_TO, E_SFROM, E_STO,
+      E_OFROM, E_OTO, E_GSLOT, E_OSLOT, SG_COUNT, SO_COUNT, E_LOOP, E_RESOURCE, SE_ECOUNT, W_READER, W_WRITER, SN_G,
+      SN_GP, SN_O, SN_OP, SN_W, SPL_MAX, P_GF, P_GT, P_OF, P_OT, P_WR, SKO_INIT_NODE, SKO_NODE_NOW, SKO_K, SKO_LEN0,
+      SKO_S, SKO_NEW_DEC, SKO_POPPED, SKO_TOP, SKO_COUNT, SKO_PRESENT, SKO_NODE, SKO_STEP, SKO_CURSOR, SKA_INIT_NODE,
+      SKA_NODE_NOW, SKA_K, SKA_LEN0, SKA_LEN1, SKA_S, SKA_NEW_DEC, SKA_POPPED, SKA_TOP, SKA_COUNT, SKA_PRESENT,
+      SKA_POP_LOOP, SKA_NODE, SKA_STEP, SKA_CURSOR, SKB_INIT_NODE, SKB_NODE_NOW, SKB_K, SKB_LEN0, SKB_S, SKB_NEW_DEC,
+      SKB_POPPED, SKB_TOP, SKB_COUNT, SKB_PRESENT, SKB_POP_LOOP, SKB_NODE, SKB_STEP, SKB_CURSOR, SL_ERROR_LOOP,
+      L_POPS, LO_SUM, SC_N, A_NODE, A_K, A_LEN, A_S, A_ACC, SCA_NODE, SCA_K, SCA_ACC, SCB_INIT_NODE, SCB_NODE_NOW,
+      SCB_K, SCB_LEN0, SCB_S, SCB_NEW_DEC, SCB_POPPED, SCB_TOP, SCB_COUNT, SCB_PRESENT, SCB_NODE, SCB_STEP,
+      SCB_CURSOR, M_NODE, M_OWNER, M_SLOT, M_ROW, SM_COUNT, SM_OWNERS, SM_OWNER_TOKEN, SM_EFFECT_TOKEN, SM_ROW_TOKEN,
+      EF_E, F_I, F_PH, F_ROW, F_RES, F_STAMP, F_SUP, F_NODE, F_K, F_LEN, F_S, F_PUSHED, EF_TOP, F_J, F_JROW, F_JSUP,
+      F_PI, F_PJ, EF_FIRST, EF_SECOND, EF_PH, EF_I, EF_J, EF_NODE, EF_K, EF_FIRST_ROW, EF_SECOND_ROW,
+      SCHEDULE_MESSAGE, SCHEDULE_TOKEN, SCHEDULE_ARGUMENT0, WS_READER, C_L1, SNAP_TOTAL, SNS_SUM, N_L, O_NODE, O_LOOP;
+    boolean SCHED_LIST, SCHED_PAIR, L_EFFECT, L_POSITION, L_PLAIN, SCHEDULE_DUMP, SCHEDULE_RUN, E_IN_ROWS,
+      E_IN_CLOCKS, E_IN_DEPS, E_IN_LOOPS, E_SEED, E_MONO, E_LEFT_EDGE, E_RIGHT_EDGE, E_SAMPLE, E_BINARY, E_HAS,
+      E_GLOBAL, E_OUTER, E_INNER, E_ROW0, E_MEMBER, E_GATHERS, E_EFFECT, SCHED_OVERFLOW, SCHED_GO, W_KEPT, P_G, P_O,
+      P_W, SKO_IN_INIT, SKO_INIT_PRESENT, SKO_INIT_PUSH, SKO_EXPANDING, SKO_COUNTS, SKO_SUCC_PUSH, SKO_POPS, SKO_PUSH,
+      SKO_FAILED, SKA_RUN, SKA_IN_INIT, SKA_INIT_PRESENT, SKA_INIT_PUSH, SKA_EXPANDING, SKA_IN_SEG0, SKA_COUNTS,
+      SKA_SUCC_PUSH, SKA_POPS, SKA_PUSH, SKB_RUN, SKB_IN_INIT, SKB_INIT_PRESENT, SKB_INIT_PUSH, SKB_EXPANDING,
+      SKB_COUNTS, SKB_SUCC_PUSH, SKB_POPS, SKB_PUSH, SKB_FAILED, L_FAILED1, L_FAILED2, SC_OUTER, SC_INNER, SC_RUN,
+      A_EXPANDING, A_HIT, SCB_IN_INIT, SCB_INIT_PRESENT, SCB_INIT_PUSH, SCB_EXPANDING, SCB_COUNTS, SCB_SUCC_PUSH,
+      SCB_POPS, SCB_PUSH, M_IN, M_OWNS, M_NEW, M_EFFECT, M_APPENDS, M_OWNER_BETTER, M_EFFECT_BETTER, M_ROW_BETTER,
+      EF_RUN, F_ACTIVE, F_START1, F_SKIP, F_TO_PAIRS, F_START2, F_DFS, F_EXPANDING, F_VISITS, F_POPS, F_DFS_ENDS,
+      F_PUSH, F_SCAN, F_REACHED, F_SCAN_ENDS, F_PAIRS, F_PAIR_FAILS, F_PAIRS_END, EF_FAILED, SCHEDULE_READY, WS_MARKS,
+      O_FIRST_RUN, O_TAKES;
+    long SCHEDULE_DUMP_BOUND, M_KEY, M_SELF_KEY, SM_OWNER_KEY, SM_EFFECT_KEY, SM_ROW_KEY, EF_BOUND;
   end;

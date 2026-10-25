@@ -38,7 +38,24 @@ def clocks(text):
     return result
 
 
-PASSES = {"tokens": sigc.lex, "program": parse, "flat": flat, "rows": lowered, "clocks": clocks}
+@dataclass
+class Scheduled:
+    order: list
+    loop_orders: list
+    snapshots: list
+    snapshotted: set
+
+
+def scheduled(text):
+    program = flat(text)
+    rows, loops = sigc.lower(program)
+    order, loop_orders = sigc.schedule(program, rows, sigc.clock_calculus(rows, program, loops), loops)
+    return Scheduled(order, loop_orders, loops.snapshots, rows.snapshotted)
+
+
+PASSES = {
+    "tokens": sigc.lex, "program": parse, "flat": flat, "rows": lowered, "clocks": clocks, "schedule": scheduled,
+}
 
 
 def render(value, nested):

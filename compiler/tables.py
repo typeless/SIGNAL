@@ -91,10 +91,12 @@ CLOCK_COLUMNS = [
     "ob_small", "ob_big", "ob_line", "ob_column", "node_kind", "node_parent", "node_depth", "node_root", "node_left",
     "node_right", "roots",
 ]
-ALL_COLUMNS = COLUMNS + ROW_COLUMNS + CLOCK_COLUMNS
+SCHEDULE_COLUMNS = ["order", "loop_orders", "snapshots", "snapshotted"]
+ALL_COLUMNS = COLUMNS + ROW_COLUMNS + CLOCK_COLUMNS + SCHEDULE_COLUMNS
 TYPE_COLUMNS = [column for column in COLUMNS if column.startswith("types.")]
 DUMP_ORDERS = [
     ("PROGRAM", COLUMNS), ("ROWS", ROW_COLUMNS + TYPE_COLUMNS + ["table_types", "table_values"]), ("CLOCKS", CLOCK_COLUMNS),
+    ("SCHEDULE", SCHEDULE_COLUMNS),
 ]
 CLOCK_KINDS = ["NONE", "ROOT", "SAMPLE", "PRODUCT", "SUM"]
 
@@ -224,12 +226,17 @@ TEMPLATES = [
     ("GUARD_CYCLE", "the clocks of guards # depend on each other", ["CLOCK"]),
     ("NOT_INSIDE", "clock of # cannot be shown inside the clock #", ["CLOCK", "CLOCK"]),
     ("INPUT_ROOT", "input signal # must have a root of its own", ["FLAT"]),
+    ("SIGNAL_CYCLE", "causality cycle between signals #", ["CLOCK"]),
+    ("EFFECT_CYCLE", "causality cycle between effects at #", ["CLOCK"]),
+    ("CLOCK_CAUSALITY", "causality cycle between clocks", []),
+    ("EFFECTS_UNORDERED", "effects # and # on resource # have no order between them; order them with -->", ["CLOCK", "CLOCK", "TYPE"]),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
     "GUARDS", "LABELS", "LOOPS", "GROUPS", "DEPENDENCES", "STACK", "PATHS", "LOCALS", "PARSE", "FINISH", "ITEMS",
     "OUTPUT", "INSTANCES", "INSTANTIATE", "LOOKUPS", "ROWS", "ROW_DEPENDENCES", "SEGMENTS", "LOWER",
     "CLOCKS", "DEFINITIONS", "OBLIGATIONS", "CLOCK_ROUNDS", "PAIRS", "CLOCK_NAMES",
+    "EDGES", "SCHEDULE_NODES", "EFFECTS",
 ]
 NAMED_FRAGMENTS = [
     ("COLON", ":"), ("ERROR_SEPARATOR", ": error: "), ("ERROR_WORD", "error "), ("SPACE", " "),
@@ -239,6 +246,7 @@ NAMED_FRAGMENTS = [
     ("NONE_CLOSE", "none]"), ("CONST_OPEN", "[CONST ["), ("ENUMCONST_OPEN", "[ENUMCONST ["), ("SIZE_CLOSE", "] "),
     ("STATE_SUFFIX", "'state"), ("DEFINE", "DEFINE"), ("SEED", "SEED"),
     ("HASH", "#"), ("DOT", "."), ("CALL_SUFFIX", "'call"), ("EXPRESSION_AT", "[expression at "),
+    ("AT", " at "),
 ]
 ROLE_WORDS = ["signal", "type", "model", "constant", "label"]
 
@@ -319,7 +327,7 @@ COLUMN_SHAPES = {
     "constraint_guards": "LIST NUMBERS", "dependence_from": "END_POINT", "dependence_to": "END_POINT",
     "dependence_positions": "POSITION", "dependence_guards": "LIST NUMBERS",
     "rows.op": "FRAGMENT", "rows.groups": "LIST NUMBERS", "rows.group_positions": "POSITION",
-    "rows.war": "LIST NUMBERS", "rows.effects.kind": "NAME", "loops.defined": "LIST NUMBERS",
+    "rows.war": "LIST NUMBERS", "loop_orders": "LIST NUMBERS", "snapshots": "LIST NUMBERS", "rows.effects.kind": "NAME", "loops.defined": "LIST NUMBERS",
     "def_kind": "FRAGMENT", "node_kind": "FRAGMENT",
 }
 ITEM_CLASSES = ["HEADER", "NEWLINE", "OPEN", "CLOSE", "NAME", "TOKEN", "NUMBER", "FRAGMENT", "SIZE", "PREFIX"]

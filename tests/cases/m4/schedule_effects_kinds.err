@@ -1,0 +1,1 @@
+schedule_effects_kinds.sig:7:11: error: effects store at 6:6 and load at 7:11 on resource MEMORY have no order between them; order them with -->

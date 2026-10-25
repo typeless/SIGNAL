@@ -1,0 +1,1 @@
+schedule_cycle_names.sig:5:6: error: causality cycle between signals ALPHA, MID, ZETA

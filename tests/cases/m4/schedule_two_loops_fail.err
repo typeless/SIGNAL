@@ -1,0 +1,1 @@
+schedule_two_loops_fail.sig:10:11: error: causality cycle between signals Q, R

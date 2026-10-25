@@ -1,0 +1,1 @@
+schedule_effects_twice.sig:13:19: error: causality cycle between effects at 13:19, 13:19, 14:20, 14:20
