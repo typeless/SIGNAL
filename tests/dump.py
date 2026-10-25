@@ -1,5 +1,5 @@
 import sys
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -15,7 +15,17 @@ def flat(text):
     return sigc.instantiate(parse(text))
 
 
-PASSES = {"tokens": sigc.lex, "program": parse, "flat": flat}
+@dataclass
+class Lowered:
+    rows: sigc.Rows
+    loops: sigc.Loops
+
+
+def lowered(text):
+    return Lowered(*sigc.lower(flat(text)))
+
+
+PASSES = {"tokens": sigc.lex, "program": parse, "flat": flat, "rows": lowered}
 
 
 def render(value, nested):
@@ -23,6 +33,8 @@ def render(value, nested):
         return "none"
     if isinstance(value, bool):
         return str(int(value))
+    if isinstance(value, set):
+        value = sorted(value)
     if isinstance(value, (tuple, list)):
         items = " ".join(render(item, True) for item in value)
         return f"[{items}]" if nested else items
@@ -37,6 +49,8 @@ def dump_columns(record, prefix=""):
             continue
         if isinstance(values, str):
             values = [values]
+        if isinstance(values, set):
+            values = sorted(values)
         print(f"{prefix}{column.name}", len(values))
         for value in values:
             print(render(value, False))

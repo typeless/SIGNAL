@@ -1,0 +1,1 @@
+lower_delay_match.sig:5:13: error: the initial value of a delay must match its type

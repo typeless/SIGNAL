@@ -1,0 +1,1 @@
+lower_syscall_input.sig:5:19: error: input 2 of syscall must be an integer or a pointer, found boolean

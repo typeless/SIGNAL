@@ -1,0 +1,1 @@
+lower_index_ulong_const.sig:5:20: error: constant BIG has type ulong but its definition has type short

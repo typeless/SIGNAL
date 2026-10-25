@@ -42,7 +42,12 @@ OPS = [
     "CONST", "SIGNAL", "ENUMCONST", "CALL", "DELAY", "PREV", "INDEX", "NEG", "NOT", "UWHEN", "CLOCK", "IF", "BRANCH",
     "DEFAULT", "WHEN", "XOR", "OR", "AND", "EQ", "NE", "LT", "LE", "GT", "GE", "ADD", "SUB", "MUL", "DIV", "MOD",
     "SHL", "SHR", "NEXT", "PAIR", "RANGE", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK", "EFFECT",
+    "INPUT", "COPY", "CONVERT", "TABLE", "ELEMENT", "GATHER", "ITER", "SEED", "ARG",
 ]
+MONOCHRONOUS = {
+    "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR",
+    "CONVERT", "ELEMENT", "GATHER", "PAIR", "NEXT", "PREV", "ITER", "IF", "BRANCH", "ARG", "RANGE",
+}
 OPENERS = {"CALL", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK"}
 LEAVES = {"CONST", "SIGNAL", "ENUMCONST"}
 UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV"}
@@ -75,8 +80,15 @@ COLUMNS = [
     "constraint_groups", "constraint_positions", "constraint_models", "constraint_guards",
     "dependence_from", "dependence_to", "dependence_positions", "dependence_models", "dependence_guards",
 ]
+ROW_COLUMNS = [
+    "rows.op", "rows.left", "rows.right", "rows.value", "rows.type", "rows.ctx", "rows.line", "rows.column",
+    "rows.owner", "rows.loop", "rows.guard", "rows.groups", "rows.group_positions", "rows.dependence_from",
+    "rows.dependence_to", "rows.war", "rows.snapshotted", "rows.effects.kind", "rows.effects.resource",
+    "rows.effects.param", "loops.index", "loops.size", "loops.defined", "loops.snapshots", "loops.count",
+]
+ALL_COLUMNS = COLUMNS + ROW_COLUMNS
 
-ARGUMENT_KINDS = ["NONE", "TOKEN", "LITERAL", "NAME", "TYPE", "NUMBER", "CODE", "FRAGMENT", "CHARACTER"]
+ARGUMENT_KINDS = ["NONE", "TOKEN", "LITERAL", "NAME", "TYPE", "NUMBER", "CODE", "FRAGMENT", "CHARACTER", "FLAT", "TEXT", "LONG"]
 TEMPLATES = [
     ("UNEXPECTED_CHARACTER", "unexpected character '#'", ["CHARACTER"]),
     ("CAPACITY", "program exceeds compiler capacity: #", ["FRAGMENT"]),
@@ -138,11 +150,65 @@ TEMPLATES = [
     ("NO_STATIC_PARAMETERS", "model # takes no static parameters", ["NAME"]),
     ("CALLS_ITSELF", "model # calls itself", ["NAME"]),
     ("TOO_MANY_OUTPUTS", "model # has # outputs; only models with at most one output can be called", ["NAME", "NUMBER"]),
+    ("FLAT_UNDECLARED", "signal # is not declared", ["FLAT"]),
+    ("STATIC_COUNT", "# expects # static parameters, found #", ["NAME", "NUMBER", "NUMBER"]),
+    ("WORD_CONSTANT", "the word of # must be an integer constant", ["NAME"]),
+    ("TYPE_UNDECLARED_TEXT", "type # is not declared", ["TEXT"]),
+    ("RESOURCE_EXTERNAL", "the resource of # must be an external type", ["NAME"]),
+    ("ACCESS_TYPE", "# accesses an integer or pointer type, found #", ["NAME", "TEXT"]),
+    ("WORD_RANGE", "the word of # must fit in 32 bits", ["NAME"]),
+    ("PAIR_OPERAND", "':' is supported only as the right operand of next", []),
+    ("INPUT_POINTER", "input 1 of # must be a pointer, found #", ["NAME", "TYPE"]),
+    ("STORE_TYPE", "input 2 of store must have type #, found #", ["TYPE", "TYPE"]),
+    ("SYSCALL_INPUT", "input # of syscall must be an integer or a pointer, found #", ["NUMBER", "TYPE"]),
+    ("INSTRUCTION_INPUT", "input 1 of instruction must have type ulong, found #", ["TYPE"]),
+    ("NOT_IN_ITERATE", "operator # is not allowed inside iterate", ["FRAGMENT"]),
+    ("ARRAY_VALUE", "an array value can only be the whole definition of a signal", []),
+    ("PREV_SIGNAL", "[?] applies only to a signal name", []),
+    ("PREV_OUTSIDE", "#[?] is allowed only inside iterate", ["FLAT"]),
+    ("PREV_UNDEFINED", "#[?] refers to a signal the iterate body does not define", ["FLAT"]),
+    ("NOT_ARRAY", "indexing a value that is not an array", []),
+    ("RANGE_START", "a range must start at 0", []),
+    ("RANGE_BOUND", "the bound of a range must be an integer", []),
+    ("INDEX_INTEGER", "an array index must be an integer", []),
+    ("NEXT_PAIR", "next expects 'index : value' on its right", []),
+    ("INDEX_RANGE", "constant index # is outside 0..#", ["LONG", "LONG"]),
+    ("NEXT_TYPE", "next expects a value of type #, found #", ["TYPE", "TYPE"]),
+    ("DELAY_ARRAY", "$ is not supported on arrays", []),
+    ("SCALAR_OPERANDS", "operator # expects scalar operands", ["FRAGMENT"]),
+    ("IF_TYPES", "operator if expects operands of comparable types, found # and #", ["TYPE", "TYPE"]),
+    ("IF_CONDITION", "the condition of if must be boolean", []),
+    ("EFFECT_IN_IF", "# cannot be inside an if; gate it by its clock or its inputs", ["NAME"]),
+    ("NO_CONVERSION", "no conversion from # to #", ["TYPE", "TYPE"]),
+    ("POINTER_OFFSET", "operator # expects a pointer and an integer offset", ["FRAGMENT"]),
+    ("INTEGER_OPERANDS", "operator # expects integer operands", ["FRAGMENT"]),
+    ("COMPARABLE", "operator # expects operands of comparable types, found # and #", ["FRAGMENT", "TYPE", "TYPE"]),
+    ("ONE_TYPE", "operator # expects operands of one type", ["FRAGMENT"]),
+    ("BOOLEAN_OPERANDS", "operator # expects boolean operands", ["FRAGMENT"]),
+    ("UNSIGNED_OPERANDS", "operator # expects unsigned operands", ["FRAGMENT"]),
+    ("WHEN_CONDITION", "the condition of when must be boolean", []),
+    ("DELAY_MATCH", "the initial value of a delay must match its type", []),
+    ("ENUM_UNDECLARED", "enumerated value # is not declared", ["NAME"]),
+    ("ENUM_AMBIGUOUS", "enumerated value # is ambiguous", ["NAME"]),
+    ("TYPE_UNDECLARED", "type # is not declared", ["NAME"]),
+    ("NO_VALUE", "type # has no value #", ["NAME", "NAME"]),
+    ("ITERATE_INDEX", "the index of iterate must be an array of integers", []),
+    ("INDEX_DEFINED", "iterate body cannot define its index #", ["FLAT"]),
+    ("WITH_UNDEFINED", "signal # in with is not defined by the iterate body", ["FLAT"]),
+    ("WITH_READS", "the initial value of # cannot read a signal the iterate defines", ["FLAT"]),
+    ("WITH_ARRAY", "with initializes an array only from an array constant or an array signal", []),
+    ("SIGNAL_TYPE", "signal # has type # but its definition has type #", ["FLAT", "TYPE", "TYPE"]),
+    ("INPUT_DEFINED", "input signal # cannot be defined", ["FLAT"]),
+    ("DEFINED_TWICE", "signal # is defined twice", ["FLAT"]),
+    ("RANGE_DEFINES", "a range defines an array of integers", []),
+    ("ARRAY_DEFINITION", "an array signal must be defined by a constant, indices, a gather, or next", []),
+    ("NEVER_DEFINED", "signal # is never defined", ["FLAT"]),
+    ("RANGE_INDEX", "a range can only be the index of iterate", []),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
     "GUARDS", "LABELS", "LOOPS", "GROUPS", "DEPENDENCES", "STACK", "PATHS", "LOCALS", "PARSE", "FINISH", "ITEMS",
-    "OUTPUT", "INSTANCES", "INSTANTIATE",
+    "OUTPUT", "INSTANCES", "INSTANTIATE", "LOOKUPS", "ROWS", "ROW_DEPENDENCES", "SEGMENTS", "LOWER",
 ]
 NAMED_FRAGMENTS = [
     ("COLON", ":"), ("ERROR_SEPARATOR", ": error: "), ("ERROR_WORD", "error "), ("SPACE", " "),
@@ -196,6 +262,12 @@ FINISH_PHASES = [
     "REWRITE_TRIGGER", "CLOCK", "STATE", "CUR", "CUR_TAIL", "GROUP", "GUARD_START", "DEFINE_PARSE", "DEFINE_FINISH",
     "READ_PARSE", "READ_FINISH", "READ_MEMBERS", "READ_DEPS", "ON", "FILTER", "DONE", "FAILED",
 ]
+LOWER_STATES = [
+    "SIGNAL", "LABEL", "VALUE", "ARRAY", "TABLE", "LOOP", "EQUATION", "GROUP", "START", "SCAN", "ENTRY", "NEVER",
+    "MEMBERS", "DONE", "FAILED",
+]
+POST_STATES = ["DEPENDENCE", "ROWS", "PREFIX", "PLACE", "WALK", "LABELSUM", "SIZE", "DONE", "FAILED"]
+EXPAND_STATES = ["PLACE", "PAIRS", "PREV", "DONE", "FAILED"]
 INSTANTIATE_PHASES = [
     "ROOT", "INSTANCE", "LABEL", "SIGNAL", "FINISH_SIGNAL", "LOOP", "EQUATION", "FINISH_EQUATION", "GROUP",
     "FINISH_GROUP", "DEPENDENCE", "ENTRY", "ANCESTRY", "PATH", "INPUT", "EMIT", "DONE", "FAILED",
@@ -221,6 +293,8 @@ COLUMN_SHAPES = {
     "loop_positions": "POSITION", "constraint_groups": "GROUP", "constraint_positions": "POSITION",
     "constraint_guards": "LIST NUMBERS", "dependence_from": "END_POINT", "dependence_to": "END_POINT",
     "dependence_positions": "POSITION", "dependence_guards": "LIST NUMBERS",
+    "rows.op": "FRAGMENT", "rows.groups": "LIST NUMBERS", "rows.group_positions": "POSITION",
+    "rows.war": "LIST NUMBERS", "rows.effects.kind": "NAME", "loops.defined": "LIST NUMBERS",
 }
 ITEM_CLASSES = ["HEADER", "NEWLINE", "OPEN", "CLOSE", "NAME", "TOKEN", "NUMBER", "FRAGMENT", "SIZE", "PREFIX"]
 ARG_ATOMS = [
@@ -291,7 +365,7 @@ def build():
     op_ids = [fragments.add(op) for op in OPS]
     type_kind_ids = [fragments.add(kind) for kind in TYPE_KINDS]
     role_ids = [fragments.add(role) for role in ROLES]
-    column_ids = [fragments.add(column + " ") for column in COLUMNS]
+    column_ids = [fragments.add(column + " ") for column in ALL_COLUMNS]
     role_word_ids = [fragments.add(word) for word in ROLE_WORDS]
     capacity_ids = [fragments.add(name) for name in CAPACITY_TABLES]
     symbol_ids = [fragments.add(text) for text, _ in SYMBOLS]
@@ -334,6 +408,11 @@ def build():
     table("OP_FRAGMENT", "short", op_ids)
     table("OP_IS_OPENER", "short", [int(op in OPENERS) for op in OPS])
     table("OP_ARITY", "short", [0 if op in LEAVES else 1 if op in UNARY else 2 for op in OPS])
+    table("OP_MONOCHRONOUS", "short", [int(op in MONOCHRONOUS) for op in OPS])
+    op_text = {op: text for text, op, _ in BINARY}
+    op_text.update({op: text for text, op, _ in PREFIX})
+    op_text.update({"DELAY": "$", "IF": "if", "BRANCH": "if"})
+    table("OP_TEXT_FRAGMENT", "short", [fragments.add(op_text[op]) if op in op_text else 0 for op in OPS])
 
     def code_of(text):
         if text in KEYWORDS:
@@ -369,7 +448,8 @@ def build():
     for index, word in enumerate(ROLE_WORDS):
         integer(f"F_ROLE_{word.upper()}", role_word_ids[index])
     integer("COLUMN_COUNT", len(COLUMNS))
-    for index, column in enumerate(COLUMNS):
+    integer("COLUMN_TOTAL", len(ALL_COLUMNS))
+    for index, column in enumerate(ALL_COLUMNS):
         integer(f"COL_{column.upper().replace('.', '_')}", index)
     table("COLUMN_FRAGMENT", "short", column_ids)
     for index, name in enumerate(CAPACITY_TABLES):
@@ -417,7 +497,8 @@ def build():
         integer(f"BUILTIN_{word.upper()}", index)
     for prefix, names in (("P", PARSE_STATES), ("X", OPERAND_CASES + OPERATOR_CASES), ("FRAME", FRAMES),
                           ("INIT", DELAY_INITS), ("PHASE", FINISH_PHASES),
-                          ("IP", INSTANTIATE_PHASES)):
+                          ("IP", INSTANTIATE_PHASES), ("LS", LOWER_STATES), ("PS", POST_STATES),
+                          ("XS", EXPAND_STATES)):
         for index, name in enumerate(names):
             integer(f"{prefix}_{name}", index)
     integer("CONDITION_PRECEDENCE", CONDITION_PRECEDENCE)
@@ -425,7 +506,7 @@ def build():
                           ("AA", ARG_ATOMS)):
         for index, name in enumerate(names):
             integer(f"{prefix}_{name}", index)
-    shapes = [COLUMN_SHAPES.get(column, "NUMBER").split() for column in COLUMNS]
+    shapes = [COLUMN_SHAPES.get(column, "NUMBER").split() for column in ALL_COLUMNS]
     table("COLUMN_SHAPE", "short", [SHAPES.index(shape[0]) for shape in shapes])
     table("COLUMN_LIST_KIND", "short", [LIST_KINDS.index(shape[1]) if len(shape) > 1 else 0 for shape in shapes])
     integer("SCALAR_WIDTH", SCALAR_WIDTH)

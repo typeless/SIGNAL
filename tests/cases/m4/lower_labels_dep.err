@@ -1,0 +1,1 @@
+lower_labels_dep.sig:3:14: error: causality cycle between signals N, Y, Z, ZN

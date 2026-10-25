@@ -1,0 +1,1 @@
+lower_with_reads.sig:5:65: error: the initial value of A cannot read a signal the iterate defines

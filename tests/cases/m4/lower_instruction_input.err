@@ -1,0 +1,1 @@
+lower_instruction_input.sig:5:19: error: input 1 of instruction must have type ulong, found integer

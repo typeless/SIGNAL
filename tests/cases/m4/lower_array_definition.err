@@ -1,0 +1,1 @@
+lower_array_definition.sig:5:6: error: an array signal must be defined by a constant, indices, a gather, or next

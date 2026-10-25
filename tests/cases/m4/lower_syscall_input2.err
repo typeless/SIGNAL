@@ -1,0 +1,1 @@
+lower_syscall_input2.sig:5:19: error: input 7 of syscall must be an integer or a pointer, found color

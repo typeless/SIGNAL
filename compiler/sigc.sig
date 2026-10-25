@@ -1546,20 +1546,27 @@ process SIGC =
                 else if PARSE_INCOMPLETE then T_CAPACITY else 0
    | MESSAGE_TOKEN := if INTERN_ERROR_TOKEN >= 0 then INTERN_ERROR_TOKEN else if PRESCAN_MESSAGE /= 0 then PRESCAN_TOKEN
                       else if FINISH_FAILED then FINISH_TOKEN else if PARSE_FAILED then PARSE_TOKEN
-                      else if INSTANTIATE_FAILED then INSTANTIATE_TOKEN else 0
-   | MESSAGE_LINE := if SOURCE_TOO_BIG then 1 else if ERROR /= ERROR_NONE then LEX_ERROR_LINE else TOKEN_LINE[MESSAGE_TOKEN]
-   | MESSAGE_COLUMN := if SOURCE_TOO_BIG then 1 else if ERROR /= ERROR_NONE then LEX_ERROR_COLUMN else TOKEN_COLUMN[MESSAGE_TOKEN]
+                      else if INSTANTIATE_FAILED then INSTANTIATE_TOKEN else if LOWER_FAILED then LW_TOKEN
+                      else if POST_FAILED then PO_TOKEN else 0
+   | MESSAGE_LINE := if SOURCE_TOO_BIG or MESSAGE_TOKEN < 0 then 1 else if ERROR /= ERROR_NONE then LEX_ERROR_LINE
+                     else TOKEN_LINE[MESSAGE_TOKEN]
+   | MESSAGE_COLUMN := if SOURCE_TOO_BIG or MESSAGE_TOKEN < 0 then 1 else if ERROR /= ERROR_NONE then LEX_ERROR_COLUMN
+                       else TOKEN_COLUMN[MESSAGE_TOKEN]
    | PASS_ARGUMENT0 := if ERROR = ERROR_UNEXPECTED then LEX_ERROR_AT else if ERROR = ERROR_SRC then F_CAP_SRC
                           else if ERROR = ERROR_TOKENS then F_CAP_TOKENS else if INTERN_ERROR_TOKEN >= 0 then F_CAP_NAMES
                           else if PRESCAN_MESSAGE /= 0 then PRESCAN_ARGUMENT0 else if FINISH_FAILED then FINISH_ARGUMENT0
                           else if FINISH_INCOMPLETE then F_CAP_FINISH else if PARSE_FAILED then PARSE_ARGUMENT0
                           else if PARSE_INCOMPLETE then F_CAP_PARSE else if INSTANTIATE_FAILED then INSTANTIATE_ARGUMENT0
-                          else F_CAP_INSTANTIATE
+                          else if INSTANTIATE_INCOMPLETE then F_CAP_INSTANTIATE else if LOWER_FAILED then LW_ARGUMENT0
+                          else if POST_FAILED then PO_ARGUMENT0 else if EXPAND_FAILED then F_CAP_ROW_DEPENDENCES
+                          else F_CAP_LOWER
    | MESSAGE_ARGUMENT1 := if PRESCAN_MESSAGE /= 0 then PRESCAN_ARGUMENT1 else if FINISH_FAILED then FINISH_ARGUMENT1
-                          else if PARSE_FAILED then PARSE_ARGUMENT1 else INSTANTIATE_ARGUMENT1
+                          else if PARSE_FAILED then PARSE_ARGUMENT1 else if LOWER_FAILED then LW_ARGUMENT1
+                          else INSTANTIATE_ARGUMENT1
    | MESSAGE_ARGUMENT2 := if FINISH_FAILED then FINISH_ARGUMENT2 else if PARSE_FAILED then PARSE_ARGUMENT2
-                          else INSTANTIATE_ARGUMENT2
-   | INSTANTIATES := (DUMP_PASS = 0 or DUMP_PASS = 3) and FINISHES and PASS_MESSAGE = 0
+                          else if LOWER_FAILED then LW_ARGUMENT2 else INSTANTIATE_ARGUMENT2
+   | MESSAGE_INSTANCE := if LOWER_FAILED then LW_INSTANCE else PO_INSTANCE
+   | INSTANTIATES := (DUMP_PASS = 0 or DUMP_PASS = 3 or DUMP_PASS = 4) and FINISHES and PASS_MESSAGE = 0
    | SPAN_BOUND := long(SIGNAL_COUNT) + long(FINISH_SIGNAL_COUNT) + long(FINISH_EQUATION_COUNT) + long(FINISH_GROUP_COUNT)
                    + long(LOOP_COUNT) + long(MODEL_COUNT) + long(LABEL_COUNT) + long(USE_COUNT) + long(GUARD_COUNT)
                    + long(FINAL_COUNT)
@@ -1610,7 +1617,7 @@ process SIGC =
         | SPAN_ENTRY_MODEL := FINAL_MODEL[SPAN_INDEX]
         | SPAN_ENTRY_SLOT := if SPAN_INDEX < FINAL_COUNT then SPAN_ENTRY_MODEL else -1
         | MODEL_ENTRY_TOTAL := MODEL_ENTRY_TOTAL[?] next SPAN_ENTRY_SLOT : MODEL_ENTRY_TOTAL[?][SPAN_ENTRY_MODEL] + 1
-        | SPAN_CALLS := SPAN_ENTRY_SLOT >= 0 and FINAL_OP[SPAN_INDEX] = OP_CALL
+        | SPAN_CALLS := SPAN_ENTRY_SLOT >= 0 and FINAL_OP[SPAN_INDEX] = OP_CALL and NAME_MODEL[FINAL_NAME[SPAN_INDEX]]
         | MODEL_CALL_TOTAL := MODEL_CALL_TOTAL[?] next (if SPAN_CALLS then SPAN_ENTRY_MODEL else -1)
                               : MODEL_CALL_TOTAL[?][SPAN_ENTRY_MODEL] + 1
         | SITE_SLOT := if SPAN_CALLS then SITE_COUNT[?] else -1
@@ -2066,12 +2073,979 @@ process SIGC =
    | INSTANTIATE_FAILED := INSTANTIATES and IP_STATE = IP_FAILED
    | INSTANTIATE_INCOMPLETE := INSTANTIATES and IP_STATE /= IP_DONE and IP_STATE /= IP_FAILED
    | FLAT_READY := INSTANTIATES and IP_STATE = IP_DONE
-   | DUMP_RUNS := DUMP_PASS = 2 and FINISHES and PASS_MESSAGE = 0 or DUMP_PASS = 3 and FLAT_READY
+   | DUMP_RUNS := DUMP_PASS = 2 and FINISHES and PASS_MESSAGE = 0 or DUMP_PASS = 3 and FLAT_READY or ROWS_DUMP and ROWS_READY
    | FLAT_DUMP := DUMP_PASS = 3
+   | ROWS_DUMP := DUMP_PASS = 4
+   | LOWERS := FLAT_READY and (DUMP_PASS = 0 or DUMP_PASS = 4)
+   | LOWER_BOUND := long(64) + long(2) * long(FLAT_SIGNAL_COUNT) + long(FLAT_LABEL_COUNT) + long(2) * long(TYPE_COUNT)
+                    + long(VALUE_COUNT) + long(TABLE_COUNT) + long(POOL_COUNT) + long(FLAT_LOOP_COUNT)
+                    + long(6) * long(FLAT_EQUATION_COUNT) + long(2) * long(FLAT_GROUP_COUNT) + long(2) * long(FLAT_MEMBER_COUNT)
+                    + long(4) * long(FLAT_ENTRY_COUNT)
+   | LOWER_INDEX := 0 .. (if LOWERS then LOWER_BOUND else long(-1))
+   | iterate LOWER_INDEX of
+       (| LW_NOW := LW_STATE[?]
+        | LW_I := LW_CURSOR[?]
+        | LW_K := LW_SUB[?]
+        | AT_LS_SIGNAL := LW_NOW = LS_SIGNAL
+        | AT_LS_LABEL := LW_NOW = LS_LABEL
+        | AT_LS_VALUE := LW_NOW = LS_VALUE
+        | AT_LS_ARRAY := LW_NOW = LS_ARRAY
+        | AT_LS_TABLE := LW_NOW = LS_TABLE
+        | AT_LS_LOOP := LW_NOW = LS_LOOP
+        | AT_LS_EQUATION := LW_NOW = LS_EQUATION
+        | AT_LS_GROUP := LW_NOW = LS_GROUP
+        | AT_LS_START := LW_NOW = LS_START
+        | AT_LS_SCAN := LW_NOW = LS_SCAN
+        | AT_LS_ENTRY := LW_NOW = LS_ENTRY
+        | AT_LS_NEVER := LW_NOW = LS_NEVER
+        | AT_LS_MEMBERS := LW_NOW = LS_MEMBERS
+        | LW_SIGNAL_LIVE := AT_LS_SIGNAL and LW_I < FLAT_SIGNAL_COUNT
+        | LW_SIGNAL_SOURCE := FLAT_SIGNAL_SOURCE[LW_I]
+        | LW_SIGNAL_KEY_NOW := if LW_SIGNAL_SOURCE >= 0 then SIGNAL_NAME[LW_SIGNAL_SOURCE] else FINISH_SIGNAL_NAME[-LW_SIGNAL_SOURCE - 1]
+        | LW_SIGNAL_TYPE_NOW := if LW_SIGNAL_SOURCE >= 0 then SIGNAL_TYPE[LW_SIGNAL_SOURCE] else FINISH_SIGNAL_TYPE[-LW_SIGNAL_SOURCE - 1]
+        | LW_SIGNAL_INPUT := FLAT_SIGNAL_INSTANCE[LW_I] = 0 and LW_SIGNAL_SOURCE >= 0 and SIGNAL_ROLE[LW_SIGNAL_SOURCE] = ROLE_INPUT
+        | LW_LABEL_LIVE := AT_LS_LABEL and LW_I < FLAT_LABEL_COUNT
+        | LW_VALUE_TYPE_LIVE := AT_LS_VALUE and LW_I < TYPE_COUNT
+        | LW_VALUE_LIVE := LW_VALUE_TYPE_LIVE and LW_K < TYPE_VALUE_COUNT[LW_I]
+        | LW_VALUE_KEY := VALUE_NAME[TYPE_VALUE_START[LW_I] + LW_K]
+        | LW_ARRAY_LIVE := AT_LS_ARRAY and LW_I < TYPE_COUNT and TYPE_KIND[LW_I] = TK_ARRAY
+        | LW_TABLE_LIVE := AT_LS_TABLE and LW_I < TABLE_COUNT
+        | LW_TABLE_TYPE := TABLE_TYPE[LW_I]
+        | LW_TABLE_CANDIDATE := LW_TABLE_LIVE and not TABLE_FROM_STRING[LW_I] and TYPE_KIND[LW_TABLE_TYPE] = TK_ARRAY
+                                and TYPE_ELEMENT[LW_TABLE_TYPE] = BUILTIN_INTEGER
+                                and TYPE_SIZE[LW_TABLE_TYPE] = ulong(TABLE_LENGTH[LW_I]) and LW_IOTA[?][LW_TABLE_TYPE] = 0
+        | LW_TABLE_WALKS := LW_TABLE_CANDIDATE and LW_K < TABLE_LENGTH[LW_I]
+        | LW_TABLE_MATCHES := POOL_VALUE[TABLE_START[LW_I] + LW_K] = long(LW_K)
+        | LW_TABLE_OK := if LW_K = 0 then LW_TABLE_MATCHES else LW_TABLE_OK[?] and LW_TABLE_MATCHES
+        | LW_TABLE_IOTA := LW_TABLE_CANDIDATE and not LW_TABLE_WALKS and (LW_K = 0 or LW_TABLE_OK[?])
+        | LW_LOOP_LIVE := AT_LS_LOOP and LW_I < FLAT_LOOP_COUNT
+        | LW_LOOP_SOURCE := FLAT_LOOP_SOURCE[LW_I]
+        | LW_EQUATION_LIVE := AT_LS_EQUATION and LW_I < FLAT_EQUATION_COUNT
+        | LW_EQ_TARGET := FLAT_EQUATION_TARGET[LW_I]
+        | LW_EQ_TARGET_INSTANCE := FLAT_EQUATION_TARGET_INSTANCE[LW_I]
+        | LW_EQ_SEED := FLAT_EQUATION_SEED[LW_I]
+        | LW_EQ_LOOP := FLAT_EQUATION_LOOP[LW_I]
+        | LW_EQ_TOKEN := FLAT_EQUATION_TOKEN[LW_I]
+        | LW_EQ_LOOP_NAME := LOOP_NAME[FLAT_LOOP_SOURCE[LW_EQ_LOOP]]
+        | LW_EQ_LOOP_INSTANCE := FLAT_LOOP_INSTANCE[LW_EQ_LOOP]
+        | LW_LOOP_DEFINES := LW_EQ_LOOP >= 0 and not LW_EQ_SEED and LW_EQ_TARGET >= 0
+        | LW_GUARD_NODE := if AT_LS_GROUP then FLAT_GROUP_GUARDS[LW_I] else FLAT_EQUATION_GUARDS[LW_I]
+        | LW_GUARD_CONTEXT := if AT_LS_GROUP then FLAT_GROUP_INSTANCE[LW_I] else FLAT_EQUATION_CONTEXT[LW_I]
+        | LW_GUARD_NODE_LENGTH := if LW_GUARD_NODE < 0 then 0 else GUARD_PATH_LENGTH[LW_GUARD_NODE]
+        | LW_GUARD_INHERITED := INSTANCE_GUARD_LENGTH[LW_GUARD_CONTEXT]
+        | LW_GUARD_LAST := PATH_VALUE[GUARD_PATH_START[LW_GUARD_NODE] + LW_GUARD_NODE_LENGTH - 1]
+        | LW_GUARD_AT := INSTANCE_GUARD_START[LW_GUARD_CONTEXT] + LW_GUARD_INHERITED - 1
+        | LW_GUARD_KEY := if LW_GUARD_NODE_LENGTH > 0
+                          then N_ON_MARK + (LW_GUARD_LAST - MODEL_GUARD_START[GUARD_MODEL[LW_GUARD_LAST]] + 1) * NAME_CAP
+                          else FLAT_PATH_KEY[LW_GUARD_AT]
+        | LW_GUARD_INSTANCE := if LW_GUARD_NODE_LENGTH > 0 then LW_GUARD_CONTEXT else FLAT_PATH_INSTANCE[LW_GUARD_AT]
+        | LW_HAS_GUARD := LW_GUARD_NODE_LENGTH > 0 or LW_GUARD_INHERITED > 0
+        | LW_EQ_STEP := if not LW_EQUATION_LIVE then 3
+                        else if LW_K <= 0 and LW_EQ_TARGET >= 0 then 0
+                        else if LW_K <= 1 and LW_LOOP_DEFINES then 1
+                        else if LW_K <= 2 and LW_HAS_GUARD then 2 else 3
+        | LW_EQ_MORE := LW_EQ_STEP < 1 and LW_LOOP_DEFINES or LW_EQ_STEP < 2 and LW_HAS_GUARD
+        | LW_GROUP_LIVE := AT_LS_GROUP and LW_I < FLAT_GROUP_COUNT
+        | LW_START_LIVE := AT_LS_START and LW_I < FLAT_EQUATION_COUNT
+        | LW_START_SIGNAL := LW_EQ_SIGNAL[?][LW_I] - 1
+        | LW_E := LW_ENTRY[?]
+        | LW_END_NOW := LW_FL_END[?]
+        | LW_SCAN_LIVE := AT_LS_SCAN and LW_E < LW_END_NOW
+        | LW_ENTRY_LIVE := AT_LS_ENTRY and LW_E < LW_END_NOW
+        | LW_FINISHING := AT_LS_ENTRY and LW_E >= LW_END_NOW
+        | LW_SRC := FLAT_ENTRY_SOURCE[LW_E]
+        | LW_OP := FLAT_ENTRY_OP[LW_E]
+        | LW_NAME := FLAT_ENTRY_NAME[LW_E]
+        | LW_INST := FLAT_ENTRY_INSTANCE[LW_E]
+        | LW_ENTRY_TOKEN := FINAL_TOKEN[LW_SRC]
+        | LW_LOOP_NOW := LW_FL_LOOP[?]
+        | LW_TOP_NOW := LW_TOP[?]
+        | LW_SCAN_READS := LW_SCAN_LIVE and LW_OP = OP_SIGNAL
+        | LW_IS_SIGNAL := LW_ENTRY_LIVE and LW_OP = OP_SIGNAL
+        | LW_IS_ITER := LW_IS_SIGNAL and LW_LOOP_NOW >= 0 and LW_NAME = LOOP_NAME[FLAT_LOOP_SOURCE[LW_LOOP_NOW]]
+                        and LW_INST = FLAT_LOOP_INSTANCE[LW_LOOP_NOW]
+        | LW_LOOKS_SIGNAL := LW_IS_SIGNAL and not LW_IS_ITER
+        | LW_IS_CONST := LW_ENTRY_LIVE and LW_OP = OP_CONST
+        | LW_IS_EFFECT := LW_ENTRY_LIVE and LW_OP = OP_EFFECT
+        | LW_INITIAL := FINAL_AUX[LW_SRC]
+        | LW_IS_DELAY := LW_ENTRY_LIVE and LW_OP = OP_DELAY
+        | LW_IS_ENUM := LW_ENTRY_LIVE and LW_OP = OP_ENUMCONST
+        | LW_ENUM_LIVE := LW_IS_ENUM or LW_IS_DELAY and LW_INITIAL = 2
+        | LW_IS_LEAF := LW_IS_SIGNAL or LW_IS_CONST or LW_IS_ENUM
+        | LW_OPERATOR := LW_ENTRY_LIVE and not LW_IS_LEAF and not LW_IS_EFFECT
+        | LW_UNARY := LW_OP = OP_CALL or OP_ARITY[LW_OP] = 1
+        | LW_LEFT := if LW_UNARY then LW_STACK[?][LW_TOP_NOW - 1] else LW_STACK[?][LW_TOP_NOW - 2]
+        | LW_RIGHT := if LW_UNARY then -1 else LW_STACK[?][LW_TOP_NOW - 1]
+        | LW_LEFT_OP := ROWS_OP[?][LW_LEFT]
+        | LW_RIGHT_OP := ROWS_OP[?][LW_RIGHT]
+        | LT := ROWS_TYPE[?][LW_LEFT]
+        | RT := if LW_RIGHT >= 0 then ROWS_TYPE[?][LW_RIGHT] else LT
+        | LT_NEW := LT >= TYPE_COUNT
+        | LT_KIND := if LT_NEW then TK_ARRAY else TYPE_KIND[LT]
+        | LT_ELEMENT := if LT_NEW then NEW_TYPE_ELEMENT[?][LT - TYPE_COUNT] else TYPE_ELEMENT[LT]
+        | LT_SIZE := if LT_NEW then NEW_TYPE_SIZE[?][LT - TYPE_COUNT] else TYPE_SIZE[LT]
+        | LT_INT := LT_KIND = TK_INT
+        | LT_LOGICAL := LT_KIND = TK_EVENT or LT_KIND = TK_BOOLEAN
+        | RT_NEW := RT >= TYPE_COUNT
+        | RT_KIND := if RT_NEW then TK_ARRAY else TYPE_KIND[RT]
+        | RT_ELEMENT := if RT_NEW then NEW_TYPE_ELEMENT[?][RT - TYPE_COUNT] else TYPE_ELEMENT[RT]
+        | RT_SIZE := if RT_NEW then NEW_TYPE_SIZE[?][RT - TYPE_COUNT] else TYPE_SIZE[RT]
+        | RT_INT := RT_KIND = TK_INT
+        | RT_LOGICAL := RT_KIND = TK_EVENT or RT_KIND = TK_BOOLEAN
+        | LW_ARRAY_OPERAND := LT_KIND = TK_ARRAY or RT_KIND = TK_ARRAY
+        | LW_LEFT_VALUE := ROWS_VALUE[?][LW_LEFT]
+        | LW_IS_INDICES := LW_OPERATOR and LW_OP = OP_CALL and LW_NAME = N_INDICES
+        | LW_INDICES_COUNT := if LT = BUILTIN_ULONG then (if LW_LEFT_VALUE = long(0) then long(0) else long(1)) else LW_LEFT_VALUE
+        | LW_IS_GATHER := LW_OPERATOR and LW_OP = OP_INDEX and RT_KIND = TK_ARRAY
+        | LW_IS_PREV := LW_OPERATOR and LW_OP = OP_PREV
+        | LW_PREV_INSTANCE := FLAT_SIGNAL_INSTANCE[LW_LEFT]
+        | LW_ENUM_TYPE_KEY := FINAL_TYPE[LW_SRC]
+        | LW_ENUM_VALUE_KEY := integer(FINAL_VALUE[LW_SRC])
+        | LW_ENUM_TOKEN := if LW_IS_DELAY then FINAL_AUX2[LW_SRC] else LW_ENTRY_TOKEN
+        | LW_ENUM_NAMED := LW_ENUM_TYPE_KEY >= 0
+        | LW_ENUM_NAMED_TYPE := if LW_ENUM_TYPE_KEY < BUILTIN_TYPE_COUNT then LW_ENUM_TYPE_KEY else NAME_TYPE[LW_ENUM_TYPE_KEY] - 1
+        | LW_ENUM_HOLDERS := HOLDER_COUNT[?][LW_ENUM_VALUE_KEY]
+        | LW_ENUM_TYPE := if LW_ENUM_NAMED then LW_ENUM_NAMED_TYPE else HOLDER_TYPE[?][LW_ENUM_VALUE_KEY]
+        | LW_START_LOOKS := LW_START_LIVE and LW_EQ_SEED
+        | LW_PAIR_KEY_NAME := if LW_IS_PREV then LW_SIGNAL_KEY[?][LW_LEFT] else if LW_SCAN_READS then LW_NAME else LW_EQ_TARGET
+        | LW_PAIR_KEY_INSTANCE := if LW_IS_PREV then LW_PREV_INSTANCE else if LW_SCAN_READS then LW_INST else LW_EQ_TARGET_INSTANCE
+        | LW_PAIR_KEY_LOOP := if LW_IS_PREV then LW_LOOP_NOW else LW_EQ_LOOP
+        | LW_LOOKS_PAIR := LW_IS_PREV or LW_SCAN_READS or LW_START_LOOKS or LW_EQ_STEP = 1
+        | LW_LOOKS_ARRAY := LW_IS_INDICES or LW_IS_GATHER
+        | LW_ARRAY_ELEMENT := if LW_IS_INDICES then BUILTIN_INTEGER else LT_ELEMENT
+        | LW_ARRAY_SIZE := if LW_IS_INDICES then ulong(LW_LEFT_VALUE) else RT_SIZE
+        | LW_LOOKS_GUARD := LW_EQ_STEP = 2 or LW_GROUP_LIVE and LW_HAS_GUARD
+        | LK_LIVE := LW_SIGNAL_LIVE or LW_LABEL_LIVE or LW_VALUE_LIVE or LW_ARRAY_LIVE or LW_LOOP_LIVE or LW_EQ_STEP < 3
+                     or LW_GROUP_LIVE and LW_HAS_GUARD or LW_START_LOOKS or LW_SCAN_READS or LW_LOOKS_SIGNAL or LW_ENUM_LIVE
+                     or LW_IS_PREV or LW_LOOKS_ARRAY
+        | LK_A := if LW_SIGNAL_LIVE then long(LW_SIGNAL_KEY_NOW)
+                  else if LW_LABEL_LIVE then long(FLAT_LABEL_KEY[LW_I])
+                  else if LW_VALUE_LIVE then long(LW_VALUE_KEY)
+                  else if LW_ARRAY_LIVE then long(TYPE_SIZE[LW_I])
+                  else if LW_LOOP_LIVE then long(LOOP_NAME[LW_LOOP_SOURCE])
+                  else if LW_LOOKS_PAIR then long(LW_PAIR_KEY_NAME)
+                  else if LW_LOOKS_GUARD then long(LW_GUARD_KEY)
+                  else if LW_EQ_STEP = 0 then long(LW_EQ_TARGET)
+                  else if LW_LOOKS_SIGNAL then long(LW_NAME)
+                  else if LW_ENUM_LIVE then long(LW_ENUM_VALUE_KEY)
+                  else long(LW_ARRAY_SIZE)
+        | LK_B := if LW_SIGNAL_LIVE then long(FLAT_SIGNAL_INSTANCE[LW_I]) * long(8)
+                  else if LW_LABEL_LIVE then long(FLAT_LABEL_INSTANCE[LW_I]) * long(8) + long(1 + integer(FLAT_LABEL_CALL[LW_I]))
+                  else if LW_VALUE_LIVE then long(LW_I) * long(8) + long(2)
+                  else if LW_ARRAY_LIVE then long(TYPE_ELEMENT[LW_I]) * long(8) + long(4)
+                  else if LW_LOOP_LIVE then long(FLAT_LOOP_INSTANCE[LW_I]) * long(8)
+                  else if LW_LOOKS_PAIR then (long(LW_PAIR_KEY_INSTANCE) * long(65536) + long(LW_PAIR_KEY_LOOP)) * long(8) + long(3)
+                  else if LW_LOOKS_GUARD then long(LW_GUARD_INSTANCE) * long(8)
+                  else if LW_EQ_STEP = 0 then long(LW_EQ_TARGET_INSTANCE) * long(8)
+                  else if LW_LOOKS_SIGNAL then long(LW_INST) * long(8)
+                  else if LW_ENUM_LIVE then long(LW_ENUM_TYPE) * long(8) + long(2)
+                  else long(LW_ARRAY_ELEMENT) * long(8) + long(4)
+        | LK_WANTS_INSERT := LW_SIGNAL_LIVE or LW_LABEL_LIVE or LW_VALUE_LIVE or LW_ARRAY_LIVE or LW_EQ_STEP = 1 or LW_LOOKS_ARRAY
+        | LK_HASH := integer((ulong(LK_A) * HASH_K1 + ulong(LK_B) * HASH_K2) shr HASH_SHIFT)
+        | LK_N0 := HASH_HEAD[?][LK_HASH] - 1
+        | LK_M0 := LK_N0 >= 0 and HN_A[?][LK_N0] = LK_A and HN_B[?][LK_N0] = LK_B
+        | LK_N1 := if LK_N0 >= 0 then HN_NEXT[?][LK_N0] - 1 else -1
+        | LK_M1 := LK_N1 >= 0 and HN_A[?][LK_N1] = LK_A and HN_B[?][LK_N1] = LK_B
+        | LK_N2 := if LK_N1 >= 0 then HN_NEXT[?][LK_N1] - 1 else -1
+        | LK_M2 := LK_N2 >= 0 and HN_A[?][LK_N2] = LK_A and HN_B[?][LK_N2] = LK_B
+        | LK_N3 := if LK_N2 >= 0 then HN_NEXT[?][LK_N2] - 1 else -1
+        | LK_M3 := LK_N3 >= 0 and HN_A[?][LK_N3] = LK_A and HN_B[?][LK_N3] = LK_B
+        | LK_N4 := if LK_N3 >= 0 then HN_NEXT[?][LK_N3] - 1 else -1
+        | LK_M4 := LK_N4 >= 0 and HN_A[?][LK_N4] = LK_A and HN_B[?][LK_N4] = LK_B
+        | LK_N5 := if LK_N4 >= 0 then HN_NEXT[?][LK_N4] - 1 else -1
+        | LK_M5 := LK_N5 >= 0 and HN_A[?][LK_N5] = LK_A and HN_B[?][LK_N5] = LK_B
+        | LK_N6 := if LK_N5 >= 0 then HN_NEXT[?][LK_N5] - 1 else -1
+        | LK_M6 := LK_N6 >= 0 and HN_A[?][LK_N6] = LK_A and HN_B[?][LK_N6] = LK_B
+        | LK_N7 := if LK_N6 >= 0 then HN_NEXT[?][LK_N6] - 1 else -1
+        | LK_M7 := LK_N7 >= 0 and HN_A[?][LK_N7] = LK_A and HN_B[?][LK_N7] = LK_B
+        | LK_NODE := if LK_M0 then LK_N0 else if LK_M1 then LK_N1 else if LK_M2 then LK_N2 else if LK_M3 then LK_N3
+                     else if LK_M4 then LK_N4 else if LK_M5 then LK_N5 else if LK_M6 then LK_N6 else if LK_M7 then LK_N7 else -1
+        | LK_FOUND := LK_NODE >= 0
+        | LK_VALUE := if LK_FOUND then HN_VALUE[?][LK_NODE] else -1
+        | LK_UNSURE := LK_LIVE and not LK_FOUND and LK_N7 >= 0 and HN_NEXT[?][LK_N7] > 0
+        | LK_INSERTS := LK_LIVE and LK_WANTS_INSERT and not LK_FOUND and not LK_UNSURE
+        | LK_NEW := HN_COUNT[?]
+        | LK_FULL := LK_INSERTS and LK_NEW >= HASH_NODE_CAP
+        | LW_NEW_TYPE := TYPE_COUNT + NEW_TYPE_COUNT[?]
+        | LW_TYPE_FULL := LW_LOOKS_ARRAY and LK_INSERTS and NEW_TYPE_COUNT[?] >= NEW_TYPE_CAP
+        | LK_INSERT_VALUE := if LW_VALUE_LIVE then LW_K else if LW_LOOKS_ARRAY then LW_NEW_TYPE else LW_I
+        | HN_SLOT := if LK_INSERTS and not LK_FULL then LK_NEW else -1
+        | HN_A := HN_A[?] next HN_SLOT : LK_A
+        | HN_B := HN_B[?] next HN_SLOT : LK_B
+        | HN_VALUE := HN_VALUE[?] next HN_SLOT : LK_INSERT_VALUE
+        | HN_NEXT := HN_NEXT[?] next HN_SLOT : LK_N0 + 1
+        | HASH_HEAD := HASH_HEAD[?] next (if HN_SLOT >= 0 then LK_HASH else -1) : HN_SLOT + 1
+        | HN_COUNT := HN_COUNT[?] + integer(HN_SLOT >= 0)
+        | LW_HOLDER_SLOT := if LW_VALUE_LIVE and LK_INSERTS then LW_VALUE_KEY else -1
+        | HOLDER_COUNT := HOLDER_COUNT[?] next LW_HOLDER_SLOT : HOLDER_COUNT[?][LW_VALUE_KEY] + 1
+        | HOLDER_TYPE := HOLDER_TYPE[?] next (if HOLDER_COUNT[?][LW_VALUE_KEY] = 0 then LW_HOLDER_SLOT else -1) : LW_I
+        | LW_NEW_TYPE_SLOT := if LW_LOOKS_ARRAY and HN_SLOT >= 0 and not LW_TYPE_FULL then NEW_TYPE_COUNT[?] else -1
+        | NEW_TYPE_ELEMENT := NEW_TYPE_ELEMENT[?] next LW_NEW_TYPE_SLOT : LW_ARRAY_ELEMENT
+        | NEW_TYPE_SIZE := NEW_TYPE_SIZE[?] next LW_NEW_TYPE_SLOT : LW_ARRAY_SIZE
+        | NEW_TYPE_COUNT := NEW_TYPE_COUNT[?] + integer(LW_NEW_TYPE_SLOT >= 0)
+        | LW_INTERNED := if LK_FOUND then LK_VALUE else LW_NEW_TYPE
+        | LW_IOTA_TABLE := LW_IOTA[?][LW_INTERNED] - 1
+        | LW_NEW_TABLE := TABLE_COUNT + NEW_TABLE_COUNT[?]
+        | LW_TABLE_FULL := LW_IS_INDICES and LW_IOTA_TABLE < 0 and NEW_TABLE_COUNT[?] >= NEW_TABLE_CAP
+        | LW_LOOP_SIGNAL := LK_VALUE
+        | LW_LOOP_TYPE := ROWS_TYPE[?][LW_LOOP_SIGNAL]
+        | LW_LOOP_UNDECLARED := LW_LOOP_LIVE and not LK_FOUND
+        | LW_LOOP_NOT_INDEX := LW_LOOP_LIVE and not (TYPE_KIND[LW_LOOP_TYPE] = TK_ARRAY and TYPE_KIND[TYPE_ELEMENT[LW_LOOP_TYPE]] = TK_INT)
+        | LW_INDEX_DEFINED := LW_EQ_STEP = 0 and LW_LOOP_DEFINES and LW_EQ_TARGET = LW_EQ_LOOP_NAME
+                              and LW_EQ_TARGET_INSTANCE = LW_EQ_LOOP_INSTANCE
+        | LW_TARGET_UNDECLARED := LW_EQ_STEP = 0 and LW_LOOP_DEFINES and not LK_FOUND
+        | LW_START_SEED_FAILS := LW_START_LOOKS and not LK_FOUND
+        | LW_START_DEFINES := LW_START_LIVE and not LW_EQ_SEED and LW_EQ_TARGET >= 0
+        | LW_START_UNDECLARED := LW_START_DEFINES and LW_START_SIGNAL < 0
+        | LW_START_INPUT := LW_START_DEFINES and ROWS_OP[?][LW_START_SIGNAL] = OP_INPUT
+        | LW_START_TWICE := LW_START_DEFINES and SIGNAL_TOP[?][LW_START_SIGNAL] > 0
+        | LW_SCAN_FAILS := LW_SCAN_READS and LK_FOUND
+        | LW_SIGNAL_FOUND := LW_LOOKS_SIGNAL and LK_FOUND
+        | LW_CONSTANT := NAME_CONSTANT[LW_NAME] - 1
+        | LW_FROM_CONSTANT := LW_LOOKS_SIGNAL and not LK_FOUND and LW_INST = 0 and LW_CONSTANT >= 0
+        | LW_SIGNAL_UNDECLARED := LW_LOOKS_SIGNAL and not LK_FOUND and not LW_FROM_CONSTANT
+        | LW_ENUM_UNDECLARED := LW_ENUM_LIVE and not LW_ENUM_NAMED and LW_ENUM_HOLDERS = 0
+        | LW_ENUM_AMBIGUOUS := LW_ENUM_LIVE and not LW_ENUM_NAMED and LW_ENUM_HOLDERS > 1
+        | LW_ENUM_TYPE_UNDECLARED := LW_ENUM_LIVE and LW_ENUM_NAMED and LW_ENUM_NAMED_TYPE < 0
+        | LW_ENUM_NO_VALUE := LW_ENUM_LIVE and not LK_FOUND
+        | LW_ENUM_ARGUMENT0 := if LW_ENUM_MESSAGE = T_ENUM_UNDECLARED or LW_ENUM_MESSAGE = T_ENUM_AMBIGUOUS then LW_ENUM_VALUE_KEY
+                               else LW_ENUM_TYPE_KEY
+        | LW_ENUM_MESSAGE := if LW_ENUM_UNDECLARED then T_ENUM_UNDECLARED else if LW_ENUM_AMBIGUOUS then T_ENUM_AMBIGUOUS
+                             else if LW_ENUM_TYPE_UNDECLARED then T_TYPE_UNDECLARED else if LW_ENUM_NO_VALUE then T_NO_VALUE else 0
+        | FX_STEP := LW_FX_STEP[?]
+        | FX_COUNT := integer(FINAL_VALUE[LW_SRC])
+        | FX_PARAMS := FINAL_AUX2[LW_SRC]
+        | FX_P0 := FINAL_AUX[LW_SRC]
+        | FX_P1 := FX_P0 + 2
+        | FX_KEY0 := TOKEN_NAME[FX_P0] - 1
+        | FX_KEY1 := TOKEN_NAME[FX_P1] - 1
+        | FX_TYPE0 := if FX_KEY0 < 0 then -1 else if FX_KEY0 < BUILTIN_TYPE_COUNT then FX_KEY0 else NAME_TYPE[FX_KEY0] - 1
+        | FX_TYPE1 := if FX_KEY1 < 0 then -1 else if FX_KEY1 < BUILTIN_TYPE_COUNT then FX_KEY1 else NAME_TYPE[FX_KEY1] - 1
+        | FX_IS_LOAD := LW_NAME = N_LOAD
+        | FX_IS_STORE := LW_NAME = N_STORE
+        | FX_IS_SYSCALL := LW_NAME = N_SYSCALL
+        | FX_IS_INSTRUCTION := LW_NAME = N_INSTRUCTION
+        | FX_EXPECTED := if FX_IS_SYSCALL then 1 else 2
+        | FX_CONSTANT1 := NAME_CONSTANT[FX_KEY1] - 1
+        | FX_NUMBER1 := TOKEN_KIND[FX_P1] = ubyte(KIND_NUMBER)
+        | FX_WORD_CONSTANT := FX_CONSTANT1 >= 0 and TYPE_KIND[CONSTANT_TYPE[FX_CONSTANT1]] = TK_INT
+        | FX_WORD := if FX_NUMBER1 then TOKEN_VALUE[FX_P1] else CONSTANT_VALUE[FX_CONSTANT1]
+        | FX_WORD_BIG := FX_NUMBER1 and TOKEN_BIG[FX_P1] or FX_WORD < long(0) or FX_WORD >= long(4294967296)
+        | FX_CHECKS := LW_IS_EFFECT and FX_STEP = 0
+        | FX_BASE := LW_TOP_NOW - FX_COUNT
+        | FX_O0 := LW_STACK[?][FX_BASE]
+        | FX_O1 := LW_STACK[?][FX_BASE + 1]
+        | FX_O2 := LW_STACK[?][FX_BASE + 2]
+        | FX_O3 := LW_STACK[?][FX_BASE + 3]
+        | FX_O4 := LW_STACK[?][FX_BASE + 4]
+        | FX_O5 := LW_STACK[?][FX_BASE + 5]
+        | FX_O6 := LW_STACK[?][FX_BASE + 6]
+        | FX_PAIR_AT := if FX_COUNT > 0 and ROWS_OP[?][FX_O0] = OP_PAIR then FX_O0
+                        else if FX_COUNT > 1 and ROWS_OP[?][FX_O1] = OP_PAIR then FX_O1
+                        else if FX_COUNT > 2 and ROWS_OP[?][FX_O2] = OP_PAIR then FX_O2
+                        else if FX_COUNT > 3 and ROWS_OP[?][FX_O3] = OP_PAIR then FX_O3
+                        else if FX_COUNT > 4 and ROWS_OP[?][FX_O4] = OP_PAIR then FX_O4
+                        else if FX_COUNT > 5 and ROWS_OP[?][FX_O5] = OP_PAIR then FX_O5
+                        else if FX_COUNT > 6 and ROWS_OP[?][FX_O6] = OP_PAIR then FX_O6 else -1
+        | FX_T0 := ROWS_TYPE[?][FX_O0]
+        | FX_T1 := ROWS_TYPE[?][FX_O1]
+        | FX_T2 := ROWS_TYPE[?][FX_O2]
+        | FX_T3 := ROWS_TYPE[?][FX_O3]
+        | FX_T4 := ROWS_TYPE[?][FX_O4]
+        | FX_T5 := ROWS_TYPE[?][FX_O5]
+        | FX_T6 := ROWS_TYPE[?][FX_O6]
+        | FX_K0 := if FX_T0 >= TYPE_COUNT then TK_ARRAY else TYPE_KIND[FX_T0]
+        | FX_K1 := if FX_T1 >= TYPE_COUNT then TK_ARRAY else TYPE_KIND[FX_T1]
+        | FX_K2 := if FX_T2 >= TYPE_COUNT then TK_ARRAY else TYPE_KIND[FX_T2]
+        | FX_K3 := if FX_T3 >= TYPE_COUNT then TK_ARRAY else TYPE_KIND[FX_T3]
+        | FX_K4 := if FX_T4 >= TYPE_COUNT then TK_ARRAY else TYPE_KIND[FX_T4]
+        | FX_K5 := if FX_T5 >= TYPE_COUNT then TK_ARRAY else TYPE_KIND[FX_T5]
+        | FX_K6 := if FX_T6 >= TYPE_COUNT then TK_ARRAY else TYPE_KIND[FX_T6]
+        | FX_SYSCALL_AT := if FX_K0 /= TK_INT and FX_K0 /= TK_POINTER then 0
+                           else if FX_K1 /= TK_INT and FX_K1 /= TK_POINTER then 1
+                           else if FX_K2 /= TK_INT and FX_K2 /= TK_POINTER then 2
+                           else if FX_K3 /= TK_INT and FX_K3 /= TK_POINTER then 3
+                           else if FX_K4 /= TK_INT and FX_K4 /= TK_POINTER then 4
+                           else if FX_K5 /= TK_INT and FX_K5 /= TK_POINTER then 5
+                           else if FX_K6 /= TK_INT and FX_K6 /= TK_POINTER then 6 else -1
+        | FX_SYSCALL_TYPE := if FX_SYSCALL_AT = 0 then FX_T0 else if FX_SYSCALL_AT = 1 then FX_T1 else if FX_SYSCALL_AT = 2 then FX_T2
+                             else if FX_SYSCALL_AT = 3 then FX_T3 else if FX_SYSCALL_AT = 4 then FX_T4
+                             else if FX_SYSCALL_AT = 5 then FX_T5 else FX_T6
+        | FX_ROW_TYPE := if FX_IS_LOAD then FX_TYPE1 else if FX_IS_STORE then BUILTIN_EVENT
+                         else if FX_IS_SYSCALL then BUILTIN_LONG else BUILTIN_ULONG
+        | FX_MESSAGE := if FX_PARAMS /= FX_EXPECTED then T_STATIC_COUNT
+                        else if FX_TYPE0 < 0 then T_TYPE_UNDECLARED_TEXT
+                        else if TYPE_KIND[FX_TYPE0] /= TK_EXTERNAL then T_RESOURCE_EXTERNAL
+                        else if (FX_IS_LOAD or FX_IS_STORE) and FX_TYPE1 < 0 then T_TYPE_UNDECLARED_TEXT
+                        else if (FX_IS_LOAD or FX_IS_STORE) and TYPE_KIND[FX_TYPE1] /= TK_INT and TYPE_KIND[FX_TYPE1] /= TK_POINTER
+                        then T_ACCESS_TYPE
+                        else if FX_IS_INSTRUCTION and not FX_NUMBER1 and not FX_WORD_CONSTANT then T_WORD_CONSTANT
+                        else if FX_IS_INSTRUCTION and FX_WORD_BIG then T_WORD_RANGE
+                        else if FX_PAIR_AT >= 0 then T_PAIR_OPERAND
+                        else if (FX_IS_LOAD or FX_IS_STORE) and FX_T0 /= BUILTIN_POINTER then T_INPUT_POINTER
+                        else if FX_IS_STORE and not LUB_SUBTYPE then T_STORE_TYPE
+                        else if FX_IS_SYSCALL and FX_SYSCALL_AT >= 0 then T_SYSCALL_INPUT
+                        else if FX_IS_INSTRUCTION and not LUB_SUBTYPE then T_INSTRUCTION_INPUT else 0
+        | FX_TOKEN := if FX_MESSAGE = T_PAIR_OPERAND then ROWS_TOKEN[?][FX_PAIR_AT]
+                      else if FX_MESSAGE = T_TYPE_UNDECLARED_TEXT and FX_TYPE0 >= 0 or FX_MESSAGE = T_ACCESS_TYPE
+                              or FX_MESSAGE = T_WORD_CONSTANT or FX_MESSAGE = T_WORD_RANGE then FX_P1
+                      else if FX_MESSAGE = T_TYPE_UNDECLARED_TEXT or FX_MESSAGE = T_RESOURCE_EXTERNAL then FX_P0
+                      else LW_ENTRY_TOKEN
+        | FX_ARGUMENT0 := if FX_MESSAGE = T_TYPE_UNDECLARED_TEXT then FX_TOKEN else if FX_MESSAGE = T_STORE_TYPE then FX_TYPE1
+                          else if FX_MESSAGE = T_SYSCALL_INPUT then FX_SYSCALL_AT + 1
+                          else if FX_MESSAGE = T_INSTRUCTION_INPUT then FX_T0 else LW_NAME
+        | FX_ARGUMENT1 := if FX_MESSAGE = T_STATIC_COUNT then FX_EXPECTED else if FX_MESSAGE = T_ACCESS_TYPE then FX_P1
+                          else if FX_MESSAGE = T_INPUT_POINTER then FX_T0 else if FX_MESSAGE = T_STORE_TYPE then FX_T1
+                          else FX_SYSCALL_TYPE
+        | FX_EMITS_ARG := LW_IS_EFFECT and FX_STEP > 0 and FX_STEP <= FX_COUNT
+        | FX_EMITS_EFFECT := LW_IS_EFFECT and FX_STEP > FX_COUNT
+        | FX_OPERAND := LW_STACK[?][LW_TOP_NOW - FX_STEP]
+        | FX_PREVIOUS := LW_FX_PREVIOUS[?]
+        | LW_NOT_IN_ITERATE := LW_LOOP_NOW >= 0 and (LW_OP = OP_WHEN or LW_OP = OP_UWHEN or LW_OP = OP_DEFAULT or LW_OP = OP_DELAY
+                                                   or LW_OP = OP_CLOCK or LW_OP = OP_RANGE)
+        | LW_LEFT_ARRAY_VALUE := LW_LEFT_OP = OP_GATHER or LW_LEFT_OP = OP_NEXT or LW_LEFT_OP = OP_RANGE
+        | LW_RIGHT_ARRAY_VALUE := LW_RIGHT >= 0 and (LW_RIGHT_OP = OP_GATHER or LW_RIGHT_OP = OP_NEXT or LW_RIGHT_OP = OP_RANGE)
+        | LW_RIGHT_PAIR := LW_RIGHT >= 0 and LW_RIGHT_OP = OP_PAIR and LW_OP /= OP_NEXT
+        | LW_PREV_MESSAGE := if LW_LEFT >= FLAT_SIGNAL_COUNT then T_PREV_SIGNAL else if LW_LOOP_NOW < 0 then T_PREV_OUTSIDE
+                             else if not LK_FOUND then T_PREV_UNDEFINED else 0
+        | LW_INDICES_FAILS := LW_LEFT_OP /= OP_CONST or not LT_INT or LW_INDICES_COUNT <= long(0)
+        | LW_INDEXES := LW_OP = OP_INDEX or LW_OP = OP_NEXT
+        | LW_INDEX_ROW := if LW_OP = OP_NEXT then ROWS_LEFT[?][LW_RIGHT] else LW_RIGHT
+        | LW_INDEX_TYPE := ROWS_TYPE[?][LW_INDEX_ROW]
+        | LW_INDEX_TOKEN := if LW_INDEX_ROW < FLAT_SIGNAL_COUNT then SIGNAL_DEF_TOKEN[?][LW_INDEX_ROW] - 1
+                            else ROWS_TOKEN[?][LW_INDEX_ROW]
+        | LW_INDEX_INT := LW_INDEX_TYPE < TYPE_COUNT and TYPE_KIND[LW_INDEX_TYPE] = TK_INT
+        | LW_INDEX_VALUE := ROWS_VALUE[?][LW_INDEX_ROW]
+        | LW_INDEX_OUTSIDE := ROWS_OP[?][LW_INDEX_ROW] = OP_CONST
+                              and (LW_INDEX_TYPE /= BUILTIN_ULONG and LW_INDEX_VALUE < long(0) or ulong(LW_INDEX_VALUE) >= LT_SIZE)
+        | LW_IS_NEXT := LW_OP = OP_NEXT
+        | LW_CALL_TYPE := if LW_NAME < BUILTIN_TYPE_COUNT then LW_NAME else NAME_TYPE[LW_NAME] - 1
+        | LW_CALL_KIND := TYPE_KIND[LW_CALL_TYPE]
+        | LW_CONVERTS := LT = LW_CALL_TYPE
+                         or LW_CALL_KIND = TK_INT and (LT_INT or LT_KIND = TK_BOOLEAN or LT_KIND = TK_ENUM)
+                         or LW_CALL_TYPE = BUILTIN_POINTER and (LT = BUILTIN_ULONG or LT = BUILTIN_UINTEGER)
+                         or LT = BUILTIN_POINTER and (LW_CALL_TYPE = BUILTIN_ULONG or LW_CALL_TYPE = BUILTIN_UINTEGER)
+        | LW_INTEGER_OP := LW_OP = OP_ADD or LW_OP = OP_SUB or LW_OP = OP_MUL or LW_OP = OP_DIV or LW_OP = OP_MOD or LW_OP = OP_NEG
+        | LW_COMPARE_OP := LW_OP = OP_EQ or LW_OP = OP_NE or LW_OP = OP_LT or LW_OP = OP_LE or LW_OP = OP_GT or LW_OP = OP_GE
+        | LW_LOGIC_OP := LW_OP = OP_AND or LW_OP = OP_OR or LW_OP = OP_XOR or LW_OP = OP_NOT
+        | LW_SHIFT_OP := LW_OP = OP_SHL or LW_OP = OP_SHR
+        | LW_POINTER_ARITHMETIC := (LW_OP = OP_ADD or LW_OP = OP_SUB) and (LT = BUILTIN_POINTER or RT = BUILTIN_POINTER)
+        | LW_IF_EFFECT := FIRST_EFFECT[?][LW_RIGHT] - 1
+        | LW_INITIAL_TYPE := if LW_INITIAL = 1 then FINAL_TYPE[LW_SRC] else LW_ENUM_TYPE
+        | LW_INITIAL_VALUE := if LW_INITIAL = 1 then FINAL_VALUE[LW_SRC] else long(LK_VALUE)
+        | LW_OPERATOR_MESSAGE := if LW_NOT_IN_ITERATE then T_NOT_IN_ITERATE
+                                 else if LW_LEFT_OP = OP_PAIR then T_PAIR_OPERAND
+                                 else if LW_LEFT_ARRAY_VALUE then T_ARRAY_VALUE
+                                 else if LW_RIGHT_PAIR then T_PAIR_OPERAND
+                                 else if LW_RIGHT_ARRAY_VALUE then T_ARRAY_VALUE
+                                 else if LW_IS_PREV and LW_PREV_MESSAGE /= 0 then LW_PREV_MESSAGE
+                                 else if LW_IS_INDICES and LW_INDICES_FAILS then T_INDICES_CONSTANT
+                                 else if LW_IS_INDICES then 0
+                                 else if LW_INDEXES and LT_KIND /= TK_ARRAY then T_NOT_ARRAY
+                                 else if LW_OP = OP_RANGE then
+                                   (if LW_LEFT_OP /= OP_CONST or LW_LEFT_VALUE /= long(0) or not LT_INT then T_RANGE_START
+                                    else if not RT_INT then T_RANGE_BOUND else 0)
+                                 else if LW_OP = OP_PREV then 0
+                                 else if LW_IS_GATHER then (if TYPE_KIND[RT_ELEMENT] /= TK_INT then T_INDEX_INTEGER else 0)
+                                 else if LW_INDEXES then
+                                   (if LW_IS_NEXT and LW_RIGHT_OP /= OP_PAIR then T_NEXT_PAIR
+                                    else if not LW_INDEX_INT then T_INDEX_INTEGER
+                                    else if LW_INDEX_OUTSIDE then T_INDEX_RANGE
+                                    else if LW_IS_NEXT and not LUB_SUBTYPE then T_NEXT_TYPE else 0)
+                                 else if LW_OP = OP_DELAY and LW_ARRAY_OPERAND then T_DELAY_ARRAY
+                                 else if LW_ARRAY_OPERAND and LW_OP /= OP_CALL then T_SCALAR_OPERANDS
+                                 else if LW_OP = OP_PAIR then 0
+                                 else if LW_OP = OP_BRANCH then (if LUB < 0 then T_IF_TYPES else 0)
+                                 else if LW_OP = OP_IF then
+                                   (if not LT_LOGICAL then T_IF_CONDITION else if LW_IF_EFFECT >= 0 then T_EFFECT_IN_IF else 0)
+                                 else if LW_OP = OP_CALL then (if LW_CONVERTS then 0 else T_NO_CONVERSION)
+                                 else if LW_POINTER_ARITHMETIC then
+                                   (if LT /= BUILTIN_POINTER or not RT_INT then T_POINTER_OFFSET else 0)
+                                 else if LW_INTEGER_OP then
+                                   (if not (LT_INT and RT_INT) then T_INTEGER_OPERANDS else if LUB < 0 then T_COMPARABLE else 0)
+                                 else if LW_COMPARE_OP then
+                                   (if LUB >= 0 then 0 else if LT_INT and RT_INT then T_COMPARABLE else T_ONE_TYPE)
+                                 else if LW_LOGIC_OP then
+                                   (if LT_LOGICAL and RT_LOGICAL then 0 else if not (LT_INT and RT_INT) then T_BOOLEAN_OPERANDS
+                                    else if TYPE_SIGNED[LT] or TYPE_SIGNED[RT] then T_UNSIGNED_OPERANDS else 0)
+                                 else if LW_SHIFT_OP then
+                                   (if LT_INT and not TYPE_SIGNED[LT] and RT_INT then 0 else T_UNSIGNED_OPERANDS)
+                                 else if LW_OP = OP_WHEN then (if RT_LOGICAL then 0 else T_WHEN_CONDITION)
+                                 else if LW_OP = OP_UWHEN then (if LT_LOGICAL then 0 else T_WHEN_CONDITION)
+                                 else if LW_OP = OP_DEFAULT then (if LUB < 0 then T_ONE_TYPE else 0)
+                                 else if LW_OP = OP_CLOCK then 0
+                                 else if LW_INITIAL = 2 and LW_ENUM_MESSAGE /= 0 then LW_ENUM_MESSAGE
+                                 else if LW_INITIAL /= 0 and (LT = BUILTIN_EVENT or not LUB_SUBTYPE) then T_DELAY_MATCH else 0
+        | LW_OPERATOR_TOKEN := if LW_OPERATOR_MESSAGE = T_PAIR_OPERAND then
+                                 (if LW_LEFT_OP = OP_PAIR then ROWS_TOKEN[?][LW_LEFT] else ROWS_TOKEN[?][LW_RIGHT])
+                               else if LW_OPERATOR_MESSAGE = T_EFFECT_IN_IF then ROWS_TOKEN[?][LW_IF_EFFECT]
+                               else if LW_INDEXES and not LW_IS_GATHER and (LW_OPERATOR_MESSAGE = T_INDEX_INTEGER
+                                                                         or LW_OPERATOR_MESSAGE = T_INDEX_RANGE)
+                               then LW_INDEX_TOKEN
+                               else if LW_OPERATOR_MESSAGE = LW_ENUM_MESSAGE then LW_ENUM_TOKEN
+                               else LW_ENTRY_TOKEN
+        | LW_OP_TEXT := OP_TEXT_FRAGMENT[LW_OP]
+        | LW_OPERATOR_ARGUMENT0 := if LW_OPERATOR_MESSAGE = T_PREV_OUTSIDE or LW_OPERATOR_MESSAGE = T_PREV_UNDEFINED
+                                   then LW_SIGNAL_KEY[?][LW_LEFT]
+                                   else if LW_OPERATOR_MESSAGE = T_NEXT_TYPE then LT_ELEMENT
+                                   else if LW_OPERATOR_MESSAGE = T_IF_TYPES or LW_OPERATOR_MESSAGE = T_NO_CONVERSION then LT
+                                   else if LW_OPERATOR_MESSAGE = T_EFFECT_IN_IF then EFFECT_KIND[?][integer(ROWS_VALUE[?][LW_IF_EFFECT])]
+                                   else if LW_OPERATOR_MESSAGE = LW_ENUM_MESSAGE then LW_ENUM_ARGUMENT0
+                                   else LW_OP_TEXT
+        | LW_OPERATOR_ARGUMENT1 := if LW_OPERATOR_MESSAGE = T_NEXT_TYPE or LW_OPERATOR_MESSAGE = T_IF_TYPES then RT
+                                   else if LW_OPERATOR_MESSAGE = T_NO_CONVERSION then LW_CALL_TYPE
+                                   else if LW_OPERATOR_MESSAGE = T_NO_VALUE then LW_ENUM_VALUE_KEY else LT
+        | LUB_A := if LW_FINISHING then LW_END_TYPE
+                   else if FX_CHECKS then (if FX_IS_STORE then FX_T1 else FX_T0)
+                   else if LW_IS_NEXT then RT
+                   else if LW_IS_DELAY then LW_INITIAL_TYPE else LT
+        | LUB_B := if LW_FINISHING then LW_END_SIGNAL_TYPE
+                   else if FX_CHECKS then (if FX_IS_STORE then FX_TYPE1 else BUILTIN_ULONG)
+                   else if LW_IS_NEXT then LT_ELEMENT
+                   else if LW_IS_DELAY then LT else RT
+        | LUB_A_KIND := if LUB_A >= TYPE_COUNT then TK_ARRAY else TYPE_KIND[LUB_A]
+        | LUB_B_KIND := if LUB_B >= TYPE_COUNT then TK_ARRAY else TYPE_KIND[LUB_B]
+        | LUB_A_BYTES := TYPE_BYTES[LUB_A]
+        | LUB_B_BYTES := TYPE_BYTES[LUB_B]
+        | LUB_A_SIGNED := TYPE_SIGNED[LUB_A]
+        | LUB_B_SIGNED := TYPE_SIGNED[LUB_B]
+        | LUB_UNSIGNED_BYTES := if LUB_A_SIGNED then LUB_B_BYTES else LUB_A_BYTES
+        | LUB_SIGNED_BYTES := if LUB_A_SIGNED then LUB_A_BYTES else LUB_B_BYTES
+        | LUB_SIGNED := if LUB_A_SIGNED then LUB_A else LUB_B
+        | LUB_WIDENED := if LUB_UNSIGNED_BYTES = 1 then BUILTIN_SHORT else if LUB_UNSIGNED_BYTES = 2 then BUILTIN_INTEGER
+                         else if LUB_UNSIGNED_BYTES = 4 then BUILTIN_LONG else -1
+        | LUB := if LUB_A = LUB_B then LUB_A
+                 else if (LUB_A_KIND = TK_EVENT or LUB_A_KIND = TK_BOOLEAN) and (LUB_B_KIND = TK_EVENT or LUB_B_KIND = TK_BOOLEAN)
+                 then BUILTIN_BOOLEAN
+                 else if LUB_A_KIND /= TK_INT or LUB_B_KIND /= TK_INT then -1
+                 else if LUB_A_SIGNED = LUB_B_SIGNED then (if LUB_A_BYTES > LUB_B_BYTES then LUB_A else LUB_B)
+                 else if LUB_SIGNED_BYTES > LUB_UNSIGNED_BYTES then LUB_SIGNED else LUB_WIDENED
+        | LUB_SUBTYPE := LUB = LUB_B
+        | LW_RESULT_OP := if LW_IS_ITER then OP_ITER else if LW_FROM_CONSTANT then
+                            (if TYPE_KIND[CONSTANT_TYPE[LW_CONSTANT]] = TK_ARRAY then OP_TABLE else OP_CONST)
+                          else if LW_IS_CONST or LW_IS_ENUM then OP_CONST
+                          else if LW_IS_GATHER then OP_GATHER
+                          else if LW_OP = OP_INDEX then OP_ELEMENT
+                          else if LW_OP = OP_CALL then OP_CONVERT else LW_OP
+        | LW_RESULT_TYPE := if LW_IS_ITER then TYPE_ELEMENT[ROWS_TYPE[?][LOOP_INDEX[?][LW_LOOP_NOW]]]
+                            else if LW_FROM_CONSTANT then CONSTANT_TYPE[LW_CONSTANT]
+                            else if LW_IS_CONST then FINAL_TYPE[LW_SRC]
+                            else if LW_IS_ENUM then LW_ENUM_TYPE
+                            else if LW_OP = OP_RANGE or LW_OP = OP_PREV or LW_IS_NEXT or LW_SHIFT_OP or LW_IS_DELAY
+                                    or LW_OP = OP_WHEN or LW_POINTER_ARITHMETIC then LT
+                            else if LW_IS_GATHER then LW_INTERNED
+                            else if LW_OP = OP_INDEX then LT_ELEMENT
+                            else if LW_OP = OP_PAIR or LW_OP = OP_IF or LW_OP = OP_MOD then RT
+                            else if LW_OP = OP_CALL then LW_CALL_TYPE
+                            else if LW_COMPARE_OP then BUILTIN_BOOLEAN
+                            else if LW_LOGIC_OP and LT_LOGICAL and RT_LOGICAL then BUILTIN_BOOLEAN
+                            else if LW_OP = OP_UWHEN or LW_OP = OP_CLOCK then BUILTIN_EVENT else LUB
+        | LW_RESULT_VALUE := if LW_FROM_CONSTANT then CONSTANT_VALUE[LW_CONSTANT]
+                             else if LW_IS_CONST then FINAL_VALUE[LW_SRC]
+                             else if LW_IS_ENUM then long(LK_VALUE)
+                             else if LW_IS_DELAY then
+                               (if LT = BUILTIN_EVENT then long(1) else if LW_INITIAL /= 0 then LW_INITIAL_VALUE else long(0))
+                             else long(0)
+        | LW_END_TOP := LW_STACK[?][LW_TOP_NOW - 1]
+        | LW_END_TOP_OP := ROWS_OP[?][LW_END_TOP]
+        | LW_END_TOP_TYPE := ROWS_TYPE[?][LW_END_TOP]
+        | LW_MEMBER_NOW := LW_FL_MEMBER[?]
+        | LW_SIGNAL_NOW := LW_FL_OWNER[?]
+        | LW_END_SIGNAL_TYPE := ROWS_TYPE[?][LW_SIGNAL_NOW]
+        | LW_END_SEED := LW_FINISHING and not LW_MEMBER_NOW and LW_EQ_SEED
+        | LW_END_DEFINES := LW_FINISHING and not LW_MEMBER_NOW and not LW_EQ_SEED and LW_SIGNAL_NOW >= 0
+        | LW_END_RANGE := LW_END_DEFINES and LW_END_TOP_OP = OP_RANGE
+        | LW_END_TYPE := if LW_END_RANGE then LW_END_SIGNAL_TYPE else LW_END_TOP_TYPE
+        | LW_END_SIGNAL_ARRAY := TYPE_KIND[LW_END_SIGNAL_TYPE] = TK_ARRAY
+        | LW_END_MESSAGE := if LW_END_TOP_OP = OP_PAIR then T_PAIR_OPERAND
+                            else if LW_END_SEED and LW_END_SIGNAL_ARRAY
+                                    and not (LW_END_TOP_OP = OP_TABLE or LW_END_TOP < FLAT_SIGNAL_COUNT and LW_END_TOP_TYPE = LW_END_SIGNAL_TYPE)
+                            then T_WITH_ARRAY
+                            else if LW_END_RANGE and not (LW_END_SIGNAL_ARRAY and TYPE_KIND[TYPE_ELEMENT[LW_END_SIGNAL_TYPE]] = TK_INT)
+                            then T_RANGE_DEFINES
+                            else if (LW_END_SEED or LW_END_DEFINES) and not LUB_SUBTYPE then T_SIGNAL_TYPE
+                            else if LW_END_DEFINES and LW_END_SIGNAL_ARRAY and LW_END_TOP_OP /= OP_TABLE and LW_END_TOP_OP /= OP_GATHER
+                                    and LW_END_TOP_OP /= OP_NEXT and LW_END_TOP_OP /= OP_RANGE
+                            then T_ARRAY_DEFINITION else 0
+        | LW_NEVER_LIVE := AT_LS_NEVER and LW_I < FLAT_SIGNAL_COUNT
+        | LW_NEVER_FAILS := LW_NEVER_LIVE and SIGNAL_TOP[?][LW_I] = 0 and ROWS_OP[?][LW_I] /= OP_INPUT
+        | LW_MEMBERS_LIVE := AT_LS_MEMBERS and LW_I < FLAT_GROUP_COUNT
+        | LW_MEMBER_STARTS := LW_MEMBERS_LIVE and LW_K < FLAT_GROUP_MEMBER_TOTAL[LW_I]
+        | LW_MEMBERS_CLOSE := LW_MEMBERS_LIVE and not LW_MEMBER_STARTS
+        | LW_MEMBER_INDEX := FLAT_GROUP_MEMBER_FIRST[LW_I] + LW_K
+        | LW_GROUP_FAILS := LW_MEMBERS_CLOSE and LW_GROUP_ARRAY[?]
+        | LW_CREATES := LW_SIGNAL_LIVE or LW_IS_ITER or LW_FROM_CONSTANT or LW_IS_CONST or LW_IS_ENUM
+                        or LW_OPERATOR and not LW_IS_INDICES or FX_EMITS_ARG or FX_EMITS_EFFECT or LW_END_SEED
+        | LW_PUSHES := LW_IS_SIGNAL or LW_IS_CONST or LW_IS_ENUM
+        | LW_ROW := ROW_COUNT[?]
+        | LW_OVERFLOW := if LK_LIVE and LK_UNSURE or LK_FULL then F_CAP_LOOKUPS
+                         else if LW_TYPE_FULL then F_CAP_TYPES
+                         else if LW_TABLE_FULL then F_CAP_TABLES
+                         else if LW_CREATES and LW_ROW >= ROWS_CAP then F_CAP_ROWS
+                         else if LW_PUSHES and LW_TOP_NOW >= LOWER_STACK_CAP then F_CAP_STACK else 0
+        | LW_MESSAGE_NOW := if LW_LOOP_UNDECLARED then T_FLAT_UNDECLARED
+                            else if LW_LOOP_NOT_INDEX then T_ITERATE_INDEX
+                            else if LW_INDEX_DEFINED then T_INDEX_DEFINED
+                            else if LW_TARGET_UNDECLARED then T_FLAT_UNDECLARED
+                            else if LW_START_SEED_FAILS then T_WITH_UNDEFINED
+                            else if LW_START_UNDECLARED then T_FLAT_UNDECLARED
+                            else if LW_START_INPUT then T_INPUT_DEFINED
+                            else if LW_START_TWICE then T_DEFINED_TWICE
+                            else if LW_SCAN_FAILS then T_WITH_READS
+                            else if LW_SIGNAL_UNDECLARED then T_FLAT_UNDECLARED
+                            else if LW_IS_ENUM and LW_ENUM_MESSAGE /= 0 then LW_ENUM_MESSAGE
+                            else if FX_CHECKS and FX_MESSAGE /= 0 then FX_MESSAGE
+                            else if LW_OPERATOR and LW_OPERATOR_MESSAGE /= 0 then LW_OPERATOR_MESSAGE
+                            else if LW_FINISHING and LW_END_MESSAGE /= 0 then LW_END_MESSAGE
+                            else if LW_NEVER_FAILS then T_NEVER_DEFINED
+                            else if LW_GROUP_FAILS then T_ARRAY_VALUE
+                            else if LW_OVERFLOW /= 0 then T_CAPACITY else 0
+        | LW_FAILS := LW_MESSAGE_NOW /= 0
+        | LW_START_TOKEN := LW_FL_TOKEN[?]
+        | LW_TOKEN_NOW := if LW_LOOP_LIVE then LOOP_TOKEN[LW_LOOP_SOURCE]
+                          else if AT_LS_EQUATION or AT_LS_START or AT_LS_SCAN then LW_EQ_TOKEN
+                          else if LW_IS_SIGNAL or LW_IS_ENUM then (if LW_IS_ENUM then LW_ENUM_TOKEN else LW_ENTRY_TOKEN)
+                          else if FX_CHECKS then FX_TOKEN
+                          else if LW_OPERATOR then LW_OPERATOR_TOKEN
+                          else if LW_FINISHING and LW_END_TOP_OP = OP_PAIR then ROWS_TOKEN[?][LW_END_TOP]
+                          else if LW_FINISHING then LW_START_TOKEN
+                          else if LW_NEVER_LIVE then -1
+                          else if LW_MEMBERS_LIVE then FLAT_GROUP_TOKEN[LW_I] else 0
+        | LW_FLAT_KEY := if LW_LOOP_LIVE then LOOP_NAME[LW_LOOP_SOURCE]
+                         else if AT_LS_EQUATION or AT_LS_START or AT_LS_SCAN or LW_FINISHING then LW_EQ_TARGET
+                         else if LW_IS_SIGNAL then LW_NAME
+                         else if LW_NEVER_LIVE then LW_SIGNAL_KEY[?][LW_I] else LW_SIGNAL_KEY[?][LW_LEFT]
+        | LW_FLAT_INSTANCE := if LW_LOOP_LIVE then FLAT_LOOP_INSTANCE[LW_I]
+                              else if AT_LS_EQUATION or AT_LS_START or AT_LS_SCAN or LW_FINISHING then LW_EQ_TARGET_INSTANCE
+                              else if LW_IS_SIGNAL then LW_INST
+                              else if LW_NEVER_LIVE then FLAT_SIGNAL_INSTANCE[LW_I] else LW_PREV_INSTANCE
+        | LW_ARGUMENT0_NOW := if LW_MESSAGE_NOW = T_CAPACITY then LW_OVERFLOW
+                              else if LW_IS_ENUM then LW_ENUM_ARGUMENT0
+                              else if FX_CHECKS then FX_ARGUMENT0
+                              else if LW_OPERATOR and LW_OPERATOR_MESSAGE /= T_INDEX_RANGE then LW_OPERATOR_ARGUMENT0
+                              else LW_FLAT_KEY
+        | LW_ARGUMENT1_NOW := if FX_CHECKS then FX_ARGUMENT1 else if LW_IS_ENUM then LW_ENUM_VALUE_KEY
+                              else if LW_FINISHING then LW_END_SIGNAL_TYPE else LW_OPERATOR_ARGUMENT1
+        | LW_ARGUMENT2_NOW := if FX_CHECKS then FX_PARAMS else if LW_FINISHING then LW_END_TYPE else RT
+        | LW_MESSAGE := if LW_FAILS then LW_MESSAGE_NOW else LW_MESSAGE[?]
+        | LW_TOKEN := if LW_FAILS then LW_TOKEN_NOW else LW_TOKEN[?]
+        | LW_ARGUMENT0 := if LW_FAILS then LW_ARGUMENT0_NOW else LW_ARGUMENT0[?]
+        | LW_ARGUMENT1 := if LW_FAILS then LW_ARGUMENT1_NOW else LW_ARGUMENT1[?]
+        | LW_ARGUMENT2 := if LW_FAILS then LW_ARGUMENT2_NOW else LW_ARGUMENT2[?]
+        | LW_INSTANCE := if LW_FAILS then LW_FLAT_INSTANCE else LW_INSTANCE[?]
+        | LW_LONG0 := if LW_FAILS then LW_INDEX_VALUE else LW_LONG0[?]
+        | LW_LONG0_UNSIGNED := if LW_FAILS then LW_INDEX_TYPE = BUILTIN_ULONG else LW_LONG0_UNSIGNED[?]
+        | LW_LONG1 := if LW_FAILS then long(LT_SIZE - ulong(1)) else LW_LONG1[?]
+        | LW_GOES := not LW_FAILS
+        | LW_ROW_SLOT := if LW_CREATES and LW_GOES then LW_ROW else -1
+        | LW_ROW_OP := if LW_SIGNAL_LIVE then (if LW_SIGNAL_INPUT then OP_INPUT else OP_COPY)
+                       else if FX_EMITS_ARG then OP_ARG else if FX_EMITS_EFFECT then OP_EFFECT
+                       else if LW_END_SEED then OP_SEED else LW_RESULT_OP
+        | LW_ROW_LEFT := if LW_SIGNAL_LIVE then -1 else if LW_IS_ITER then LOOP_INDEX[?][LW_LOOP_NOW]
+                         else if LW_IS_LEAF then -1 else if FX_EMITS_ARG then FX_OPERAND else if FX_EMITS_EFFECT then FX_PREVIOUS
+                         else if LW_END_SEED then LW_END_TOP else LW_LEFT
+        | LW_ROW_RIGHT := if LW_SIGNAL_LIVE or LW_IS_LEAF or FX_EMITS_EFFECT then -1 else if FX_EMITS_ARG then FX_PREVIOUS
+                          else if LW_END_SEED then LW_SIGNAL_NOW else LW_RIGHT
+        | LW_ROW_VALUE := if FX_EMITS_EFFECT then long(EFFECT_COUNT[?]) else if LW_SIGNAL_LIVE or FX_EMITS_ARG or LW_END_SEED then long(0)
+                          else LW_RESULT_VALUE
+        | LW_ROW_TYPE := if LW_SIGNAL_LIVE then LW_SIGNAL_TYPE_NOW else if FX_EMITS_ARG then ROWS_TYPE[?][FX_OPERAND]
+                         else if FX_EMITS_EFFECT then FX_ROW_TYPE else if LW_END_SEED then LW_END_SIGNAL_TYPE else LW_RESULT_TYPE
+        | LW_ROW_CTX := LW_ROW_OP = OP_CONST or LW_ROW_OP = OP_TABLE
+                        or OP_MONOCHRONOUS[LW_ROW_OP] = 1 and ROWS_CTX[?][LW_ROW_LEFT] and (LW_ROW_RIGHT < 0 or ROWS_CTX[?][LW_ROW_RIGHT])
+                        or LW_ROW_OP = OP_DEFAULT and ROWS_CTX[?][LW_ROW_LEFT]
+        | LW_CARRIED_TOKEN := LW_CUR_TOKEN[?]
+        | LW_ROW_TOKEN := if LW_SIGNAL_LIVE then -1 else if LW_IS_CONST or LW_IS_ENUM then LW_CARRIED_TOKEN
+                          else if LW_END_SEED then LW_START_TOKEN else LW_ENTRY_TOKEN
+        | LW_INDICES_REWRITES := LW_IS_INDICES and LW_GOES
+        | LW_REWRITE_TABLE := if LW_IOTA_TABLE >= 0 then LW_IOTA_TABLE else LW_NEW_TABLE
+        | LW_RANGE_REWRITES := LW_END_RANGE and LW_GOES
+        | LW_NEVER_WRITES := LW_NEVER_LIVE and LW_GOES
+        | ROWS_OP := ROWS_OP[?] next (if LW_INDICES_REWRITES then LW_LEFT else LW_ROW_SLOT)
+                     : (if LW_INDICES_REWRITES then OP_TABLE else LW_ROW_OP)
+        | ROWS_LEFT := ROWS_LEFT[?] next (if LW_NEVER_WRITES then LW_I else LW_ROW_SLOT)
+                       : (if LW_NEVER_WRITES then SIGNAL_TOP[?][LW_I] - 1 else LW_ROW_LEFT)
+        | ROWS_RIGHT := ROWS_RIGHT[?] next LW_ROW_SLOT : LW_ROW_RIGHT
+        | ROWS_VALUE := ROWS_VALUE[?] next (if LW_INDICES_REWRITES then LW_LEFT else LW_ROW_SLOT)
+                        : (if LW_INDICES_REWRITES then long(LW_REWRITE_TABLE) else LW_ROW_VALUE)
+        | ROWS_TYPE := ROWS_TYPE[?] next (if LW_INDICES_REWRITES then LW_LEFT else if LW_RANGE_REWRITES then LW_END_TOP else LW_ROW_SLOT)
+                       : (if LW_INDICES_REWRITES then LW_INTERNED else if LW_RANGE_REWRITES then LW_END_SIGNAL_TYPE else LW_ROW_TYPE)
+        | ROWS_CTX := ROWS_CTX[?] next (if LW_INDICES_REWRITES then LW_LEFT else LW_ROW_SLOT) : LW_INDICES_REWRITES or LW_ROW_CTX
+        | ROWS_TOKEN := ROWS_TOKEN[?] next (if LW_NEVER_WRITES then LW_I else LW_ROW_SLOT)
+                        : (if LW_NEVER_WRITES then SIGNAL_DEF_TOKEN[?][LW_I] - 1 else LW_ROW_TOKEN)
+        | ROWS_OWNER := ROWS_OWNER[?] next LW_ROW_SLOT : (if LW_SIGNAL_LIVE then LW_I else LW_SIGNAL_NOW)
+        | ROWS_LOOP := ROWS_LOOP[?] next (if LW_NEVER_WRITES then LW_I else LW_ROW_SLOT)
+                       : (if LW_NEVER_WRITES then SIGNAL_LOOP_MARK[?][LW_I] - 1 else if LW_END_SEED then LW_EQ_LOOP else LW_LOOP_NOW)
+        | ROWS_GUARD := ROWS_GUARD[?] next (if LW_NEVER_WRITES then LW_I else LW_ROW_SLOT)
+                        : (if LW_NEVER_WRITES then SIGNAL_DEF_GUARD[?][LW_I] - 1 else LW_FL_GUARD[?])
+        | FIRST_EFFECT := FIRST_EFFECT[?] next LW_ROW_SLOT
+                          : (if FX_EMITS_EFFECT then LW_ROW + 1 else if LW_SIGNAL_LIVE or LW_IS_LEAF then 0
+                             else if FIRST_EFFECT[?][LW_ROW_RIGHT] > 0 then FIRST_EFFECT[?][LW_ROW_RIGHT]
+                             else FIRST_EFFECT[?][LW_ROW_LEFT])
+        | ROW_COUNT := LW_ROW + integer(LW_ROW_SLOT >= 0)
+        | LW_SIGNAL_KEY := LW_SIGNAL_KEY[?] next (if LW_SIGNAL_LIVE then LW_I else -1) : LW_SIGNAL_KEY_NOW
+        | LW_EFFECT_SLOT := if FX_EMITS_EFFECT and LW_GOES then EFFECT_COUNT[?] else -1
+        | EFFECT_KIND := EFFECT_KIND[?] next LW_EFFECT_SLOT : LW_NAME
+        | EFFECT_RESOURCE := EFFECT_RESOURCE[?] next LW_EFFECT_SLOT : FX_TYPE0
+        | EFFECT_PARAM := EFFECT_PARAM[?] next LW_EFFECT_SLOT
+                          : (if FX_IS_SYSCALL then long(-1) else if FX_IS_INSTRUCTION then FX_WORD else long(FX_TYPE1))
+        | EFFECT_COUNT := EFFECT_COUNT[?] + integer(LW_EFFECT_SLOT >= 0)
+        | LW_FX_PREVIOUS := if FX_EMITS_ARG then LW_ROW else if LW_IS_EFFECT then FX_PREVIOUS else -1
+        | LW_FX_STEP := if LW_IS_EFFECT and not FX_EMITS_EFFECT then FX_STEP + 1 else 0
+        | LW_NEW_TABLE_SLOT := if LW_INDICES_REWRITES and LW_IOTA_TABLE < 0 then NEW_TABLE_COUNT[?] else -1
+        | NEW_TABLE_TYPE := NEW_TABLE_TYPE[?] next LW_NEW_TABLE_SLOT : LW_INTERNED
+        | NEW_TABLE_COUNT := NEW_TABLE_COUNT[?] + integer(LW_NEW_TABLE_SLOT >= 0)
+        | LW_IOTA := LW_IOTA[?] next (if LW_TABLE_IOTA then LW_TABLE_TYPE else if LW_NEW_TABLE_SLOT >= 0 then LW_INTERNED else -1)
+                     : (if LW_TABLE_IOTA then LW_I + 1 else LW_NEW_TABLE + 1)
+        | LOOP_INDEX := LOOP_INDEX[?] next (if LW_LOOP_LIVE then LW_I else -1) : LW_LOOP_SIGNAL
+        | LOOP_SIZE := LOOP_SIZE[?] next (if LW_LOOP_LIVE then LW_I else -1) : TYPE_SIZE[LW_LOOP_TYPE]
+        | LW_EQ_SIGNAL := LW_EQ_SIGNAL[?] next (if LW_EQ_STEP = 0 then LW_I else -1) : LK_VALUE + 1
+        | SIGNAL_LOOP_MARK := SIGNAL_LOOP_MARK[?] next (if LW_EQ_STEP = 0 and LW_LOOP_DEFINES and LK_FOUND then LK_VALUE else -1)
+                              : LW_EQ_LOOP + 1
+        | LW_GUARD_MARK := LW_GUARD_MARK[?] next (if LW_EQ_STEP = 2 then LW_I else -1) : LK_VALUE + 1
+        | LW_GROUP_GUARD := LW_GROUP_GUARD[?] next (if LW_GROUP_LIVE then LW_I else -1) : (if LW_HAS_GUARD then LK_VALUE + 1 else 0)
+        | LW_END_WRITES := LW_END_DEFINES and LW_GOES
+        | SIGNAL_TOP := SIGNAL_TOP[?] next (if LW_END_WRITES then LW_SIGNAL_NOW else -1) : LW_END_TOP + 1
+        | SIGNAL_DEF_TOKEN := SIGNAL_DEF_TOKEN[?] next (if LW_END_WRITES then LW_SIGNAL_NOW else -1) : LW_START_TOKEN + 1
+        | SIGNAL_DEF_GUARD := SIGNAL_DEF_GUARD[?] next (if LW_END_WRITES then LW_SIGNAL_NOW else -1) : LW_FL_GUARD[?] + 1
+        | DEF_START := DEF_START[?] next (if LW_END_WRITES then LW_SIGNAL_NOW else -1) : LW_FL_ROW_START[?]
+        | DEF_END := DEF_END[?] next (if LW_END_WRITES then LW_SIGNAL_NOW else -1) : LW_ROW
+        | LW_EQ_CLOSES := LW_FINISHING and not LW_MEMBER_NOW and LW_GOES
+        | EQ_ROW_START := EQ_ROW_START[?] next (if LW_EQ_CLOSES then LW_I else -1) : LW_FL_ROW_START[?]
+        | EQ_ROW_END := EQ_ROW_END[?] next (if LW_EQ_CLOSES then LW_I else -1) : ROW_COUNT
+        | EQ_ROW_SIGNAL := EQ_ROW_SIGNAL[?] next (if LW_EQ_CLOSES then LW_I else -1) : LW_SIGNAL_NOW
+        | LW_MEMBER_CLOSES := LW_FINISHING and LW_MEMBER_NOW and LW_GOES
+        | GROUP_MEMBER_ROW := GROUP_MEMBER_ROW[?] next (if LW_MEMBER_CLOSES then LW_MEMBER_INDEX else -1) : LW_END_TOP
+        | LW_GROUP_ARRAY := if LW_MEMBERS_CLOSE then false
+                            else LW_GROUP_ARRAY[?] or LW_MEMBER_CLOSES
+                                 and (LW_END_TOP_OP = OP_GATHER or LW_END_TOP_OP = OP_NEXT or LW_END_TOP_OP = OP_RANGE)
+        | LW_STACK_SLOT := if LW_PUSHES and LW_GOES then LW_TOP_NOW
+                           else if LW_OPERATOR and not LW_IS_INDICES and LW_GOES then LW_TOP_NOW - (if LW_UNARY then 1 else 2)
+                           else if FX_EMITS_EFFECT and LW_GOES then FX_BASE else -1
+        | LW_STACK := LW_STACK[?] next LW_STACK_SLOT : (if LW_SIGNAL_FOUND then LK_VALUE else LW_ROW)
+        | LW_TOP := if AT_LS_START or AT_LS_MEMBERS then 0 else if LW_STACK_SLOT >= 0 then LW_STACK_SLOT + 1 else LW_TOP_NOW
+        | LW_CUR_TOKEN := if LW_START_LIVE then LW_EQ_TOKEN else if LW_MEMBER_STARTS then FLAT_GROUP_TOKEN[LW_I]
+                          else if LW_ENTRY_LIVE and not LW_IS_CONST and not LW_IS_ENUM then LW_ENTRY_TOKEN else LW_CARRIED_TOKEN
+        | LW_FL_TOKEN := if LW_START_LIVE then LW_EQ_TOKEN else if LW_MEMBER_STARTS then FLAT_GROUP_TOKEN[LW_I] else LW_START_TOKEN
+        | LW_FL_START := if LW_START_LIVE then FLAT_EQUATION_START[LW_I] else LW_FL_START[?]
+        | LW_FL_END := if LW_START_LIVE then FLAT_EQUATION_END[LW_I] else if LW_MEMBER_STARTS then FLAT_MEMBER_END[LW_MEMBER_INDEX]
+                       else LW_END_NOW
+        | LW_FL_LOOP := if LW_START_LIVE then (if LW_EQ_SEED then -1 else LW_EQ_LOOP) else if LW_MEMBER_STARTS then -1 else LW_LOOP_NOW
+        | LW_FL_OWNER := if LW_START_LIVE then (if LW_EQ_TARGET >= 0 then LW_START_SIGNAL else -1)
+                         else if LW_MEMBER_STARTS then -1 else LW_SIGNAL_NOW
+        | LW_FL_GUARD := if LW_START_LIVE then LW_GUARD_MARK[?][LW_I] - 1
+                         else if LW_MEMBER_STARTS then LW_GROUP_GUARD[?][LW_I] - 1 else LW_FL_GUARD[?]
+        | LW_FL_MEMBER := if LW_START_LIVE then false else if LW_MEMBER_STARTS then true else LW_MEMBER_NOW
+        | LW_FL_ROW_START := if LW_START_LIVE or LW_MEMBER_STARTS then LW_ROW else LW_FL_ROW_START[?]
+        | LW_ENTRY := if LW_START_LIVE then FLAT_EQUATION_START[LW_I]
+                      else if LW_MEMBER_STARTS then FLAT_MEMBER_START[LW_MEMBER_INDEX]
+                      else if LW_SCAN_LIVE then LW_E + 1
+                      else if AT_LS_SCAN then LW_FL_START[?]
+                      else if LW_IS_EFFECT and not FX_EMITS_EFFECT then LW_E
+                      else if LW_ENTRY_LIVE then LW_E + 1 else LW_E
+        | LW_STATE := if LW_FAILS then LS_FAILED
+                      else if AT_LS_SIGNAL then (if LW_SIGNAL_LIVE then LS_SIGNAL else LS_LABEL)
+                      else if AT_LS_LABEL then (if LW_LABEL_LIVE then LS_LABEL else LS_VALUE)
+                      else if AT_LS_VALUE then (if LW_VALUE_TYPE_LIVE then LS_VALUE else LS_ARRAY)
+                      else if AT_LS_ARRAY then (if LW_I < TYPE_COUNT then LS_ARRAY else LS_TABLE)
+                      else if AT_LS_TABLE then (if LW_TABLE_LIVE then LS_TABLE else LS_LOOP)
+                      else if AT_LS_LOOP then (if LW_LOOP_LIVE then LS_LOOP else LS_EQUATION)
+                      else if AT_LS_EQUATION then (if LW_EQUATION_LIVE then LS_EQUATION else LS_GROUP)
+                      else if AT_LS_GROUP then (if LW_I < FLAT_GROUP_COUNT then LS_GROUP else LS_START)
+                      else if AT_LS_START then (if not LW_START_LIVE then LS_NEVER else if LW_EQ_SEED then LS_SCAN else LS_ENTRY)
+                      else if AT_LS_SCAN then (if LW_SCAN_LIVE then LS_SCAN else LS_ENTRY)
+                      else if AT_LS_ENTRY then (if not LW_FINISHING then LS_ENTRY else if LW_MEMBER_NOW then LS_MEMBERS else LS_START)
+                      else if AT_LS_NEVER then (if LW_NEVER_LIVE then LS_NEVER else LS_MEMBERS)
+                      else if AT_LS_MEMBERS then
+                        (if LW_MEMBER_STARTS then LS_ENTRY else if LW_MEMBERS_LIVE then LS_MEMBERS else LS_DONE)
+                      else LW_NOW
+        | LW_CURSOR := if AT_LS_SIGNAL then (if LW_SIGNAL_LIVE then LW_I + 1 else 0)
+                       else if AT_LS_LABEL then (if LW_LABEL_LIVE then LW_I + 1 else 0)
+                       else if AT_LS_VALUE then (if not LW_VALUE_TYPE_LIVE then 0 else LW_I + integer(not LW_VALUE_LIVE))
+                       else if AT_LS_ARRAY then (if LW_I < TYPE_COUNT then LW_I + 1 else 0)
+                       else if AT_LS_TABLE then (if not LW_TABLE_LIVE then 0 else LW_I + integer(not LW_TABLE_WALKS))
+                       else if AT_LS_LOOP then (if LW_LOOP_LIVE then LW_I + 1 else 0)
+                       else if AT_LS_EQUATION then (if not LW_EQUATION_LIVE then 0 else LW_I + integer(not LW_EQ_MORE))
+                       else if AT_LS_GROUP then (if LW_I < FLAT_GROUP_COUNT then LW_I + 1 else 0)
+                       else if AT_LS_START then (if LW_START_LIVE then LW_I else 0)
+                       else if AT_LS_ENTRY then LW_I + integer(LW_FINISHING and not LW_MEMBER_NOW)
+                       else if AT_LS_NEVER then (if LW_NEVER_LIVE then LW_I + 1 else 0)
+                       else if AT_LS_MEMBERS then LW_I + integer(LW_MEMBERS_CLOSE)
+                       else LW_I
+        | LW_SUB := if AT_LS_VALUE then (if LW_VALUE_LIVE then LW_K + 1 else 0)
+                    else if AT_LS_TABLE then (if LW_TABLE_WALKS then LW_K + 1 else 0)
+                    else if AT_LS_EQUATION then (if LW_EQ_MORE then LW_EQ_STEP + 1 else 0)
+                    else if AT_LS_ENTRY then LW_K + integer(LW_FINISHING and LW_MEMBER_NOW)
+                    else if AT_LS_MEMBERS then (if LW_MEMBERS_CLOSE then 0 else LW_K)
+                    else if AT_LS_NEVER then 0
+                    else LW_K
+        |)
+     with (| LW_STATE := LS_SIGNAL | LW_CURSOR := 0 | LW_SUB := 0 | LW_ENTRY := 0 | LW_FL_END := 0 | LW_FL_START := 0
+           | LW_FL_LOOP := -1 | LW_FL_OWNER := -1 | LW_FL_GUARD := -1 | LW_FL_MEMBER := false | LW_FL_ROW_START := 0
+           | LW_FL_TOKEN := 0 | LW_TOP := 0 | LW_CUR_TOKEN := 0 | LW_TABLE_OK := false | LW_GROUP_ARRAY := false
+           | LW_FX_STEP := 0 | LW_FX_PREVIOUS := -1 | HN_COUNT := 0 | ROW_COUNT := 0 | EFFECT_COUNT := 0
+           | NEW_TYPE_COUNT := 0 | NEW_TABLE_COUNT := 0 | LW_MESSAGE := 0 | LW_TOKEN := 0 | LW_ARGUMENT0 := 0
+           | LW_ARGUMENT1 := 0 | LW_ARGUMENT2 := 0 | LW_INSTANCE := 0 | LW_LONG0 := long(0) | LW_LONG0_UNSIGNED := false
+           | LW_LONG1 := long(0) |)
+     end
+   | LOWER_FAILED := LOWERS and LW_STATE = LS_FAILED
+   | LOWER_INCOMPLETE := LOWERS and LW_STATE /= LS_DONE and LW_STATE /= LS_FAILED
+   | LOWER_READY := LOWERS and LW_STATE = LS_DONE
+   | POST_BOUND := long(64) + long(5) * long(FLAT_DEPENDENCE_COUNT) + long(ROW_COUNT) + long(2) * long(FLAT_LOOP_COUNT)
+                   + long(FLAT_SIGNAL_COUNT) + long(FLAT_EQUATION_COUNT) + long(FLAT_LIST_TOTAL) + long(FLAT_LABEL_COUNT)
+   | POST_INDEX := 0 .. (if LOWER_READY then POST_BOUND else long(-1))
+   | iterate POST_INDEX of
+       (| PO_NOW := PO_STATE[?]
+        | PO_I := PO_CURSOR[?]
+        | PO_K := PO_SUB[?]
+        | AT_PS_DEPENDENCE := PO_NOW = PS_DEPENDENCE
+        | AT_PS_ROWS := PO_NOW = PS_ROWS
+        | AT_PS_PREFIX := PO_NOW = PS_PREFIX
+        | AT_PS_PLACE := PO_NOW = PS_PLACE
+        | AT_PS_WALK := PO_NOW = PS_WALK
+        | AT_PS_LABELSUM := PO_NOW = PS_LABELSUM
+        | AT_PS_SIZE := PO_NOW = PS_SIZE
+        | PO_DEPENDENCE_LIVE := AT_PS_DEPENDENCE and PO_I < FLAT_DEPENDENCE_COUNT
+        | PO_TO_END := PO_K >= 2
+        | PO_END_KEY := if PO_TO_END then FLAT_DEPENDENCE_TO_KEY[PO_I] else FLAT_DEPENDENCE_FROM_KEY[PO_I]
+        | PO_END_INSTANCE := FLAT_DEPENDENCE_INSTANCE[PO_I]
+        | PO_END_SIGNAL := if PO_TO_END then PO_TO_SIGNAL[?][PO_I] else PO_FROM_SIGNAL[?][PO_I]
+        | PO_LOOKS_LABEL := PO_K = 1 or PO_K = 3
+        | PO_ROWS_LIVE := AT_PS_ROWS and PO_I < ROW_COUNT
+        | PO_ROW_OP := ROWS_OP[PO_I]
+        | PO_ROW_LEFT := ROWS_LEFT[PO_I]
+        | PO_ROW_RIGHT := ROWS_RIGHT[PO_I]
+        | PO_LEFT_RANGE := PO_ROW_LEFT >= 0 and PO_ROW_LEFT < FLAT_SIGNAL_COUNT and ROWS_LEFT[PO_ROW_LEFT] >= 0
+                           and ROWS_OP[ROWS_LEFT[PO_ROW_LEFT]] = OP_RANGE
+        | PO_RIGHT_RANGE := PO_ROW_RIGHT >= 0 and PO_ROW_RIGHT < FLAT_SIGNAL_COUNT and ROWS_LEFT[PO_ROW_RIGHT] >= 0
+                            and ROWS_OP[ROWS_LEFT[PO_ROW_RIGHT]] = OP_RANGE
+        | PO_RANGE_FAILS := PO_ROWS_LIVE and PO_ROW_OP /= OP_ITER and (PO_LEFT_RANGE or PO_RIGHT_RANGE)
+        | PO_LEFT_PREV := PO_ROWS_LIVE and PO_ROW_LEFT >= 0 and ROWS_OP[PO_ROW_LEFT] = OP_PREV
+        | PO_RIGHT_PREV := PO_ROWS_LIVE and PO_ROW_RIGHT >= 0 and PO_ROW_RIGHT /= PO_ROW_LEFT and ROWS_OP[PO_ROW_RIGHT] = OP_PREV
+        | PO_LEFT_TAIL := LEFT_TAIL[?][PO_ROW_LEFT]
+        | PO_RIGHT_TAIL := RIGHT_TAIL[?][PO_ROW_RIGHT]
+        | LEFT_HEAD := LEFT_HEAD[?] next (if PO_LEFT_PREV and PO_LEFT_TAIL = 0 then PO_ROW_LEFT else -1) : PO_I + 1
+        | LEFT_NEXT := LEFT_NEXT[?] next (if PO_LEFT_PREV and PO_LEFT_TAIL > 0 then PO_LEFT_TAIL - 1 else -1) : PO_I + 1
+        | LEFT_TAIL := LEFT_TAIL[?] next (if PO_LEFT_PREV then PO_ROW_LEFT else -1) : PO_I + 1
+        | RIGHT_HEAD := RIGHT_HEAD[?] next (if PO_RIGHT_PREV and PO_RIGHT_TAIL = 0 then PO_ROW_RIGHT else -1) : PO_I + 1
+        | RIGHT_NEXT := RIGHT_NEXT[?] next (if PO_RIGHT_PREV and PO_RIGHT_TAIL > 0 then PO_RIGHT_TAIL - 1 else -1) : PO_I + 1
+        | RIGHT_TAIL := RIGHT_TAIL[?] next (if PO_RIGHT_PREV then PO_ROW_RIGHT else -1) : PO_I + 1
+        | PO_PREV_SLOT := if PO_ROWS_LIVE and PO_ROW_OP = OP_PREV then PREV_COUNT[?] else -1
+        | PREV_LIST := PREV_LIST[?] next PO_PREV_SLOT : PO_I
+        | PREV_COUNT := PREV_COUNT[?] + integer(PO_PREV_SLOT >= 0)
+        | PO_SIGNAL_LOOP := ROWS_LOOP[PO_I]
+        | PO_COUNTS := PO_ROWS_LIVE and PO_I < FLAT_SIGNAL_COUNT and PO_SIGNAL_LOOP >= 0
+        | LOOP_DEF_TOTAL := LOOP_DEF_TOTAL[?] next (if PO_COUNTS then PO_SIGNAL_LOOP else -1) : LOOP_DEF_TOTAL[?][PO_SIGNAL_LOOP] + 1
+        | PO_PREFIX_LIVE := AT_PS_PREFIX and PO_I < FLAT_LOOP_COUNT
+        | LOOP_DEF_START := LOOP_DEF_START[?] next (if PO_PREFIX_LIVE then PO_I else -1) : PO_RUNNING[?]
+        | PO_PLACE_LIVE := AT_PS_PLACE and PO_I < FLAT_SIGNAL_COUNT
+        | PO_PLACES := PO_PLACE_LIVE and PO_SIGNAL_LOOP >= 0
+        | PO_PLACE_FILL := LOOP_DEF_FILL[?][PO_SIGNAL_LOOP]
+        | DEFINED_LIST := DEFINED_LIST[?] next (if PO_PLACES then LOOP_DEF_START[?][PO_SIGNAL_LOOP] + PO_PLACE_FILL else -1) : PO_I
+        | LOOP_DEF_FILL := LOOP_DEF_FILL[?] next (if PO_PLACES then PO_SIGNAL_LOOP else -1) : PO_PLACE_FILL + 1
+        | PO_WALK_LIVE := AT_PS_WALK and PO_I < FLAT_EQUATION_COUNT and PO_NEEDS_LABELS[?]
+        | PO_WALK_CONTEXT := FLAT_EQUATION_CONTEXT[PO_I]
+        | PO_WALK_NODE := FLAT_EQUATION_LABELS[PO_I]
+        | PO_INHERITED := INSTANCE_LABEL_LENGTH[PO_WALK_CONTEXT]
+        | PO_PATH_LENGTH := PO_INHERITED + (if PO_WALK_NODE < 0 then 0 else USE_PATH_LENGTH[PO_WALK_NODE])
+        | PO_WALK_STEP := PO_WALK_LIVE and PO_K < PO_PATH_LENGTH
+        | PO_WALK_AT := INSTANCE_LABEL_START[PO_WALK_CONTEXT] + PO_K
+        | PO_FROM_INHERITED := PO_K < PO_INHERITED
+        | PO_WALK_KEY := if PO_FROM_INHERITED then FLAT_PATH_KEY[PO_WALK_AT]
+                         else PATH_VALUE[USE_PATH_START[PO_WALK_NODE] + PO_K - PO_INHERITED]
+        | PO_WALK_INSTANCE := if PO_FROM_INHERITED then FLAT_PATH_INSTANCE[PO_WALK_AT] else PO_WALK_CONTEXT
+        | PO_WALK_CALL := PO_FROM_INHERITED and FLAT_PATH_CALL[PO_WALK_AT]
+        | PO_LIVE := PO_DEPENDENCE_LIVE or PO_WALK_STEP
+        | PO_A := long(if PO_DEPENDENCE_LIVE then PO_END_KEY else PO_WALK_KEY)
+        | PO_B := if PO_DEPENDENCE_LIVE then
+                    long(PO_END_INSTANCE) * long(8) + (if PO_LOOKS_LABEL then long(1 + integer(PO_END_SIGNAL >= 0)) else long(0))
+                  else long(PO_WALK_INSTANCE) * long(8) + long(1 + integer(PO_WALK_CALL))
+        | PO_HASH := integer((ulong(PO_A) * HASH_K1 + ulong(PO_B) * HASH_K2) shr HASH_SHIFT)
+        | PO_N0 := HASH_HEAD[PO_HASH] - 1
+        | PO_M0 := PO_N0 >= 0 and HN_A[PO_N0] = PO_A and HN_B[PO_N0] = PO_B
+        | PO_N1 := if PO_N0 >= 0 then HN_NEXT[PO_N0] - 1 else -1
+        | PO_M1 := PO_N1 >= 0 and HN_A[PO_N1] = PO_A and HN_B[PO_N1] = PO_B
+        | PO_N2 := if PO_N1 >= 0 then HN_NEXT[PO_N1] - 1 else -1
+        | PO_M2 := PO_N2 >= 0 and HN_A[PO_N2] = PO_A and HN_B[PO_N2] = PO_B
+        | PO_N3 := if PO_N2 >= 0 then HN_NEXT[PO_N2] - 1 else -1
+        | PO_M3 := PO_N3 >= 0 and HN_A[PO_N3] = PO_A and HN_B[PO_N3] = PO_B
+        | PO_N4 := if PO_N3 >= 0 then HN_NEXT[PO_N3] - 1 else -1
+        | PO_M4 := PO_N4 >= 0 and HN_A[PO_N4] = PO_A and HN_B[PO_N4] = PO_B
+        | PO_N5 := if PO_N4 >= 0 then HN_NEXT[PO_N4] - 1 else -1
+        | PO_M5 := PO_N5 >= 0 and HN_A[PO_N5] = PO_A and HN_B[PO_N5] = PO_B
+        | PO_N6 := if PO_N5 >= 0 then HN_NEXT[PO_N5] - 1 else -1
+        | PO_M6 := PO_N6 >= 0 and HN_A[PO_N6] = PO_A and HN_B[PO_N6] = PO_B
+        | PO_N7 := if PO_N6 >= 0 then HN_NEXT[PO_N6] - 1 else -1
+        | PO_M7 := PO_N7 >= 0 and HN_A[PO_N7] = PO_A and HN_B[PO_N7] = PO_B
+        | PO_NODE := if PO_M0 then PO_N0 else if PO_M1 then PO_N1 else if PO_M2 then PO_N2 else if PO_M3 then PO_N3
+                     else if PO_M4 then PO_N4 else if PO_M5 then PO_N5 else if PO_M6 then PO_N6 else if PO_M7 then PO_N7 else -1
+        | PO_FOUND := PO_NODE >= 0
+        | PO_VALUE := if PO_FOUND then HN_VALUE[PO_NODE] else -1
+        | PO_UNSURE := PO_LIVE and not PO_FOUND and PO_N7 >= 0 and HN_NEXT[PO_N7] > 0
+        | PO_END_FAILS := PO_DEPENDENCE_LIVE and PO_LOOKS_LABEL and PO_END_SIGNAL < 0 and not PO_FOUND
+        | PO_WALK_LABEL := if PO_WALK_STEP and PO_FOUND and LABEL_NEEDED[?][PO_VALUE] then PO_VALUE else -1
+        | PO_WALK_EQUATION := PO_I
+        | PO_SEGMENT_SIZE := EQ_ROW_END[PO_I] - EQ_ROW_START[PO_I] + integer(EQ_ROW_SIGNAL[PO_I] >= 0)
+        | PO_SEGMENT_FULL := PO_WALK_LABEL >= 0 and SEGMENT_COUNT[?] >= SEGMENT_CAP
+        | PO_LABELSUM_LIVE := AT_PS_LABELSUM and PO_I < FLAT_LABEL_COUNT
+        | PO_SIZE_LIVE := AT_PS_SIZE and PO_I < FLAT_DEPENDENCE_COUNT
+        | PO_FROM_SIGNAL_NOW := PO_FROM_SIGNAL[?][PO_I]
+        | PO_TO_SIGNAL_NOW := PO_TO_SIGNAL[?][PO_I]
+        | PO_FROM_LIST := (if PO_FROM_SIGNAL_NOW >= 0 then long(1) else long(0)) + long(LABEL_ROW_TOTAL[?][PO_FROM_LABEL[?][PO_I]])
+        | PO_TO_LIST := (if PO_TO_SIGNAL_NOW >= 0 then long(1 + DEF_END[PO_TO_SIGNAL_NOW] - DEF_START[PO_TO_SIGNAL_NOW]) else long(0))
+                        + long(LABEL_ROW_TOTAL[?][PO_TO_LABEL[?][PO_I]])
+        | PO_PAIR_TOTAL := PO_PAIR_TOTAL[?] + (if PO_SIZE_LIVE then PO_FROM_LIST * PO_TO_LIST else long(0))
+        | PO_SIZE_FAILS := PO_SIZE_LIVE and PO_PAIR_TOTAL > long(ROW_DEPENDENCE_CAP)
+        | PO_LABELS_FULL := PO_LABELSUM_LIVE and PO_RUNNING[?] + LABEL_ROW_TOTAL[?][PO_I] > ROW_DEPENDENCE_CAP
+        | PO_MESSAGE_NOW := if PO_END_FAILS then T_FLAT_UNDECLARED else if PO_RANGE_FAILS then T_RANGE_INDEX
+                            else if PO_UNSURE or PO_SEGMENT_FULL or PO_LABELS_FULL or PO_SIZE_FAILS then T_CAPACITY else 0
+        | PO_FAILS := PO_MESSAGE_NOW /= 0
+        | PO_MESSAGE := if PO_FAILS then PO_MESSAGE_NOW else PO_MESSAGE[?]
+        | PO_TOKEN := if PO_FAILS then
+                        (if PO_RANGE_FAILS then ROWS_TOKEN[PO_I]
+                         else if PO_TO_END then FLAT_DEPENDENCE_TO_TOKEN[PO_I] else FLAT_DEPENDENCE_FROM_TOKEN[PO_I])
+                      else PO_TOKEN[?]
+        | PO_ARGUMENT0 := if PO_FAILS then
+                            (if PO_UNSURE then F_CAP_LOOKUPS else if PO_SEGMENT_FULL or PO_LABELS_FULL then F_CAP_SEGMENTS
+                             else if PO_SIZE_FAILS then F_CAP_ROW_DEPENDENCES else PO_END_KEY)
+                          else PO_ARGUMENT0[?]
+        | PO_INSTANCE := if PO_FAILS then PO_END_INSTANCE else PO_INSTANCE[?]
+        | PO_GOES := not PO_FAILS
+        | PO_FROM_SIGNAL := PO_FROM_SIGNAL[?] next (if PO_DEPENDENCE_LIVE and PO_K = 0 then PO_I else -1) : PO_VALUE
+        | PO_FROM_LABEL := PO_FROM_LABEL[?] next (if PO_DEPENDENCE_LIVE and PO_K = 1 then PO_I else -1) : PO_VALUE
+        | PO_TO_SIGNAL := PO_TO_SIGNAL[?] next (if PO_DEPENDENCE_LIVE and PO_K = 2 then PO_I else -1) : PO_VALUE
+        | PO_TO_LABEL := PO_TO_LABEL[?] next (if PO_DEPENDENCE_LIVE and PO_K = 3 then PO_I else -1) : PO_VALUE
+        | PO_MARKS := PO_DEPENDENCE_LIVE and PO_LOOKS_LABEL and PO_FOUND
+        | LABEL_NEEDED := LABEL_NEEDED[?] next (if PO_MARKS then PO_VALUE else -1) : true
+        | PO_NEEDS_LABELS := PO_NEEDS_LABELS[?] or PO_MARKS
+        | PO_SEGMENT_SLOT := if PO_WALK_LABEL >= 0 and PO_GOES then SEGMENT_COUNT[?] else -1
+        | SEGMENT_LABEL := SEGMENT_LABEL[?] next PO_SEGMENT_SLOT : PO_WALK_LABEL
+        | SEGMENT_EQUATION := SEGMENT_EQUATION[?] next PO_SEGMENT_SLOT : PO_WALK_EQUATION
+        | SEGMENT_COUNT := SEGMENT_COUNT[?] + integer(PO_SEGMENT_SLOT >= 0)
+        | LABEL_ROW_TOTAL := LABEL_ROW_TOTAL[?] next (if PO_SEGMENT_SLOT >= 0 then PO_WALK_LABEL else -1)
+                             : LABEL_ROW_TOTAL[?][PO_WALK_LABEL] + PO_SEGMENT_SIZE
+        | LABEL_START := LABEL_START[?] next (if PO_LABELSUM_LIVE then PO_I else -1) : PO_RUNNING[?]
+        | PO_RUNNING := if AT_PS_PREFIX then (if PO_PREFIX_LIVE then PO_RUNNING[?] + LOOP_DEF_TOTAL[?][PO_I] else 0)
+                        else if AT_PS_LABELSUM then PO_RUNNING[?] + (if PO_LABELSUM_LIVE then LABEL_ROW_TOTAL[?][PO_I] else 0)
+                        else PO_RUNNING[?]
+        | PO_STATE := if PO_FAILS then PS_FAILED
+                      else if AT_PS_DEPENDENCE then (if PO_DEPENDENCE_LIVE then PS_DEPENDENCE else PS_ROWS)
+                      else if AT_PS_ROWS then (if PO_ROWS_LIVE then PS_ROWS else PS_PREFIX)
+                      else if AT_PS_PREFIX then (if PO_PREFIX_LIVE then PS_PREFIX else PS_PLACE)
+                      else if AT_PS_PLACE then (if PO_PLACE_LIVE then PS_PLACE else PS_WALK)
+                      else if AT_PS_WALK then (if PO_WALK_LIVE then PS_WALK else PS_LABELSUM)
+                      else if AT_PS_LABELSUM then (if PO_LABELSUM_LIVE then PS_LABELSUM else PS_SIZE)
+                      else if AT_PS_SIZE then (if PO_SIZE_LIVE then PS_SIZE else PS_DONE)
+                      else PO_NOW
+        | PO_CURSOR := if AT_PS_DEPENDENCE then (if not PO_DEPENDENCE_LIVE then 0 else PO_I + integer(PO_K = 3))
+                       else if AT_PS_WALK then (if not PO_WALK_LIVE then 0 else PO_I + integer(not PO_WALK_STEP))
+                       else if AT_PS_ROWS then (if PO_ROWS_LIVE then PO_I + 1 else 0)
+                       else if AT_PS_PREFIX then (if PO_PREFIX_LIVE then PO_I + 1 else 0)
+                       else if AT_PS_PLACE then (if PO_PLACE_LIVE then PO_I + 1 else 0)
+                       else if AT_PS_LABELSUM then (if PO_LABELSUM_LIVE then PO_I + 1 else 0)
+                       else if AT_PS_SIZE then (if PO_SIZE_LIVE then PO_I + 1 else 0)
+                       else PO_I
+        | PO_SUB := if AT_PS_DEPENDENCE then (if PO_DEPENDENCE_LIVE and PO_K < 3 then PO_K + 1 else 0)
+                    else if AT_PS_WALK then (if PO_WALK_STEP then PO_K + 1 else 0)
+                    else 0
+        |)
+     with (| PO_STATE := PS_DEPENDENCE | PO_CURSOR := 0 | PO_SUB := 0 | PREV_COUNT := 0 | PO_RUNNING := 0
+           | PO_NEEDS_LABELS := false | SEGMENT_COUNT := 0 | PO_PAIR_TOTAL := long(0) | PO_MESSAGE := 0 | PO_TOKEN := 0
+           | PO_ARGUMENT0 := 0 | PO_INSTANCE := 0 |)
+     end
+   | POST_FAILED := LOWER_READY and PO_STATE = PS_FAILED
+   | POST_INCOMPLETE := LOWER_READY and PO_STATE /= PS_DONE and PO_STATE /= PS_FAILED
+   | POST_READY := LOWER_READY and PO_STATE = PS_DONE
+   | EXPAND_BOUND := long(64) + long(PO_RUNNING) + long(SEGMENT_COUNT) + PO_PAIR_TOTAL + long(FLAT_DEPENDENCE_COUNT)
+                     + long(PREV_COUNT) + long(2) * long(ROW_COUNT)
+   | EXPAND_INDEX := 0 .. (if POST_READY then EXPAND_BOUND else long(-1))
+   | iterate EXPAND_INDEX of
+       (| XP_NOW := XP_STATE[?]
+        | XP_I := XP_CURSOR[?]
+        | XP_J := XP_INNER[?]
+        | XP_K := XP_SUB[?]
+        | AT_XS_PLACE := XP_NOW = XS_PLACE
+        | AT_XS_PAIRS := XP_NOW = XS_PAIRS
+        | AT_XS_PREV := XP_NOW = XS_PREV
+        | XP_PLACE_LIVE := AT_XS_PLACE and XP_I < SEGMENT_COUNT
+        | XP_LABEL := SEGMENT_LABEL[XP_I]
+        | XP_EQUATION := SEGMENT_EQUATION[XP_I]
+        | XP_RANGE_LENGTH := EQ_ROW_END[XP_EQUATION] - EQ_ROW_START[XP_EQUATION]
+        | XP_SEGMENT_SIZE := XP_RANGE_LENGTH + integer(EQ_ROW_SIGNAL[XP_EQUATION] >= 0)
+        | XP_PLACES := XP_PLACE_LIVE and XP_K < XP_SEGMENT_SIZE
+        | XP_PLACE_FILL := LABEL_FILL[?][XP_LABEL]
+        | LABEL_ROWS := LABEL_ROWS[?] next (if XP_PLACES then LABEL_START[XP_LABEL] + XP_PLACE_FILL else -1)
+                        : (if XP_K < XP_RANGE_LENGTH then EQ_ROW_START[XP_EQUATION] + XP_K else EQ_ROW_SIGNAL[XP_EQUATION])
+        | LABEL_FILL := LABEL_FILL[?] next (if XP_PLACES then XP_LABEL else -1) : XP_PLACE_FILL + 1
+        | XP_PLACE_ENDS := XP_PLACE_LIVE and XP_K + 1 >= XP_SEGMENT_SIZE
+        | XP_PAIRS_LIVE := AT_XS_PAIRS and XP_I < FLAT_DEPENDENCE_COUNT
+        | XP_FROM_SIGNAL := PO_FROM_SIGNAL[XP_I]
+        | XP_FROM_LABEL := PO_FROM_LABEL[XP_I]
+        | XP_TO_SIGNAL := PO_TO_SIGNAL[XP_I]
+        | XP_TO_LABEL := PO_TO_LABEL[XP_I]
+        | XP_FROM_HEAD := integer(XP_FROM_SIGNAL >= 0)
+        | XP_DEF_LENGTH := if XP_TO_SIGNAL >= 0 then DEF_END[XP_TO_SIGNAL] - DEF_START[XP_TO_SIGNAL] else 0
+        | XP_TO_HEAD := integer(XP_TO_SIGNAL >= 0) + XP_DEF_LENGTH
+        | XP_FROM_LENGTH := XP_FROM_HEAD + LABEL_ROW_TOTAL[XP_FROM_LABEL]
+        | XP_TO_LENGTH := XP_TO_HEAD + LABEL_ROW_TOTAL[XP_TO_LABEL]
+        | XP_EMITS_PAIR := XP_PAIRS_LIVE and XP_J < XP_FROM_LENGTH and XP_K < XP_TO_LENGTH
+        | XP_FROM_ROW := if XP_J < XP_FROM_HEAD then XP_FROM_SIGNAL
+                         else LABEL_ROWS[?][LABEL_START[XP_FROM_LABEL] + XP_J - XP_FROM_HEAD]
+        | XP_TO_ROW := if XP_TO_SIGNAL >= 0 and XP_K = 0 then XP_TO_SIGNAL
+                       else if XP_K < XP_TO_HEAD then DEF_START[XP_TO_SIGNAL] + XP_K - 1
+                       else LABEL_ROWS[?][LABEL_START[XP_TO_LABEL] + XP_K - XP_TO_HEAD]
+        | XP_PAIR_ROW_ENDS := XP_K + 1 >= XP_TO_LENGTH
+        | XP_PAIR_ENDS := XP_PAIRS_LIVE and (not XP_EMITS_PAIR or XP_PAIR_ROW_ENDS and XP_J + 1 >= XP_FROM_LENGTH)
+        | XP_PREV_LIVE := AT_XS_PREV and XP_I < PREV_COUNT
+        | XP_PREVIOUS := PREV_LIST[XP_I]
+        | XP_SIGNAL := ROWS_LEFT[XP_PREVIOUS]
+        | XP_WRITER := ROWS_LEFT[XP_SIGNAL]
+        | XP_SCALAR := TYPE_KIND[ROWS_TYPE[XP_SIGNAL]] /= TK_ARRAY
+        | XP_STARTED := XP_PREV_STARTED[?]
+        | XP_A := if XP_STARTED then XP_LEFT_AT[?] else LEFT_HEAD[XP_PREVIOUS] - 1
+        | XP_B := if XP_STARTED then XP_RIGHT_AT[?] else RIGHT_HEAD[XP_PREVIOUS] - 1
+        | XP_TAKES_A := XP_A >= 0 and (XP_B < 0 or XP_A < XP_B)
+        | XP_TAKES_B := XP_B >= 0 and not XP_TAKES_A
+        | XP_READER := if XP_TAKES_A then XP_A else XP_B
+        | XP_PREV_SCALAR := XP_PREV_LIVE and XP_SCALAR
+        | XP_EMITS_WAR := XP_PREV_LIVE and not XP_SCALAR and (XP_TAKES_A or XP_TAKES_B) and XP_READER /= XP_WRITER
+        | XP_PREV_ENDS := XP_PREV_SCALAR or XP_PREV_LIVE and not XP_TAKES_A and not XP_TAKES_B
+        | XP_DEPENDENCE_WANTED := XP_EMITS_PAIR or XP_PREV_SCALAR
+        | XP_FAILS := XP_DEPENDENCE_WANTED and DEPENDENCE_TOTAL[?] >= ROW_DEPENDENCE_CAP
+                      or XP_EMITS_WAR and WAR_COUNT[?] >= ROW_DEPENDENCE_CAP
+        | XP_DEPENDENCE_SLOT := if XP_DEPENDENCE_WANTED and not XP_FAILS then DEPENDENCE_TOTAL[?] else -1
+        | DEPENDENCE_FROM_ROW := DEPENDENCE_FROM_ROW[?] next XP_DEPENDENCE_SLOT : (if XP_PREV_SCALAR then XP_PREVIOUS else XP_FROM_ROW)
+        | DEPENDENCE_TO_ROW := DEPENDENCE_TO_ROW[?] next XP_DEPENDENCE_SLOT : (if XP_PREV_SCALAR then XP_SIGNAL else XP_TO_ROW)
+        | DEPENDENCE_TOTAL := DEPENDENCE_TOTAL[?] + integer(XP_DEPENDENCE_SLOT >= 0)
+        | XP_WAR_SLOT := if XP_EMITS_WAR and not XP_FAILS then WAR_COUNT[?] else -1
+        | WAR_READER := WAR_READER[?] next XP_WAR_SLOT : XP_READER
+        | WAR_WRITER := WAR_WRITER[?] next XP_WAR_SLOT : XP_WRITER
+        | WAR_SIGNAL := WAR_SIGNAL[?] next XP_WAR_SLOT : XP_SIGNAL
+        | WAR_COUNT := WAR_COUNT[?] + integer(XP_WAR_SLOT >= 0)
+        | XP_LEFT_AT := if XP_TAKES_A then LEFT_NEXT[XP_A] - 1 else XP_A
+        | XP_RIGHT_AT := if XP_TAKES_B then RIGHT_NEXT[XP_B] - 1 else XP_B
+        | XP_PREV_STARTED := XP_PREV_LIVE and not XP_PREV_ENDS
+        | XP_STATE := if XP_FAILS then XS_FAILED
+                      else if AT_XS_PLACE then (if XP_PLACE_LIVE then XS_PLACE else XS_PAIRS)
+                      else if AT_XS_PAIRS then (if XP_PAIRS_LIVE then XS_PAIRS else XS_PREV)
+                      else if AT_XS_PREV then (if XP_PREV_LIVE then XS_PREV else XS_DONE)
+                      else XP_NOW
+        | XP_CURSOR := if AT_XS_PLACE then (if not XP_PLACE_LIVE then 0 else XP_I + integer(XP_PLACE_ENDS))
+                       else if AT_XS_PAIRS then (if not XP_PAIRS_LIVE then 0 else XP_I + integer(XP_PAIR_ENDS))
+                       else XP_I + integer(XP_PREV_ENDS)
+        | XP_INNER := if AT_XS_PAIRS and XP_EMITS_PAIR and not XP_PAIR_ENDS then XP_J + integer(XP_PAIR_ROW_ENDS) else 0
+        | XP_SUB := if XP_PLACE_LIVE and not XP_PLACE_ENDS then XP_K + 1
+                    else if XP_EMITS_PAIR and not XP_PAIR_ENDS then (if XP_PAIR_ROW_ENDS then 0 else XP_K + 1) else 0
+        |)
+     with (| XP_STATE := XS_PLACE | XP_CURSOR := 0 | XP_INNER := 0 | XP_SUB := 0 | XP_PREV_STARTED := false
+           | XP_LEFT_AT := -1 | XP_RIGHT_AT := -1 | DEPENDENCE_TOTAL := 0 | WAR_COUNT := 0 |)
+     end
+   | EXPAND_FAILED := POST_READY and XP_STATE = XS_FAILED
+   | EXPAND_INCOMPLETE := POST_READY and XP_STATE /= XS_DONE and XP_STATE /= XS_FAILED
+   | ROWS_READY := POST_READY and XP_STATE = XS_DONE
    | MERGE_BOUND := long(SIGNAL_COUNT) + long(FINISH_SIGNAL_COUNT) + long(EQUATION_COUNT) + long(FINISH_EQUATION_COUNT)
                     + long(GROUP_COUNT) + long(FINISH_GROUP_COUNT) + long(3) * long(CLOSED_COUNT) + long(LABEL_COUNT)
                     + long(MODEL_COUNT) + long(USE_COUNT) + long(TABLE_COUNT) + long(8)
-   | MERGE_INDEX := 0 .. (if DUMP_RUNS then MERGE_BOUND else long(-1))
+   | MERGE_INDEX := 0 .. (if DUMP_RUNS and not ROWS_DUMP then MERGE_BOUND else long(-1))
    | iterate MERGE_INDEX of
        (| SIGNAL_RANK_NOW := SIGNAL_RANK[?]
         | SIGNAL_RANK_OPEN := SIGNAL_RANK_NOW < CLOSED_COUNT
@@ -2154,7 +3128,11 @@ process SIGC =
                    + long(PATH_DEPTH_MAX) * long(2 * DUMP_EQUATION_COUNT + 2 * GUARD_COUNT + DUMP_GROUP_COUNT + DEPENDENCE_COUNT)
                    + long(20) * long(FINAL_COUNT) + long(6) * long(MEMBER_COUNT + 2 * FINISH_GROUP_COUNT)
                    + long(6) * long(TOKEN_COUNT)
-   | DUMP_BOUND := if FLAT_DUMP then FLAT_DUMP_BOUND else PROGRAM_DUMP_BOUND
+   | ROWS_DUMP_BOUND := long(1024) + long(24) * long(ROW_COUNT) + long(4) * long(FLAT_GROUP_COUNT) + long(FLAT_MEMBER_COUNT)
+                        + long(4) * long(DEPENDENCE_TOTAL) + long(4) * long(WAR_COUNT) + long(6) * long(EFFECT_COUNT)
+                        + long(8) * long(FLAT_LOOP_COUNT) + long(FLAT_SIGNAL_COUNT)
+   | DUMP_BOUND := if ROWS_DUMP then ROWS_DUMP_BOUND else if FLAT_DUMP then FLAT_DUMP_BOUND else PROGRAM_DUMP_BOUND
+   | DUMP_COLUMN_END := if ROWS_DUMP then COLUMN_TOTAL else COLUMN_COUNT
    | DUMP_INDEX := 0 .. (if DUMP_RUNS then DUMP_BOUND else long(-1))
    | iterate DUMP_INDEX of
        (| WALK_COLUMN_NOW := WALK_COLUMN[?]
@@ -2163,7 +3141,7 @@ process SIGC =
         | WALK_INNER := WALK_INNER_POSITION[?]
         | WALK_STEP := WALK_STEP_POSITION[?]
         | WALK_MEMBER_STEP := WALK_MEMBER_POSITION[?]
-        | WALKING := WALK_COLUMN_NOW < COLUMN_COUNT
+        | WALKING := WALK_COLUMN_NOW < DUMP_COLUMN_END
         | COL := WALK_COLUMN_NOW
         | SHAPE := COLUMN_SHAPE[COL]
         | LIST_KIND := COLUMN_LIST_KIND[COL]
@@ -2183,7 +3161,14 @@ process SIGC =
                               else if COL <= COL_CONSTRAINT_GUARDS then FLAT_GROUP_COUNT
                               else if COL = COL_DEPENDENCE_MODELS or COL = COL_DEPENDENCE_GUARDS then 0
                               else FLAT_DEPENDENCE_COUNT
-        | COLUMN_ROWS := if FLAT_DUMP then FLAT_COLUMN_ROWS else if COL = COL_NAME then 1
+        | ROWS_COLUMN_ROWS := if COL <= COL_ROWS_GUARD then ROW_COUNT
+                              else if COL <= COL_ROWS_GROUP_POSITIONS then FLAT_GROUP_COUNT
+                              else if COL <= COL_ROWS_DEPENDENCE_TO then DEPENDENCE_TOTAL
+                              else if COL = COL_ROWS_WAR then WAR_COUNT
+                              else if COL = COL_ROWS_SNAPSHOTTED or COL = COL_LOOPS_SNAPSHOTS then 0
+                              else if COL <= COL_ROWS_EFFECTS_PARAM then EFFECT_COUNT
+                              else FLAT_LOOP_COUNT
+        | COLUMN_ROWS := if ROWS_DUMP then ROWS_COLUMN_ROWS else if FLAT_DUMP then FLAT_COLUMN_ROWS else if COL = COL_NAME then 1
                          else if COL <= COL_TYPES_SIZE then TYPE_COUNT
                          else if COL <= COL_MODELS_LABELS then MODEL_COUNT
                          else if COL <= COL_SIGNAL_POSITIONS then DUMP_SIGNAL_COUNT
@@ -2220,6 +3205,7 @@ process SIGC =
                      else if COL = COL_GUARD_SIGNALS then N_ON_MARK + (R - MODEL_GUARD_START[GUARD_MODEL[R]] + 1) * NAME_CAP
                      else if COL = COL_LABEL_USES then USE_NAME[R]
                      else if COL = COL_LOOP_NAMES then LOOP_NAME[LOOP_ROW]
+                     else if COL = COL_ROWS_EFFECTS_KIND then EFFECT_KIND[R]
                      else if FLAT_DUMP then (if COL = COL_DEPENDENCE_FROM then FLAT_DEPENDENCE_FROM_KEY[R] else FLAT_DEPENDENCE_TO_KEY[R])
                      else if COL = COL_DEPENDENCE_FROM then
                        (if DEPENDENCE_RENAMED_FROM[R] > 0 then DEPENDENCE_RENAMED_FROM[R] - 1 else DEPENDENCE_FROM_NAME[R])
@@ -2233,7 +3219,27 @@ process SIGC =
                                else if COL = COL_DEPENDENCE_FROM or COL = COL_DEPENDENCE_TO then FLAT_DEPENDENCE_INSTANCE[R]
                                else 0
         | WALK_ROW_CALL := FLAT_DUMP and COL = COL_LABEL_NAMES and FLAT_LABEL_CALL[R]
-        | ROW_NUMBER_VALUE := if COL = COL_TYPES_BYTES then long(TYPE_BYTES[R])
+        | ROWS_TOKEN_NOW := ROWS_TOKEN[R]
+        | ROWS_NUMBER_VALUE := if COL = COL_ROWS_LEFT then long(ROWS_LEFT[R])
+                               else if COL = COL_ROWS_RIGHT then long(ROWS_RIGHT[R])
+                               else if COL = COL_ROWS_VALUE then ROWS_VALUE[R]
+                               else if COL = COL_ROWS_TYPE then long(ROWS_TYPE[R])
+                               else if COL = COL_ROWS_CTX then long(integer(ROWS_CTX[R]))
+                               else if COL = COL_ROWS_LINE then long(if ROWS_TOKEN_NOW < 0 then 1 else TOKEN_LINE[ROWS_TOKEN_NOW])
+                               else if COL = COL_ROWS_COLUMN then long(if ROWS_TOKEN_NOW < 0 then 1 else TOKEN_COLUMN[ROWS_TOKEN_NOW])
+                               else if COL = COL_ROWS_OWNER then long(ROWS_OWNER[R])
+                               else if COL = COL_ROWS_LOOP then long(ROWS_LOOP[R])
+                               else if COL = COL_ROWS_GUARD then long(ROWS_GUARD[R])
+                               else if COL = COL_ROWS_DEPENDENCE_FROM then long(DEPENDENCE_FROM_ROW[R])
+                               else if COL = COL_ROWS_DEPENDENCE_TO then long(DEPENDENCE_TO_ROW[R])
+                               else if COL = COL_ROWS_EFFECTS_RESOURCE then long(EFFECT_RESOURCE[R])
+                               else if COL = COL_ROWS_EFFECTS_PARAM then EFFECT_PARAM[R]
+                               else if COL = COL_LOOPS_INDEX then long(LOOP_INDEX[R])
+                               else if COL = COL_LOOPS_SIZE then long(LOOP_SIZE[R])
+                               else if ROWS_OP[ROWS_LEFT[LOOP_INDEX[R]]] = OP_RANGE then long(ROWS_RIGHT[ROWS_LEFT[LOOP_INDEX[R]]])
+                               else long(-1)
+        | ROW_NUMBER_VALUE := if ROWS_DUMP then ROWS_NUMBER_VALUE
+                              else if COL = COL_TYPES_BYTES then long(TYPE_BYTES[R])
                               else if COL = COL_TYPES_SIGNED then long(integer(TYPE_SIGNED[R]))
                               else if COL = COL_TYPES_ELEMENT then long(TYPE_ELEMENT[R])
                               else if COL = COL_TYPES_SIZE then long(TYPE_SIZE[R])
@@ -2257,14 +3263,17 @@ process SIGC =
                               else if COL = COL_CONSTRAINT_MODELS then
                                 long(if GROUP_FINISHED then FINISH_GROUP_MODEL[GROUP_FINISH_ROW] else GROUP_MODEL[GROUP_SOURCE])
                               else long(DEPENDENCE_MODEL[R])
-        | ROW_UNSIGNED := COL = COL_TYPES_SIZE or COL = COL_CONSTANT_VALUES and CONSTANT_TYPE[R] = BUILTIN_ULONG
-        | ROW_FRAGMENT := if COL = COL_TYPES_KIND then TYPE_KIND_FRAGMENT[TYPE_KIND[R]]
+        | ROW_UNSIGNED := if ROWS_DUMP then COL = COL_LOOPS_SIZE or COL = COL_ROWS_VALUE and ROWS_TYPE[R] = BUILTIN_ULONG
+                          else COL = COL_TYPES_SIZE or COL = COL_CONSTANT_VALUES and CONSTANT_TYPE[R] = BUILTIN_ULONG
+        | ROW_FRAGMENT := if COL = COL_ROWS_OP then OP_FRAGMENT[ROWS_OP[R]]
+                          else if COL = COL_TYPES_KIND then TYPE_KIND_FRAGMENT[TYPE_KIND[R]]
                           else if COL = COL_SIGNAL_ROLES then
                             ROLE_FRAGMENT[if SIGNAL_FINISHED or FLAT_DUMP and FLAT_SIGNAL_INSTANCE[R] > 0 then ROLE_LOCAL
                                           else SIGNAL_ROLE[SIGNAL_SOURCE]]
                           else if FLAT_DUMP then (if FLAT_EQUATION_SEED[R] then F_SEED else F_DEFINE)
                           else if not EQUATION_FINISHED and EQUATION_SEED[EQUATION_SOURCE] then F_SEED else F_DEFINE
-        | WALK_ROW_TOKEN := if COL = COL_SIGNAL_POSITIONS then
+        | WALK_ROW_TOKEN := if COL = COL_ROWS_GROUP_POSITIONS then FLAT_GROUP_TOKEN[R]
+                       else if COL = COL_SIGNAL_POSITIONS then
                          (if SIGNAL_FINISHED then FINISH_SIGNAL_TOKEN[SIGNAL_FINISH_ROW] else SIGNAL_TOKEN[SIGNAL_SOURCE])
                        else if COL = COL_EQUATION_POSITIONS then
                          (if FLAT_DUMP then FLAT_EQUATION_TOKEN[R]
@@ -2315,19 +3324,29 @@ process SIGC =
                               else if EQUATION_FINISHED then FINISH_EQUATION_FINAL_END[EQUATION_FINISH_ROW]
                               else EQUATION_FINAL_END[EQUATION_SOURCE])
                            else GUARD_FINAL_END[R]
-        | RUN_START := if COL = COL_TYPES_VALUES then TYPE_VALUE_START[R]
+        | RUN_START := if COL = COL_ROWS_GROUPS then FLAT_GROUP_MEMBER_FIRST[R]
+                       else if COL = COL_ROWS_WAR then 0
+                       else if COL = COL_LOOPS_DEFINED then LOOP_DEF_START[R]
+                       else if COL = COL_TYPES_VALUES then TYPE_VALUE_START[R]
                        else if COL = COL_MODELS_LABELS then MODEL_LABEL_OFFSET[R]
                        else if COL = COL_TABLE_VALUES then TABLE_START[R]
                        else if LIST_KIND = LIST_OPS or LIST_KIND = LIST_ARGS then ENTRY_RUN_START
                        else PATH_FIRST
-        | RUN_LENGTH := if COL = COL_TYPES_VALUES then TYPE_VALUE_COUNT[R]
+        | RUN_LENGTH := if COL = COL_ROWS_GROUPS then FLAT_GROUP_MEMBER_TOTAL[R]
+                        else if COL = COL_ROWS_WAR then 3
+                        else if COL = COL_LOOPS_DEFINED then LOOP_DEF_TOTAL[R]
+                        else if COL = COL_TYPES_VALUES then TYPE_VALUE_COUNT[R]
                         else if COL = COL_MODELS_LABELS then MODEL_LABEL_END[R] - MODEL_LABEL_OFFSET[R]
                         else if COL = COL_TABLE_VALUES then TABLE_LENGTH[R]
                         else if LIST_KIND = LIST_OPS or LIST_KIND = LIST_ARGS then ENTRY_RUN_END - ENTRY_RUN_START
                         else INHERITED_LENGTH + PATH_SIZE
         | LIST_AT := RUN_START + WALK_REL - INHERITED_LENGTH
         | NODE_ON_KEY := N_ON_MARK + (PATH_VALUE[LIST_AT] - MODEL_GUARD_START[GUARD_MODEL[PATH_VALUE[LIST_AT]]] + 1) * NAME_CAP
-        | LIST_VALUE := if COL = COL_TYPES_VALUES then long(VALUE_NAME[LIST_AT])
+        | LIST_VALUE := if COL = COL_ROWS_GROUPS then long(GROUP_MEMBER_ROW[LIST_AT])
+                        else if COL = COL_ROWS_WAR then
+                          long(if WALK_REL = 0 then WAR_READER[R] else if WALK_REL = 1 then WAR_WRITER[R] else WAR_SIGNAL[R])
+                        else if COL = COL_LOOPS_DEFINED then long(DEFINED_LIST[LIST_AT])
+                        else if COL = COL_TYPES_VALUES then long(VALUE_NAME[LIST_AT])
                         else if COL = COL_MODELS_LABELS then long(LABEL_ORDERED_NAME[LIST_AT])
                         else if COL = COL_TABLE_VALUES then (if TABLE_FROM_STRING[R] then long(SRC[LIST_AT]) else POOL_VALUE[LIST_AT])
                         else if FROM_INHERITED_PATH then long(FLAT_PATH_KEY[INHERITED_AT])
@@ -2472,17 +3491,19 @@ process SIGC =
                         else EMITTED_CLASS /= IC_HEADER and EMITTED_CLASS /= IC_NEWLINE and EMITTED_CLASS /= IC_OPEN
                              and EMITTED_CLASS /= IC_SIZE and EMITTED_CLASS /= IC_PREFIX
         |)
-     with (| WALK_COLUMN := 0 | WALK_ROW := -1 | WALK_POSITION := 0 | WALK_INNER_POSITION := 0 | WALK_STEP_POSITION := 0
+     with (| WALK_COLUMN := if ROWS_DUMP then COL_ROWS_OP else 0 | WALK_ROW := -1 | WALK_POSITION := 0 | WALK_INNER_POSITION := 0 | WALK_STEP_POSITION := 0
            | WALK_MEMBER_POSITION := 0 | DUMP_COUNT := 0 | WALK_JOINS := false | WALK_PREFIXED := false |)
      end
-   | DUMP_OVERFLOW := DUMP_RUNS and (WALK_COLUMN < COLUMN_COUNT or DUMP_COUNT > ITEM_CAP or DUMP_SIGNAL_COUNT > SIGNAL_CAP
+   | DUMP_OVERFLOW := DUMP_RUNS and (WALK_COLUMN < DUMP_COLUMN_END or DUMP_COUNT > ITEM_CAP or DUMP_SIGNAL_COUNT > SIGNAL_CAP
                                      or DUMP_EQUATION_COUNT > EQUATION_CAP or DUMP_GROUP_COUNT > GROUP_CAP)
    | FRONT_MESSAGE := if PASS_MESSAGE /= 0 then PASS_MESSAGE else if INSTANTIATE_FAILED then INSTANTIATE_MESSAGE
-                      else if INSTANTIATE_INCOMPLETE then T_CAPACITY else 0
+                      else if INSTANTIATE_INCOMPLETE then T_CAPACITY else if LOWER_FAILED then LW_MESSAGE
+                      else if LOWER_INCOMPLETE then T_CAPACITY else if POST_FAILED then PO_MESSAGE
+                      else if POST_INCOMPLETE or EXPAND_FAILED or EXPAND_INCOMPLETE then T_CAPACITY else 0
    | MESSAGE := if FRONT_MESSAGE /= 0 then FRONT_MESSAGE else if DUMP_OVERFLOW then T_CAPACITY else 0
    | MESSAGE_ARGUMENT0 := if FRONT_MESSAGE /= 0 then PASS_ARGUMENT0 else F_CAP_ITEMS
    | LAYOUT := if not USAGE_OK then LAYOUT_NONE else if ERRNO /= 0 then LAYOUT_OS
-               else if DUMP_PASS = 1 or DUMP_PASS = 2 or DUMP_PASS = 3 then
+               else if DUMP_PASS = 1 or DUMP_PASS = 2 or DUMP_PASS = 3 or DUMP_PASS = 4 then
                  (if MESSAGE /= 0 then LAYOUT_DUMP_ERROR else if DUMP_PASS = 1 then LAYOUT_DUMP_TOKENS else LAYOUT_DUMP_PROGRAM)
                else if MESSAGE /= 0 then LAYOUT_COMPILE else LAYOUT_NONE
    | DUMPS_TOKENS := LAYOUT = LAYOUT_DUMP_TOKENS
@@ -2522,34 +3543,44 @@ process SIGC =
         | NAME_BASE := ARGUMENT_VALUE modulo NAME_CAP
         | NAME_SUFFIX := ARGUMENT_VALUE / NAME_CAP
         | TYPE_ARGUMENT := ARGUMENT_KIND = A_TYPE
-        | ARGUMENT_TYPE_ARRAY := TYPE_ARGUMENT and TYPE_KIND[ARGUMENT_VALUE] = TK_ARRAY
-        | NAMED_TYPE := if ARGUMENT_TYPE_ARRAY then TYPE_ELEMENT[ARGUMENT_VALUE] else ARGUMENT_VALUE
+        | ARGUMENT_TYPE_NEW := ARGUMENT_VALUE >= TYPE_COUNT
+        | ARGUMENT_TYPE_ARRAY := TYPE_ARGUMENT and (ARGUMENT_TYPE_NEW or TYPE_KIND[ARGUMENT_VALUE] = TK_ARRAY)
+        | NAMED_TYPE := if not ARGUMENT_TYPE_ARRAY then ARGUMENT_VALUE
+                        else if ARGUMENT_TYPE_NEW then NEW_TYPE_ELEMENT[ARGUMENT_VALUE - TYPE_COUNT] else TYPE_ELEMENT[ARGUMENT_VALUE]
+        | FLAT_PREFIX := IS_ARGUMENT and FIRST_HALF and ARGUMENT_KIND = A_FLAT and MESSAGE_INSTANCE > 0
+        | NAME_HALF := IS_ARGUMENT and (FIRST_HALF and ARGUMENT_KIND = A_NAME or not FIRST_HALF and ARGUMENT_KIND = A_FLAT)
+        | PREFIX_INSTANCE := if PROGRAM_PREFIX then PROGRAM_KEY else MESSAGE_INSTANCE
+        | LONG_ARGUMENT := IS_ARGUMENT and FIRST_HALF and ARGUMENT_KIND = A_LONG
         | NAMED_TYPE_NAME := if TYPE_STATE[NAMED_TYPE] then MODEL_NAME[TYPE_NAME[NAMED_TYPE]] else TYPE_NAME[NAMED_TYPE]
         | SLICES_TYPE_NAME := TYPE_ARGUMENT and IS_ARGUMENT and FIRST_HALF /= ARGUMENT_TYPE_ARRAY
         | PRINTS_TYPE_SIZE := ARGUMENT_TYPE_ARRAY and FIRST_HALF
-        | SLICES_NAME := FIRST_HALF and (ARGUMENT_KIND = A_NAME or ARGUMENT_KIND = A_CODE and ARGUMENT_VALUE < C_SYMBOL_BASE)
-                         or SLICES_TYPE_NAME or PROGRAM_NAME or PROGRAM_PREFIX
-        | SLICED_NAME := if PROGRAM_PREFIX then MODEL_NAME[INSTANCE_MODEL[PROGRAM_KEY]] else if PROGRAM_NAME then PROGRAM_BASE else if ARGUMENT_KIND = A_CODE then ARGUMENT_VALUE - 1
+        | SLICES_NAME := NAME_HALF or FIRST_HALF and ARGUMENT_KIND = A_CODE and ARGUMENT_VALUE < C_SYMBOL_BASE
+                         or SLICES_TYPE_NAME or PROGRAM_NAME or PROGRAM_PREFIX or FLAT_PREFIX
+        | SLICED_NAME := if PROGRAM_PREFIX or FLAT_PREFIX then MODEL_NAME[INSTANCE_MODEL[PREFIX_INSTANCE]] else if PROGRAM_NAME then PROGRAM_BASE else if ARGUMENT_KIND = A_CODE then ARGUMENT_VALUE - 1
                          else if TYPE_ARGUMENT then NAMED_TYPE_NAME else NAME_BASE
         | QUOTES_TOKEN := FIRST_HALF and ARGUMENT_KIND = A_TOKEN and not ARGUMENT_EOF
         | SLICES_LITERAL := FIRST_HALF and ARGUMENT_KIND = A_LITERAL
+        | SLICES_TEXT := IS_ARGUMENT and FIRST_HALF and ARGUMENT_KIND = A_TEXT
         | SLICES_TOKEN := DUMPS_TOKENS and not IS_HEADER and SECTION = 1 or QUOTES_TOKEN or SLICES_LITERAL or PROGRAM_CLASS = IC_TOKEN
+                          or SLICES_TEXT
         | SLICED_TOKEN := if DUMPS_TOKENS then TOKEN else if DUMPS_PROGRAM then PROGRAM_KEY else ARGUMENT_VALUE
         | SLICES_CHARACTER := FIRST_HALF and ARGUMENT_KIND = A_CHARACTER
         | ROW_NUMBER_KIND := if IS_ROW then ROW_NUMBER[ROW] else ROW_NUMBER_NONE
         | HAS_NUMBER := DUMPS_TOKENS and (IS_HEADER or SECTION >= 2) or ROW_NUMBER_KIND /= ROW_NUMBER_NONE
-                        or FIRST_HALF and (ARGUMENT_KIND = A_NUMBER or ARGUMENT_KIND = A_NAME and NAME_SUFFIX > 0) or PRINTS_TYPE_SIZE
-                        or PROGRAM_NUMBERED or PROGRAM_SUFFIXED or PROGRAM_PREFIX
+                        or FIRST_HALF and ARGUMENT_KIND = A_NUMBER or NAME_HALF and NAME_SUFFIX > 0 or PRINTS_TYPE_SIZE
+                        or PROGRAM_NUMBERED or PROGRAM_SUFFIXED or PROGRAM_PREFIX or FLAT_PREFIX or LONG_ARGUMENT
         | NUMBER := if DUMPS_TOKENS then
                       (if IS_HEADER then long(TOKEN_COUNT) else if SECTION = 2 then long(TOKEN_LINE[TOKEN]) else long(TOKEN_COLUMN[TOKEN]))
                     else if PROGRAM_NUMBERED then PROGRAM_VALUE
                     else if PROGRAM_SUFFIXED then long(PROGRAM_SUFFIX)
-                    else if PROGRAM_PREFIX then long(INSTANCE_ORDINAL[PROGRAM_KEY])
+                    else if PROGRAM_PREFIX or FLAT_PREFIX then long(INSTANCE_ORDINAL[PREFIX_INSTANCE])
                     else if ROW_NUMBER_KIND = ROW_NUMBER_ERROR_LINE then long(MESSAGE_LINE)
                     else if ROW_NUMBER_KIND = ROW_NUMBER_ERROR_COLUMN then long(MESSAGE_COLUMN)
                     else if ROW_NUMBER_KIND = ROW_NUMBER_ERRNO then long(ERRNO)
-                    else if ARGUMENT_KIND = A_NAME then long(NAME_SUFFIX)
-                    else if TYPE_ARGUMENT then long(TYPE_SIZE[ARGUMENT_VALUE])
+                    else if NAME_HALF then long(NAME_SUFFIX)
+                    else if LONG_ARGUMENT then (if ARGUMENT = 0 then LW_LONG0 else LW_LONG1)
+                    else if TYPE_ARGUMENT then
+                      long(if ARGUMENT_TYPE_NEW then NEW_TYPE_SIZE[ARGUMENT_VALUE - TYPE_COUNT] else TYPE_SIZE[ARGUMENT_VALUE])
                     else long(ARGUMENT_VALUE)
         | PREFIX := if DUMPS_TOKENS then (if IS_HEADER then SECTION_FRAGMENT[SECTION] else if SECTION = 0 then KIND_FRAGMENT[KIND] else 0)
                     else if DUMPS_PROGRAM then
@@ -2574,21 +3605,23 @@ process SIGC =
                           else if SLICES_CHARACTER then ERROR_CHARACTER_LENGTH
                           else if SLICES_NAME then NAME_LENGTH[SLICED_NAME]
                           else if SLICE_PATH then PATH_LENGTH else 0
-        | FOLDS := SLICES_TOKEN and TOKEN_KIND[SLICED_TOKEN] = ubyte(KIND_KEYWORD)
-        | INFIX := if PROGRAM_PREFIX then F_HASH else if PROGRAM_NAME and PROGRAM_TAG = 1 then F_STATE_SUFFIX
+        | FOLDS := SLICES_TOKEN and not SLICES_TEXT and TOKEN_KIND[SLICED_TOKEN] = ubyte(KIND_KEYWORD)
+        | INFIX := if PROGRAM_PREFIX or FLAT_PREFIX then F_HASH else if PROGRAM_NAME and PROGRAM_TAG = 1 then F_STATE_SUFFIX
                    else if PROGRAM_SUFFIXED then (if PROGRAM_BASE /= N_ON_MARK then F_QUOTE else 0)
                    else if SLICES_TYPE_NAME and TYPE_STATE[NAMED_TYPE] then F_STATE_SUFFIX
-                   else if FIRST_HALF and ARGUMENT_KIND = A_NAME and NAME_SUFFIX > 0 and NAME_BASE /= N_ON_MARK then F_QUOTE else 0
+                   else if NAME_HALF and NAME_SUFFIX > 0 and NAME_BASE /= N_ON_MARK then F_QUOTE else 0
         | SUFFIX := if DUMPS_TOKENS then 0 else if DUMPS_PROGRAM then
                       (if PROGRAM_CLASS = IC_SIZE then F_SIZE_CLOSE else if PROGRAM_PREFIX then F_DOT
                        else if PROGRAM_NAME and PROGRAM_TAG = 2 then F_CALL_SUFFIX else 0)
                     else if IS_ROW then ROW_SUFFIX[ROW]
                     else if QUOTES_TOKEN then F_QUOTE
+                    else if FLAT_PREFIX then F_DOT
                     else if PRINTS_TYPE_SIZE then F_SIZE_CLOSE
                     else if SLICES_LITERAL and TOKEN_LENGTH[SLICED_TOKEN] > 20 then F_ELLIPSIS else 0
         | NEWLINE := DUMPS_TOKENS or IS_ROW and ROW_NEWLINE[ROW] = 1 or PROGRAM_CLASS = IC_HEADER or PROGRAM_CLASS = IC_NEWLINE
         | SEPARATES := DUMPS_PROGRAM and DUMP_SEPARATES[ITEM_INDEX]
         | NEGATIVE := HAS_NUMBER and NUMBER < long(0) and not PROGRAM_UNSIGNED and not TYPE_ARGUMENT
+                      and not (LONG_ARGUMENT and (ARGUMENT = 1 or LW_LONG0_UNSIGNED))
         | MAGNITUDE := if NEGATIVE then ulong(-NUMBER) else ulong(NUMBER)
         | DIGITS := if not HAS_NUMBER then 0
                     else 1 + integer(MAGNITUDE >= POWERS_OF_TEN[1]) + integer(MAGNITUDE >= POWERS_OF_TEN[2])
@@ -2697,6 +3730,18 @@ process SIGC =
     constant integer BUCKET_CAP = 65536;
     constant integer PARSE_CAP = 268435456;
     constant integer FINAL_CAP = 8388608;
+    constant integer ROWS_CAP = 4194304;
+    constant integer HASH_HEAD_CAP = 4194304;
+    constant integer HASH_NODE_CAP = 2097152;
+    constant integer NEW_TYPE_CAP = 65536;
+    constant integer NEW_TABLE_CAP = 65536;
+    constant integer IOTA_CAP = 131072;
+    constant integer LOWER_STACK_CAP = 65536;
+    constant integer ROW_DEPENDENCE_CAP = 4194304;
+    constant integer SEGMENT_CAP = 4194304;
+    constant ulong HASH_K1 = ulong(2685821657736338717);
+    constant ulong HASH_K2 = ulong(4354685564936845355);
+    constant integer HASH_SHIFT = 42;
     constant integer PRE_IDLE = 0;
     constant integer PRE_NAME = 1;
     constant integer PRE_EQUAL = 2;
@@ -2931,8 +3976,8 @@ process SIGC =
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     constant [32] short SYMBOL_FRAGMENT = [
-        170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193,
-        194, 195, 24, 11, 12, 1, 196, 197];
+        208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231,
+        232, 233, 24, 11, 12, 1, 234, 235];
     constant integer OP_CONST = 0;
     constant integer OP_SIGNAL = 1;
     constant integer OP_ENUMCONST = 2;
@@ -2971,15 +4016,15 @@ process SIGC =
     constant integer OP_OPEN_SQUARE = 35;
     constant integer OP_IF_MARK = 36;
     constant integer OP_THEN_MARK = 37;
-    constant [39] short OP_FRAGMENT = [
+    constant [48] short OP_FRAGMENT = [
         37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-        61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75];
-    constant [39] short OP_IS_OPENER = [
+        61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 23, 83];
+    constant [48] short OP_IS_OPENER = [
         0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0];
-    constant [39] short OP_ARITY = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    constant [48] short OP_ARITY = [
         0, 0, 0, 2, 1, 1, 2, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2];
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2];
     constant [104] short BINARY_OP = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 14, 13, 17, 16, 15, 0, 28, 29, 30, 0, 0, 0, 31, 0, 0, 0, 0, 0, 0, 0,
@@ -3018,7 +4063,7 @@ process SIGC =
     constant integer TK_ARRAY = 5;
     constant integer TK_EXTERNAL = 6;
     constant [7] short TYPE_KIND_FRAGMENT = [
-        76, 77, 78, 79, 80, 81, 82];
+        84, 85, 86, 87, 88, 89, 90];
     constant [10] short BUILTIN_KIND = [
         0, 1, 2, 2, 2, 2, 2, 2, 2, 3];
     constant [10] short BUILTIN_BYTES = [
@@ -3029,12 +4074,12 @@ process SIGC =
     constant integer ROLE_OUTPUT = 1;
     constant integer ROLE_LOCAL = 2;
     constant [3] short ROLE_FRAGMENT = [
-        83, 84, 85];
-    constant integer F_ROLE_SIGNAL = 140;
-    constant integer F_ROLE_TYPE = 141;
-    constant integer F_ROLE_MODEL = 142;
-    constant integer F_ROLE_CONSTANT = 143;
-    constant integer F_ROLE_LABEL = 144;
+        91, 92, 93];
+    constant integer F_ROLE_SIGNAL = 173;
+    constant integer F_ROLE_TYPE = 174;
+    constant integer F_ROLE_MODEL = 175;
+    constant integer F_ROLE_CONSTANT = 176;
+    constant integer F_ROLE_LABEL = 177;
     constant integer COLUMN_COUNT = 54;
     constant integer COL_NAME = 0;
     constant integer COL_TYPES_KIND = 1;
@@ -3090,33 +4135,34 @@ process SIGC =
     constant integer COL_DEPENDENCE_POSITIONS = 51;
     constant integer COL_DEPENDENCE_MODELS = 52;
     constant integer COL_DEPENDENCE_GUARDS = 53;
-    constant [54] short COLUMN_FRAGMENT = [
-        86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109,
-        110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133,
-        134, 135, 136, 137, 138, 139];
-    constant integer F_CAP_SRC = 145;
-    constant integer F_CAP_TOKENS = 146;
-    constant integer F_CAP_NAMES = 147;
-    constant integer F_CAP_TYPES = 148;
-    constant integer F_CAP_VALUES = 149;
-    constant integer F_CAP_MODELS = 150;
-    constant integer F_CAP_SIGNALS = 151;
-    constant integer F_CAP_CONSTANTS = 152;
-    constant integer F_CAP_TABLES = 153;
-    constant integer F_CAP_EQUATIONS = 154;
-    constant integer F_CAP_ENTRIES = 155;
-    constant integer F_CAP_GUARDS = 156;
-    constant integer F_CAP_LABELS = 157;
-    constant integer F_CAP_LOOPS = 158;
-    constant integer F_CAP_GROUPS = 159;
-    constant integer F_CAP_DEPENDENCES = 160;
-    constant integer F_CAP_STACK = 161;
-    constant integer F_CAP_PATHS = 162;
-    constant integer F_CAP_LOCALS = 163;
-    constant integer F_CAP_PARSE = 164;
-    constant integer F_CAP_FINISH = 165;
-    constant integer F_CAP_ITEMS = 166;
-    constant integer F_CAP_OUTPUT = 167;
+    constant [79] short COLUMN_FRAGMENT = [
+        94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
+        118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141,
+        142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165,
+        166, 167, 168, 169, 170, 171, 172];
+    constant integer F_CAP_SRC = 178;
+    constant integer F_CAP_TOKENS = 179;
+    constant integer F_CAP_NAMES = 180;
+    constant integer F_CAP_TYPES = 181;
+    constant integer F_CAP_VALUES = 182;
+    constant integer F_CAP_MODELS = 183;
+    constant integer F_CAP_SIGNALS = 184;
+    constant integer F_CAP_CONSTANTS = 185;
+    constant integer F_CAP_TABLES = 186;
+    constant integer F_CAP_EQUATIONS = 187;
+    constant integer F_CAP_ENTRIES = 188;
+    constant integer F_CAP_GUARDS = 189;
+    constant integer F_CAP_LABELS = 190;
+    constant integer F_CAP_LOOPS = 191;
+    constant integer F_CAP_GROUPS = 192;
+    constant integer F_CAP_DEPENDENCES = 193;
+    constant integer F_CAP_STACK = 194;
+    constant integer F_CAP_PATHS = 195;
+    constant integer F_CAP_LOCALS = 196;
+    constant integer F_CAP_PARSE = 197;
+    constant integer F_CAP_FINISH = 198;
+    constant integer F_CAP_ITEMS = 199;
+    constant integer F_CAP_OUTPUT = 200;
     constant [4] short SECTION_FRAGMENT = [
         27, 28, 29, 30];
     constant [6] short KIND_FRAGMENT = [
@@ -3180,34 +4226,48 @@ process SIGC =
     constant integer T_NO_OUTPUT = 48;
     constant integer T_HAS_OUTPUT = 49;
     constant integer T_NOT_STATE = 50;
-    constant [61] short TEMPLATE_PIECE0 = [
-        0, 198, 199, 200, 202, 0, 0, 0, 206, 208, 210, 211, 212, 213, 214, 216, 218, 219, 221, 223, 208, 208, 208, 208,
-        208, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 248, 245, 0, 0, 0, 246, 0,
-        257, 257, 0, 261, 245, 263, 265, 266, 267, 257, 257, 257, 257];
-    constant [61] short TEMPLATE_PIECE1 = [
-        0, 7, 0, 201, 0, 203, 204, 4, 207, 209, 0, 0, 0, 0, 215, 217, 0, 220, 222, 205, 224, 224, 224, 224,
-        224, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 209, 247, 249, 251, 252, 253, 254, 255, 256,
-        258, 259, 260, 209, 262, 264, 0, 0, 268, 209, 269, 270, 271];
-    constant [61] short TEMPLATE_PIECE2 = [
-        0, 0, 0, 0, 0, 0, 0, 205, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 225, 226, 227, 228,
-        229, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 250, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 272];
-    constant [61] short TEMPLATE_PIECE3 = [
+    constant [115] short TEMPLATE_PIECE0 = [
+        0, 236, 237, 238, 240, 0, 0, 0, 244, 246, 248, 249, 250, 251, 252, 254, 256, 257, 259, 261, 246, 246, 246, 246,
+        246, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 286, 283, 0, 0, 0, 284, 0,
+        295, 295, 0, 299, 283, 301, 303, 304, 305, 295, 295, 295, 295, 299, 0, 313, 252, 315, 0, 313, 319, 320, 322, 323,
+        325, 326, 328, 329, 0, 0, 332, 333, 334, 335, 336, 337, 339, 340, 326, 342, 344, 0, 346, 326, 326, 326, 326, 326,
+        326, 354, 355, 261, 261, 252, 252, 358, 359, 299, 361, 363, 299, 254, 299, 366, 367, 299, 369];
+    constant [115] short TEMPLATE_PIECE1 = [
+        0, 7, 0, 239, 0, 241, 242, 4, 245, 247, 0, 0, 0, 0, 253, 255, 0, 258, 260, 243, 262, 262, 262, 262,
+        262, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 247, 285, 287, 289, 290, 291, 292, 293, 294,
+        296, 297, 298, 247, 300, 302, 0, 0, 306, 247, 307, 308, 309, 247, 311, 314, 247, 316, 317, 318, 0, 321, 288, 324,
+        0, 327, 0, 0, 330, 331, 0, 0, 0, 0, 0, 338, 288, 0, 341, 343, 0, 345, 347, 348, 349, 350, 351, 352,
+        353, 0, 0, 247, 356, 247, 357, 0, 0, 360, 362, 0, 262, 364, 365, 0, 0, 368, 0];
+    constant [115] short TEMPLATE_PIECE2 = [
+        0, 0, 0, 0, 0, 0, 0, 243, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 263, 264, 265, 266,
+        267, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 288, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 310, 0, 312, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 343, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 266, 0, 0, 0, 0, 0, 0];
+    constant [115] short TEMPLATE_PIECE3 = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        230, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [61] short TEMPLATE_KIND0 = [
+        268, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    constant [115] short TEMPLATE_KIND0 = [
         0, 8, 7, 6, 1, 3, 3, 7, 2, 3, 1, 0, 1, 0, 4, 3, 0, 3, 1, 3, 3, 3, 3, 3,
         3, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-        3, 3, 3, 3, 3, 3, 0, 0, 3, 3, 3, 3, 3];
-    constant [61] short TEMPLATE_KIND1 = [
+        3, 3, 3, 3, 3, 3, 0, 0, 3, 3, 3, 3, 3, 9, 3, 3, 10, 3, 3, 3, 0, 3, 4, 5,
+        4, 7, 0, 0, 9, 9, 0, 0, 0, 0, 0, 11, 4, 0, 7, 4, 0, 3, 4, 7, 7, 7, 7, 7,
+        7, 0, 0, 3, 3, 3, 3, 0, 9, 9, 9, 0, 9, 9, 9, 0, 0, 9, 0];
+    constant [115] short TEMPLATE_KIND1 = [
         0, 0, 0, 1, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4,
         4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 3, 0, 3, 3, 0, 0,
-        0, 0, 3, 0, 0, 0, 0, 0, 6, 0, 0, 0, 5];
-    constant [61] short TEMPLATE_KIND2 = [
+        0, 0, 3, 0, 0, 0, 0, 0, 6, 0, 0, 0, 5, 0, 5, 0, 0, 0, 10, 0, 0, 4, 4, 4,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 4, 0, 0, 4, 0, 0, 4, 0, 0, 4, 0, 0,
+        0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0];
+    constant [115] short TEMPLATE_KIND2 = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4,
         5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0];
+        0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0];
     constant integer LAYOUT_NONE = 0;
     constant integer LAYOUT_OS = 1;
     constant integer LAYOUT_COMPILE = 2;
@@ -3248,33 +4308,41 @@ process SIGC =
         ulong(1000000), ulong(10000000), ulong(100000000), ulong(1000000000), ulong(10000000000), ulong(100000000000),
         ulong(1000000000000), ulong(10000000000000), ulong(100000000000000), ulong(1000000000000000), ulong(10000000000000000), ulong(100000000000000000),
         ulong(1000000000000000000), ulong(-8446744073709551616)];
-    constant [3358] ubyte FRAGMENTS = ":: error: error  sigc: error: [Errno ] '...'end of file'none[][[]]]]][][nonenone][CONST [[ENUMCONST ['stateDEFINESEED#.'callkinds texts lines columns keywordnamesymbolnumberstringeofCONSTSIGNALENUMCONSTCALLDELAYPREVINDEXNEGNOTUWHENCLOCKIFBRANCHDEFAULTWHENXORORANDEQNELTLEGTGEADDSUBMULDIVMODSHLSHRNEXTPAIRRANGEOPEN_PARENOPEN_SQUAREIF_MARKTHEN_MARKEFFECTEVENTBOOLEANINTPOINTERENUMARRAYEXTERNALinputoutputlocalname types.kind types.bytes types.signed types.name types.values types.element types.size models.name models.kind models.parent models.line models.column models.labels signal_names signal_roles signal_types signal_models signal_positions constant_names constant_types constant_values table_types table_values equation_targets equation_ops equation_args equation_positions equation_loops equation_kinds equation_models equation_labels equation_guards guard_models guard_ops guard_args guard_positions guard_context guard_labels guard_signals label_names label_uses loop_names loop_positions loop_models constraint_groups constraint_positions constraint_models constraint_guards dependence_from dependence_to dependence_positions dependence_models dependence_guards signaltypemodelconstantlabelSRCTOKENSNAMESTYPESVALUESMODELSSIGNALSCONSTANTSTABLESEQUATIONSENTRIESGUARDSLABELSLOOPSGROUPSDEPENDENCESSTACKPATHSLOCALSPARSEFINISHITEMSOUTPUTINSTANCESINSTANTIATE(||)-->:::=^=/=<=>=..|$+-*/()=;,?!<>^{}unexpected character 'program exceeds compiler capacity: expected '', found expected a name, found  is a reserved name is the name of a model is declared twiceinteger literal  does not fit in longconstant  is not declaredexpected an integer constant, found array capacity must be strictly positiveexpected a type, found arrays of event are not supportedtype  is external; signals cannot have that typeinput signal  must be a scalararrays cannot be passed to modelsoutput  has an array type; outputs must be scalarunexpected  after the process modelenumerated value  has type  but its definition is a string but its definition is a list but its definition has an element of type  but its definition has type  but its definition has  elementsa conversion in a constant must name an integer typea constant must be defined by an integer literal, a conversion of one, or a list of themonly definitions are allowed inside iterateiterate cannot be nestediterate is not allowed inside a guarded process--> requires signal namesexpected ':=' or '^=', found the initial value of a delay must be a constantexpected a static parameter, found expected an expression, found expected 'then'expected 'else'unbalanced parenthesisexpected an operator, found label automaton  has no input; its control clock is the upper bound of its inputswrong number of arguments for : expected , found  cannot be placed on  cannot be guarded expects a state name of automaton  is not a label of automaton  needs exactly one Automaton_Initial_State is allowed only in an automatonmodel  has no output and cannot be used in an expression has an output and cannot be called as a process is not a state of automaton signal  cannot be used as a signalconversion to  expects one argumentindices expects a positive constantmodel calls are not allowed inside iterateunsafe model  is called from  takes no static parameters calls itself has  outputs; only models with at most one output can be called";
-    constant [273] short FRAGMENT_START = [
+    constant [5669] ubyte FRAGMENTS = ":: error: error  sigc: error: [Errno ] '...'end of file'none[][[]]]]][][nonenone][CONST [[ENUMCONST ['stateDEFINESEED#.'callkinds texts lines columns keywordnamesymbolnumberstringeofCONSTSIGNALENUMCONSTCALLDELAYPREVINDEXNEGNOTUWHENCLOCKIFBRANCHDEFAULTWHENXORORANDEQNELTLEGTGEADDSUBMULDIVMODSHLSHRNEXTPAIRRANGEOPEN_PARENOPEN_SQUAREIF_MARKTHEN_MARKEFFECTINPUTCOPYCONVERTTABLEELEMENTGATHERITERARGEVENTBOOLEANINTPOINTERENUMARRAYEXTERNALinputoutputlocalname types.kind types.bytes types.signed types.name types.values types.element types.size models.name models.kind models.parent models.line models.column models.labels signal_names signal_roles signal_types signal_models signal_positions constant_names constant_types constant_values table_types table_values equation_targets equation_ops equation_args equation_positions equation_loops equation_kinds equation_models equation_labels equation_guards guard_models guard_ops guard_args guard_positions guard_context guard_labels guard_signals label_names label_uses loop_names loop_positions loop_models constraint_groups constraint_positions constraint_models constraint_guards dependence_from dependence_to dependence_positions dependence_models dependence_guards rows.op rows.left rows.right rows.value rows.type rows.ctx rows.line rows.column rows.owner rows.loop rows.guard rows.groups rows.group_positions rows.dependence_from rows.dependence_to rows.war rows.snapshotted rows.effects.kind rows.effects.resource rows.effects.param loops.index loops.size loops.defined loops.snapshots loops.count signaltypemodelconstantlabelSRCTOKENSNAMESTYPESVALUESMODELSSIGNALSCONSTANTSTABLESEQUATIONSENTRIESGUARDSLABELSLOOPSGROUPSDEPENDENCESSTACKPATHSLOCALSPARSEFINISHITEMSOUTPUTINSTANCESINSTANTIATELOOKUPSROWSROW_DEPENDENCESSEGMENTSLOWER(||)-->:::=^=/=<=>=..|$+-*/()=;,?!<>^{}unexpected character 'program exceeds compiler capacity: expected '', found expected a name, found  is a reserved name is the name of a model is declared twiceinteger literal  does not fit in longconstant  is not declaredexpected an integer constant, found array capacity must be strictly positiveexpected a type, found arrays of event are not supportedtype  is external; signals cannot have that typeinput signal  must be a scalararrays cannot be passed to modelsoutput  has an array type; outputs must be scalarunexpected  after the process modelenumerated value  has type  but its definition is a string but its definition is a list but its definition has an element of type  but its definition has type  but its definition has  elementsa conversion in a constant must name an integer typea constant must be defined by an integer literal, a conversion of one, or a list of themonly definitions are allowed inside iterateiterate cannot be nestediterate is not allowed inside a guarded process--> requires signal namesexpected ':=' or '^=', found the initial value of a delay must be a constantexpected a static parameter, found expected an expression, found expected 'then'expected 'else'unbalanced parenthesisexpected an operator, found label automaton  has no input; its control clock is the upper bound of its inputswrong number of arguments for : expected , found  cannot be placed on  cannot be guarded expects a state name of automaton  is not a label of automaton  needs exactly one Automaton_Initial_State is allowed only in an automatonmodel  has no output and cannot be used in an expression has an output and cannot be called as a process is not a state of automaton signal  cannot be used as a signalconversion to  expects one argumentindices expects a positive constantmodel calls are not allowed inside iterateunsafe model  is called from  takes no static parameters calls itself has  outputs; only models with at most one output can be called expects  static parameters, found the word of  must be an integer constantthe resource of  must be an external type accesses an integer or pointer type, found  must fit in 32 bits':' is supported only as the right operand of nextinput 1 of  must be a pointer, found input 2 of store must have type input  of syscall must be an integer or a pointer, found input 1 of instruction must have type ulong, found operator  is not allowed inside iteratean array value can only be the whole definition of a signal[?] applies only to a signal name[?] is allowed only inside iterate[?] refers to a signal the iterate body does not defineindexing a value that is not an arraya range must start at 0the bound of a range must be an integeran array index must be an integernext expects 'index : value' on its rightconstant index  is outside 0..next expects a value of type $ is not supported on arrays expects scalar operandsoperator if expects operands of comparable types, found  and the condition of if must be boolean cannot be inside an if; gate it by its clock or its inputsno conversion from  to  expects a pointer and an integer offset expects integer operands expects operands of comparable types, found  expects operands of one type expects boolean operands expects unsigned operandsthe condition of when must be booleanthe initial value of a delay must match its type is ambiguous has no value the index of iterate must be an array of integersiterate body cannot define its index  in with is not defined by the iterate bodythe initial value of  cannot read a signal the iterate defineswith initializes an array only from an array constant or an array signal cannot be defined is defined twicea range defines an array of integersan array signal must be defined by a constant, indices, a gather, or next is never defineda range can only be the index of iteratenotwhenifdefaultxororandmoduloshlshrnext";
+    constant [381] short FRAGMENT_START = [
         0, 0, 1, 10, 16, 17, 37, 39, 40, 43, 56, 60, 61, 62, 64, 66, 69, 71, 76, 81, 89, 101, 107, 113,
         117, 118, 119, 124, 130, 136, 142, 150, 157, 161, 167, 173, 179, 182, 187, 193, 202, 206, 211, 215, 220, 223, 226, 231,
         236, 238, 244, 251, 255, 258, 260, 263, 265, 267, 269, 271, 273, 275, 278, 281, 284, 287, 290, 293, 296, 300, 304, 309,
-        319, 330, 337, 346, 352, 357, 364, 367, 374, 378, 383, 391, 396, 402, 407, 412, 423, 435, 448, 459, 472, 486, 497, 509,
-        521, 535, 547, 561, 575, 588, 601, 614, 628, 645, 660, 675, 691, 703, 716, 733, 746, 760, 779, 794, 809, 825, 841, 857,
-        870, 880, 891, 907, 921, 934, 948, 960, 971, 982, 997, 1009, 1027, 1048, 1066, 1084, 1100, 1114, 1135, 1153, 1171, 1177, 1181, 1186,
-        1194, 1199, 1202, 1208, 1213, 1218, 1224, 1230, 1237, 1246, 1252, 1261, 1268, 1274, 1280, 1285, 1291, 1302, 1307, 1312, 1318, 1323, 1329, 1334,
-        1340, 1349, 1360, 1362, 1364, 1367, 1369, 1371, 1373, 1375, 1377, 1379, 1381, 1382, 1383, 1384, 1385, 1386, 1387, 1388, 1389, 1390, 1391, 1392,
-        1393, 1394, 1395, 1396, 1397, 1398, 1399, 1421, 1456, 1466, 1475, 1498, 1517, 1540, 1558, 1574, 1595, 1604, 1620, 1656, 1696, 1719, 1752, 1757,
-        1800, 1813, 1830, 1863, 1870, 1912, 1923, 1947, 1964, 1974, 2005, 2034, 2077, 2106, 2130, 2139, 2191, 2279, 2322, 2346, 2393, 2418, 2447, 2494,
-        2529, 2559, 2574, 2589, 2611, 2639, 2645, 2655, 2720, 2750, 2761, 2769, 2790, 2808, 2843, 2872, 2914, 2946, 2952, 3002, 3050, 3079, 3086, 3113,
-        3127, 3148, 3183, 3225, 3238, 3254, 3281, 3294, 3299];
-    constant [273] short FRAGMENT_LENGTH = [
+        319, 330, 337, 346, 352, 357, 361, 368, 373, 380, 386, 390, 393, 398, 405, 408, 415, 419, 424, 432, 437, 443, 448, 453,
+        464, 476, 489, 500, 513, 527, 538, 550, 562, 576, 588, 602, 616, 629, 642, 655, 669, 686, 701, 716, 732, 744, 757, 774,
+        787, 801, 820, 835, 850, 866, 882, 898, 911, 921, 932, 948, 962, 975, 989, 1001, 1012, 1023, 1038, 1050, 1068, 1089, 1107, 1125,
+        1141, 1155, 1176, 1194, 1212, 1220, 1230, 1241, 1252, 1262, 1271, 1281, 1293, 1304, 1314, 1325, 1337, 1358, 1379, 1398, 1407, 1424, 1442, 1464,
+        1483, 1495, 1506, 1520, 1536, 1548, 1554, 1558, 1563, 1571, 1576, 1579, 1585, 1590, 1595, 1601, 1607, 1614, 1623, 1629, 1638, 1645, 1651, 1657,
+        1662, 1668, 1679, 1684, 1689, 1695, 1700, 1706, 1711, 1717, 1726, 1737, 1744, 1748, 1763, 1771, 1776, 1778, 1780, 1783, 1785, 1787, 1789, 1791,
+        1793, 1795, 1797, 1798, 1799, 1800, 1801, 1802, 1803, 1804, 1805, 1806, 1807, 1808, 1809, 1810, 1811, 1812, 1813, 1814, 1815, 1837, 1872, 1882,
+        1891, 1914, 1933, 1956, 1974, 1990, 2011, 2020, 2036, 2072, 2112, 2135, 2168, 2173, 2216, 2229, 2246, 2279, 2286, 2328, 2339, 2363, 2380, 2390,
+        2421, 2450, 2493, 2522, 2546, 2555, 2607, 2695, 2738, 2762, 2809, 2834, 2863, 2910, 2945, 2975, 2990, 3005, 3027, 3055, 3061, 3071, 3136, 3166,
+        3177, 3185, 3206, 3224, 3259, 3288, 3330, 3362, 3368, 3418, 3466, 3495, 3502, 3529, 3543, 3564, 3599, 3641, 3654, 3670, 3697, 3710, 3715, 3774,
+        3783, 3809, 3821, 3849, 3865, 3890, 3934, 3954, 4004, 4015, 4041, 4073, 4079, 4130, 4181, 4190, 4220, 4279, 4312, 4346, 4401, 4438, 4461, 4500,
+        4533, 4574, 4589, 4604, 4633, 4661, 4685, 4741, 4746, 4781, 4840, 4859, 4863, 4903, 4928, 4973, 5002, 5027, 5053, 5090, 5138, 5151, 5165, 5214,
+        5251, 5294, 5315, 5356, 5428, 5446, 5463, 5499, 5572, 5589, 5629, 5632, 5636, 5638, 5645, 5648, 5650, 5653, 5659, 5662, 5665];
+    constant [381] short FRAGMENT_LENGTH = [
         0, 1, 9, 6, 1, 20, 2, 1, 3, 13, 4, 1, 1, 2, 2, 3, 2, 5, 5, 8, 12, 6, 6, 4,
         1, 1, 5, 6, 6, 6, 8, 7, 4, 6, 6, 6, 3, 5, 6, 9, 4, 5, 4, 5, 3, 3, 5, 5,
         2, 6, 7, 4, 3, 2, 3, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 5, 10,
-        11, 7, 9, 6, 5, 7, 3, 7, 4, 5, 8, 5, 6, 5, 5, 11, 12, 13, 11, 13, 14, 11, 12, 12,
-        14, 12, 14, 14, 13, 13, 13, 14, 17, 15, 15, 16, 12, 13, 17, 13, 14, 19, 15, 15, 16, 16, 16, 13,
-        10, 11, 16, 14, 13, 14, 12, 11, 11, 15, 12, 18, 21, 18, 18, 16, 14, 21, 18, 18, 6, 4, 5, 8,
-        5, 3, 6, 5, 5, 6, 6, 7, 9, 6, 9, 7, 6, 6, 5, 6, 11, 5, 5, 6, 5, 6, 5, 6,
-        9, 11, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 22, 35, 10, 9, 23, 19, 23, 18, 16, 21, 9, 16, 36, 40, 23, 33, 5, 43,
-        13, 17, 33, 7, 42, 11, 24, 17, 10, 31, 29, 43, 29, 24, 9, 52, 88, 43, 24, 47, 25, 29, 47, 35,
-        30, 15, 15, 22, 28, 6, 10, 65, 30, 11, 8, 21, 18, 35, 29, 42, 32, 6, 50, 48, 29, 7, 27, 14,
-        21, 35, 42, 13, 16, 27, 13, 5, 59];
+        11, 7, 9, 6, 5, 4, 7, 5, 7, 6, 4, 3, 5, 7, 3, 7, 4, 5, 8, 5, 6, 5, 5, 11,
+        12, 13, 11, 13, 14, 11, 12, 12, 14, 12, 14, 14, 13, 13, 13, 14, 17, 15, 15, 16, 12, 13, 17, 13,
+        14, 19, 15, 15, 16, 16, 16, 13, 10, 11, 16, 14, 13, 14, 12, 11, 11, 15, 12, 18, 21, 18, 18, 16,
+        14, 21, 18, 18, 8, 10, 11, 11, 10, 9, 10, 12, 11, 10, 11, 12, 21, 21, 19, 9, 17, 18, 22, 19,
+        12, 11, 14, 16, 12, 6, 4, 5, 8, 5, 3, 6, 5, 5, 6, 6, 7, 9, 6, 9, 7, 6, 6, 5,
+        6, 11, 5, 5, 6, 5, 6, 5, 6, 9, 11, 7, 4, 15, 8, 5, 2, 2, 3, 2, 2, 2, 2, 2,
+        2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 22, 35, 10, 9,
+        23, 19, 23, 18, 16, 21, 9, 16, 36, 40, 23, 33, 5, 43, 13, 17, 33, 7, 42, 11, 24, 17, 10, 31,
+        29, 43, 29, 24, 9, 52, 88, 43, 24, 47, 25, 29, 47, 35, 30, 15, 15, 22, 28, 6, 10, 65, 30, 11,
+        8, 21, 18, 35, 29, 42, 32, 6, 50, 48, 29, 7, 27, 14, 21, 35, 42, 13, 16, 27, 13, 5, 59, 9,
+        26, 12, 28, 16, 25, 44, 20, 50, 11, 26, 32, 6, 51, 51, 9, 30, 59, 33, 34, 55, 37, 23, 39, 33,
+        41, 15, 15, 29, 28, 24, 56, 5, 35, 59, 19, 4, 40, 25, 45, 29, 25, 26, 37, 48, 13, 14, 49, 37,
+        43, 21, 41, 72, 18, 17, 36, 73, 17, 40, 3, 4, 2, 7, 3, 2, 3, 6, 3, 3, 4];
     constant integer BUILTIN_EVENT = 0;
     constant integer BUILTIN_BOOLEAN = 1;
     constant integer BUILTIN_SHORT = 2;
@@ -3404,14 +4472,16 @@ process SIGC =
     constant integer LIST_NUMBERS = 2;
     constant integer LIST_OPS = 3;
     constant integer LIST_ARGS = 4;
-    constant [54] short COLUMN_SHAPE = [
+    constant [79] short COLUMN_SHAPE = [
         0, 2, 1, 1, 4, 7, 1, 1, 0, 0, 1, 1, 1, 7, 0, 2, 1, 1, 3, 0, 1, 1, 1, 7,
         0, 7, 7, 3, 1, 2, 1, 7, 7, 1, 7, 7, 3, 7, 7, 0, 0, 5, 0, 3, 1, 8, 3, 1,
-        7, 6, 6, 3, 1, 7];
-    constant [54] short COLUMN_LIST_KIND = [
+        7, 6, 6, 3, 1, 7, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 7, 3, 1, 1, 7, 1, 0,
+        1, 1, 1, 1, 7, 1, 1];
+    constant [79] short COLUMN_LIST_KIND = [
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
         0, 3, 4, 0, 0, 0, 0, 1, 2, 0, 3, 4, 0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        2, 0, 0, 0, 0, 2];
+        2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0,
+        0, 0, 0, 0, 2, 0, 0];
     constant integer SA_NAME = 0;
     constant integer SA_NUMBER = 1;
     constant integer SA_FRAGMENT = 2;
@@ -3450,14 +4520,15 @@ process SIGC =
     constant [36] short SCALAR_PROGRAM = [
         0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 4, 0, 0, 5, 6, 0, 0, 1, 0, 3, 4,
         0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant integer OP_COUNT = 39;
+    constant integer OP_COUNT = 48;
     constant integer ARG_WIDTH = 13;
     constant integer CALL_PARAMS_STEP = 4;
     constant integer PARAM_STEPS = 6;
-    constant [42] short ARG_LENGTH = [
+    constant [51] short ARG_LENGTH = [
         4, 5, 6, 7, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 7, 5, 11, 13];
-    constant [546] short ARG_PROGRAM = [
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 7, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        5, 11, 13];
+    constant [663] short ARG_PROGRAM = [
         0, 5, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 4, 1, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 7, 8, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 2, 14, 15, 1, 0, 0,
         0, 0, 0, 0, 0, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 1, 0, 0, 0,
@@ -3479,15 +4550,20 @@ process SIGC =
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 2, 14, 15, 1, 0, 0, 0,
-        0, 0, 0, 0, 3, 4, 11, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 0, 12, 0, 5, 6,
-        1, 1, 1, 0, 0, 0, 3, 4, 0, 13, 0, 7, 8, 9, 10, 1, 1, 1];
+        0, 0, 0, 0, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 1, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 1, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 1,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3,
+        4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 3, 4, 11, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 0, 12, 0, 5, 6, 1, 1, 1,
+        0, 0, 0, 3, 4, 0, 13, 0, 7, 8, 9, 10, 1, 1, 1];
     constant integer F_HASH = 24;
     constant integer F_DOT = 25;
     constant integer F_CALL_SUFFIX = 26;
     constant integer N_INDICES = 53;
     constant integer OP_EFFECT = 38;
-    constant integer F_CAP_INSTANCES = 168;
-    constant integer F_CAP_INSTANTIATE = 169;
+    constant integer F_CAP_INSTANCES = 201;
+    constant integer F_CAP_INSTANTIATE = 202;
     constant integer T_SIGNAL_UNDECLARED = 51;
     constant integer T_LABEL_AS_SIGNAL = 52;
     constant integer T_CONVERSION_ONE = 53;
@@ -3519,6 +4595,140 @@ process SIGC =
     constant integer IP_EMIT = 15;
     constant integer IP_DONE = 16;
     constant integer IP_FAILED = 17;
+    constant integer OP_INPUT = 39;
+    constant integer OP_COPY = 40;
+    constant integer OP_CONVERT = 41;
+    constant integer OP_TABLE = 42;
+    constant integer OP_ELEMENT = 43;
+    constant integer OP_GATHER = 44;
+    constant integer OP_ITER = 45;
+    constant integer OP_SEED = 46;
+    constant integer OP_ARG = 47;
+    constant [48] short OP_MONOCHRONOUS = [
+        0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1];
+    constant [48] short OP_TEXT_FRAGMENT = [
+        0, 0, 0, 0, 219, 0, 0, 221, 370, 371, 233, 372, 372, 373, 371, 374, 375, 376, 226, 214, 231, 215, 232, 216,
+        220, 221, 222, 223, 377, 378, 379, 380, 1, 217, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    constant integer COLUMN_TOTAL = 79;
+    constant integer COL_ROWS_OP = 54;
+    constant integer COL_ROWS_LEFT = 55;
+    constant integer COL_ROWS_RIGHT = 56;
+    constant integer COL_ROWS_VALUE = 57;
+    constant integer COL_ROWS_TYPE = 58;
+    constant integer COL_ROWS_CTX = 59;
+    constant integer COL_ROWS_LINE = 60;
+    constant integer COL_ROWS_COLUMN = 61;
+    constant integer COL_ROWS_OWNER = 62;
+    constant integer COL_ROWS_LOOP = 63;
+    constant integer COL_ROWS_GUARD = 64;
+    constant integer COL_ROWS_GROUPS = 65;
+    constant integer COL_ROWS_GROUP_POSITIONS = 66;
+    constant integer COL_ROWS_DEPENDENCE_FROM = 67;
+    constant integer COL_ROWS_DEPENDENCE_TO = 68;
+    constant integer COL_ROWS_WAR = 69;
+    constant integer COL_ROWS_SNAPSHOTTED = 70;
+    constant integer COL_ROWS_EFFECTS_KIND = 71;
+    constant integer COL_ROWS_EFFECTS_RESOURCE = 72;
+    constant integer COL_ROWS_EFFECTS_PARAM = 73;
+    constant integer COL_LOOPS_INDEX = 74;
+    constant integer COL_LOOPS_SIZE = 75;
+    constant integer COL_LOOPS_DEFINED = 76;
+    constant integer COL_LOOPS_SNAPSHOTS = 77;
+    constant integer COL_LOOPS_COUNT = 78;
+    constant integer F_CAP_LOOKUPS = 203;
+    constant integer F_CAP_ROWS = 204;
+    constant integer F_CAP_ROW_DEPENDENCES = 205;
+    constant integer F_CAP_SEGMENTS = 206;
+    constant integer F_CAP_LOWER = 207;
+    constant integer A_FLAT = 9;
+    constant integer A_TEXT = 10;
+    constant integer A_LONG = 11;
+    constant integer T_FLAT_UNDECLARED = 61;
+    constant integer T_STATIC_COUNT = 62;
+    constant integer T_WORD_CONSTANT = 63;
+    constant integer T_TYPE_UNDECLARED_TEXT = 64;
+    constant integer T_RESOURCE_EXTERNAL = 65;
+    constant integer T_ACCESS_TYPE = 66;
+    constant integer T_WORD_RANGE = 67;
+    constant integer T_PAIR_OPERAND = 68;
+    constant integer T_INPUT_POINTER = 69;
+    constant integer T_STORE_TYPE = 70;
+    constant integer T_SYSCALL_INPUT = 71;
+    constant integer T_INSTRUCTION_INPUT = 72;
+    constant integer T_NOT_IN_ITERATE = 73;
+    constant integer T_ARRAY_VALUE = 74;
+    constant integer T_PREV_SIGNAL = 75;
+    constant integer T_PREV_OUTSIDE = 76;
+    constant integer T_PREV_UNDEFINED = 77;
+    constant integer T_NOT_ARRAY = 78;
+    constant integer T_RANGE_START = 79;
+    constant integer T_RANGE_BOUND = 80;
+    constant integer T_INDEX_INTEGER = 81;
+    constant integer T_NEXT_PAIR = 82;
+    constant integer T_INDEX_RANGE = 83;
+    constant integer T_NEXT_TYPE = 84;
+    constant integer T_DELAY_ARRAY = 85;
+    constant integer T_SCALAR_OPERANDS = 86;
+    constant integer T_IF_TYPES = 87;
+    constant integer T_IF_CONDITION = 88;
+    constant integer T_EFFECT_IN_IF = 89;
+    constant integer T_NO_CONVERSION = 90;
+    constant integer T_POINTER_OFFSET = 91;
+    constant integer T_INTEGER_OPERANDS = 92;
+    constant integer T_COMPARABLE = 93;
+    constant integer T_ONE_TYPE = 94;
+    constant integer T_BOOLEAN_OPERANDS = 95;
+    constant integer T_UNSIGNED_OPERANDS = 96;
+    constant integer T_WHEN_CONDITION = 97;
+    constant integer T_DELAY_MATCH = 98;
+    constant integer T_ENUM_UNDECLARED = 99;
+    constant integer T_ENUM_AMBIGUOUS = 100;
+    constant integer T_TYPE_UNDECLARED = 101;
+    constant integer T_NO_VALUE = 102;
+    constant integer T_ITERATE_INDEX = 103;
+    constant integer T_INDEX_DEFINED = 104;
+    constant integer T_WITH_UNDEFINED = 105;
+    constant integer T_WITH_READS = 106;
+    constant integer T_WITH_ARRAY = 107;
+    constant integer T_SIGNAL_TYPE = 108;
+    constant integer T_INPUT_DEFINED = 109;
+    constant integer T_DEFINED_TWICE = 110;
+    constant integer T_RANGE_DEFINES = 111;
+    constant integer T_ARRAY_DEFINITION = 112;
+    constant integer T_NEVER_DEFINED = 113;
+    constant integer T_RANGE_INDEX = 114;
+    constant integer LS_SIGNAL = 0;
+    constant integer LS_LABEL = 1;
+    constant integer LS_VALUE = 2;
+    constant integer LS_ARRAY = 3;
+    constant integer LS_TABLE = 4;
+    constant integer LS_LOOP = 5;
+    constant integer LS_EQUATION = 6;
+    constant integer LS_GROUP = 7;
+    constant integer LS_ROWS = 8;
+    constant integer LS_START = 8;
+    constant integer LS_SCAN = 9;
+    constant integer LS_ENTRY = 10;
+    constant integer LS_NEVER = 11;
+    constant integer LS_MEMBERS = 12;
+    constant integer LS_DONE = 13;
+    constant integer LS_FAILED = 14;
+    constant integer PS_DEPENDENCE = 0;
+    constant integer PS_ROWS = 1;
+    constant integer PS_COUNT = 2;
+    constant integer PS_PREFIX = 2;
+    constant integer PS_PLACE = 3;
+    constant integer PS_WALK = 4;
+    constant integer PS_SIZE = 6;
+    constant integer PS_DONE = 7;
+    constant integer PS_FAILED = 8;
+    constant integer XS_PLACE = 0;
+    constant integer XS_PAIRS = 1;
+    constant integer XS_PREV = 2;
+    constant integer XS_DONE = 3;
+    constant integer XS_FAILED = 4;
+    constant integer PS_LABELSUM = 5;
     type ARGS = external;
     type OS = external;
     type FILE = external;
@@ -3809,5 +5019,107 @@ process SIGC =
       CALL_HAS_OUTPUT, CREATES_INSTANCE, NEW_PURE, INSTANTIATE_FAILED, INSTANTIATE_INCOMPLETE, FLAT_READY, FLAT_DUMP,
       WALK_ROW_CALL, FLAT_PATH_COLUMN, FROM_INHERITED_PATH, LIST_CALL, NAME_CALL_NOW, PREFIX_DUE, WALK_PREFIXED,
       PROGRAM_PREFIX;
-    long SPAN_BOUND, INSTANTIATE_BOUND, FLAT_ROW_TOTAL, FLAT_DUMP_BOUND, PROGRAM_DUMP_BOUND, EMITTED_VALUE;
+    long SPAN_BOUND, INSTANTIATE_BOUND, FLAT_ROW_TOTAL, FLAT_DUMP_BOUND, PROGRAM_DUMP_BOUND, EMITTED_VALUE, ROWS_DUMP_BOUND,
+      ROWS_NUMBER_VALUE;
+    integer DUMP_COLUMN_END, ROWS_COLUMN_ROWS, ROWS_TOKEN_NOW, MESSAGE_INSTANCE, PREFIX_INSTANCE, LW_ENUM_ARGUMENT0,
+      LW_INDEX_TOKEN;
+    boolean ARGUMENT_TYPE_NEW, FLAT_PREFIX, NAME_HALF, LONG_ARGUMENT, SLICES_TEXT;
+    [HASH_NODE_CAP] long HN_A, HN_B;
+    [HASH_NODE_CAP] integer HN_VALUE, HN_NEXT;
+    [HASH_HEAD_CAP] integer HASH_HEAD;
+    [NAME_CAP] integer HOLDER_COUNT, HOLDER_TYPE;
+    [NEW_TYPE_CAP] integer NEW_TYPE_ELEMENT;
+    [NEW_TYPE_CAP] ulong NEW_TYPE_SIZE;
+    [ROWS_CAP] integer ROWS_OP, ROWS_LEFT, ROWS_RIGHT, ROWS_TYPE, ROWS_TOKEN, ROWS_OWNER, ROWS_LOOP, ROWS_GUARD,
+      FIRST_EFFECT, EFFECT_KIND, EFFECT_RESOURCE, LEFT_HEAD, LEFT_NEXT, LEFT_TAIL, RIGHT_HEAD, RIGHT_NEXT, RIGHT_TAIL,
+      PREV_LIST;
+    [ROWS_CAP] long ROWS_VALUE, EFFECT_PARAM;
+    [ROWS_CAP] boolean ROWS_CTX;
+    [SIGNAL_CAP] integer LW_SIGNAL_KEY, SIGNAL_LOOP_MARK, SIGNAL_TOP, SIGNAL_DEF_TOKEN, SIGNAL_DEF_GUARD, DEF_START,
+      DEF_END, DEFINED_LIST;
+    [IOTA_CAP] integer LW_IOTA;
+    [NEW_TABLE_CAP] integer NEW_TABLE_TYPE;
+    [LOOP_CAP] integer LOOP_INDEX, LOOP_DEF_TOTAL, LOOP_DEF_START, LOOP_DEF_FILL;
+    [LOOP_CAP] ulong LOOP_SIZE;
+    [EQUATION_CAP] integer LW_EQ_SIGNAL, LW_GUARD_MARK, EQ_ROW_START, EQ_ROW_END, EQ_ROW_SIGNAL;
+    [GROUP_CAP] integer LW_GROUP_GUARD;
+    [MEMBER_CAP] integer GROUP_MEMBER_ROW;
+    [LOWER_STACK_CAP] integer LW_STACK;
+    [DEPENDENCE_CAP] integer PO_FROM_SIGNAL, PO_FROM_LABEL, PO_TO_SIGNAL, PO_TO_LABEL;
+    [LABEL_CAP] boolean LABEL_NEEDED;
+    [LABEL_CAP] integer LABEL_ROW_TOTAL, LABEL_START, LABEL_FILL;
+    [SEGMENT_CAP] integer SEGMENT_LABEL, SEGMENT_EQUATION;
+    [ROW_DEPENDENCE_CAP] integer DEPENDENCE_FROM_ROW, DEPENDENCE_TO_ROW, WAR_READER, WAR_WRITER, WAR_SIGNAL,
+      LABEL_ROWS;
+    [PARSE_CAP] integer LOWER_INDEX, POST_INDEX, EXPAND_INDEX;
+    integer LW_NOW, LW_I, LW_K, LW_SIGNAL_SOURCE, LW_SIGNAL_KEY_NOW, LW_SIGNAL_TYPE_NOW, LW_VALUE_KEY, LW_TABLE_TYPE,
+      LW_LOOP_SOURCE, LW_EQ_TARGET, LW_EQ_TARGET_INSTANCE, LW_EQ_LOOP, LW_EQ_TOKEN, LW_EQ_LOOP_NAME,
+      LW_EQ_LOOP_INSTANCE, LW_GUARD_NODE, LW_GUARD_CONTEXT, LW_GUARD_NODE_LENGTH, LW_GUARD_INHERITED, LW_GUARD_LAST,
+      LW_GUARD_AT, LW_GUARD_KEY, LW_GUARD_INSTANCE, LW_EQ_STEP, LW_START_SIGNAL, LW_E, LW_END_NOW, LW_SRC, LW_OP,
+      LW_NAME, LW_INST, LW_ENTRY_TOKEN, LW_LOOP_NOW, LW_TOP_NOW, LW_INITIAL, LW_LEFT, LW_RIGHT, LW_LEFT_OP,
+      LW_RIGHT_OP, LT, RT, LT_KIND, LT_ELEMENT, RT_KIND, RT_ELEMENT, LW_PREV_INSTANCE, LW_ENUM_TYPE_KEY,
+      LW_ENUM_VALUE_KEY, LW_ENUM_TOKEN, LW_ENUM_NAMED_TYPE, LW_ENUM_HOLDERS, LW_ENUM_TYPE, LW_PAIR_KEY_NAME,
+      LW_PAIR_KEY_INSTANCE, LW_PAIR_KEY_LOOP, LW_ARRAY_ELEMENT, LK_HASH, LK_N0, LK_N1, LK_N2, LK_N3, LK_N4, LK_N5,
+      LK_N6, LK_N7, LK_NODE, LK_VALUE, LK_NEW, LW_NEW_TYPE, LK_INSERT_VALUE, HN_SLOT, HN_COUNT, LW_HOLDER_SLOT,
+      LW_NEW_TYPE_SLOT, NEW_TYPE_COUNT, LW_INTERNED, LW_IOTA_TABLE, LW_NEW_TABLE, LW_LOOP_SIGNAL, LW_LOOP_TYPE,
+      LW_CONSTANT, LW_ENUM_MESSAGE, FX_STEP, FX_COUNT, FX_PARAMS, FX_P0, FX_P1, FX_KEY0, FX_KEY1, FX_TYPE0, FX_TYPE1,
+      FX_EXPECTED, FX_CONSTANT1, FX_BASE, FX_O0, FX_O1, FX_O2, FX_O3, FX_O4, FX_O5, FX_O6, FX_PAIR_AT, FX_T0, FX_T1,
+      FX_T2, FX_T3, FX_T4, FX_T5, FX_T6, FX_K0, FX_K1, FX_K2, FX_K3, FX_K4, FX_K5, FX_K6, FX_SYSCALL_AT,
+      FX_SYSCALL_TYPE, FX_ROW_TYPE, FX_MESSAGE, FX_TOKEN, FX_ARGUMENT0, FX_ARGUMENT1, FX_OPERAND, FX_PREVIOUS,
+      LW_PREV_MESSAGE, LW_INDEX_ROW, LW_INDEX_TYPE, LW_CALL_TYPE, LW_CALL_KIND, LW_IF_EFFECT, LW_INITIAL_TYPE,
+      LW_OPERATOR_MESSAGE, LW_OPERATOR_TOKEN, LW_OP_TEXT, LW_OPERATOR_ARGUMENT0, LW_OPERATOR_ARGUMENT1, LUB_A, LUB_B,
+      LUB_A_KIND, LUB_B_KIND, LUB_A_BYTES, LUB_B_BYTES, LUB_UNSIGNED_BYTES, LUB_SIGNED_BYTES, LUB_SIGNED, LUB_WIDENED,
+      LUB, LW_RESULT_OP, LW_RESULT_TYPE, LW_END_TOP, LW_END_TOP_OP, LW_END_TOP_TYPE, LW_SIGNAL_NOW,
+      LW_END_SIGNAL_TYPE, LW_END_TYPE, LW_END_MESSAGE, LW_MEMBER_INDEX, LW_ROW, LW_OVERFLOW, LW_MESSAGE_NOW,
+      LW_START_TOKEN, LW_TOKEN_NOW, LW_FLAT_KEY, LW_FLAT_INSTANCE, LW_ARGUMENT0_NOW, LW_ARGUMENT1_NOW,
+      LW_ARGUMENT2_NOW, LW_MESSAGE, LW_TOKEN, LW_ARGUMENT0, LW_ARGUMENT1, LW_ARGUMENT2, LW_INSTANCE, LW_ROW_SLOT,
+      LW_ROW_OP, LW_ROW_LEFT, LW_ROW_RIGHT, LW_ROW_TYPE, LW_CARRIED_TOKEN, LW_ROW_TOKEN, LW_REWRITE_TABLE, ROW_COUNT,
+      LW_EFFECT_SLOT, EFFECT_COUNT, LW_FX_PREVIOUS, LW_FX_STEP, LW_NEW_TABLE_SLOT, NEW_TABLE_COUNT, LW_STACK_SLOT,
+      LW_TOP, LW_CUR_TOKEN, LW_FL_TOKEN, LW_FL_START, LW_FL_END, LW_FL_LOOP, LW_FL_OWNER, LW_FL_GUARD,
+      LW_FL_ROW_START, LW_ENTRY, LW_STATE, LW_CURSOR, LW_SUB, PO_NOW, PO_I, PO_K, PO_END_KEY, PO_END_INSTANCE,
+      PO_END_SIGNAL, PO_ROW_OP, PO_ROW_LEFT, PO_ROW_RIGHT, PO_LEFT_TAIL, PO_RIGHT_TAIL, PO_PREV_SLOT, PREV_COUNT,
+      PO_SIGNAL_LOOP, PO_PLACE_FILL, PO_WALK_CONTEXT, PO_WALK_NODE, PO_INHERITED, PO_PATH_LENGTH, PO_WALK_AT,
+      PO_WALK_KEY, PO_WALK_INSTANCE, PO_HASH, PO_N0, PO_N1, PO_N2, PO_N3, PO_N4, PO_N5, PO_N6, PO_N7, PO_NODE,
+      PO_VALUE, PO_WALK_LABEL, PO_WALK_EQUATION, PO_SEGMENT_SIZE, PO_FROM_SIGNAL_NOW, PO_TO_SIGNAL_NOW,
+      PO_MESSAGE_NOW, PO_MESSAGE, PO_TOKEN, PO_ARGUMENT0, PO_INSTANCE, PO_SEGMENT_SLOT, SEGMENT_COUNT, PO_RUNNING,
+      PO_STATE, PO_CURSOR, PO_SUB, XP_NOW, XP_I, XP_J, XP_K, XP_LABEL, XP_EQUATION, XP_RANGE_LENGTH, XP_SEGMENT_SIZE,
+      XP_PLACE_FILL, XP_FROM_SIGNAL, XP_FROM_LABEL, XP_TO_SIGNAL, XP_TO_LABEL, XP_FROM_HEAD, XP_DEF_LENGTH,
+      XP_TO_HEAD, XP_FROM_LENGTH, XP_TO_LENGTH, XP_FROM_ROW, XP_TO_ROW, XP_PREVIOUS, XP_SIGNAL, XP_WRITER, XP_A, XP_B,
+      XP_READER, XP_DEPENDENCE_SLOT, DEPENDENCE_TOTAL, XP_WAR_SLOT, WAR_COUNT, XP_LEFT_AT, XP_RIGHT_AT, XP_STATE,
+      XP_CURSOR, XP_INNER, XP_SUB;
+    boolean ROWS_DUMP, LOWERS, AT_LS_SIGNAL, AT_LS_LABEL, AT_LS_VALUE, AT_LS_ARRAY, AT_LS_TABLE, AT_LS_LOOP,
+      AT_LS_EQUATION, AT_LS_GROUP, AT_LS_START, AT_LS_SCAN, AT_LS_ENTRY, AT_LS_NEVER, AT_LS_MEMBERS, LW_SIGNAL_LIVE,
+      LW_SIGNAL_INPUT, LW_LABEL_LIVE, LW_VALUE_TYPE_LIVE, LW_VALUE_LIVE, LW_ARRAY_LIVE, LW_TABLE_LIVE,
+      LW_TABLE_CANDIDATE, LW_TABLE_WALKS, LW_TABLE_MATCHES, LW_TABLE_OK, LW_TABLE_IOTA, LW_LOOP_LIVE,
+      LW_EQUATION_LIVE, LW_EQ_SEED, LW_LOOP_DEFINES, LW_HAS_GUARD, LW_EQ_MORE, LW_GROUP_LIVE, LW_START_LIVE,
+      LW_SCAN_LIVE, LW_ENTRY_LIVE, LW_FINISHING, LW_SCAN_READS, LW_IS_SIGNAL, LW_IS_ITER, LW_LOOKS_SIGNAL,
+      LW_IS_CONST, LW_IS_EFFECT, LW_IS_DELAY, LW_IS_ENUM, LW_ENUM_LIVE, LW_IS_LEAF, LW_OPERATOR, LW_UNARY, LT_NEW,
+      LT_INT, LT_LOGICAL, RT_NEW, RT_INT, RT_LOGICAL, LW_ARRAY_OPERAND, LW_IS_INDICES, LW_IS_GATHER, LW_IS_PREV,
+      LW_ENUM_NAMED, LW_START_LOOKS, LW_LOOKS_PAIR, LW_LOOKS_ARRAY, LW_LOOKS_GUARD, LK_LIVE, LK_WANTS_INSERT, LK_M0,
+      LK_M1, LK_M2, LK_M3, LK_M4, LK_M5, LK_M6, LK_M7, LK_FOUND, LK_UNSURE, LK_INSERTS, LK_FULL, LW_TYPE_FULL,
+      LW_TABLE_FULL, LW_LOOP_UNDECLARED, LW_LOOP_NOT_INDEX, LW_INDEX_DEFINED, LW_TARGET_UNDECLARED,
+      LW_START_SEED_FAILS, LW_START_DEFINES, LW_START_UNDECLARED, LW_START_INPUT, LW_START_TWICE, LW_SCAN_FAILS,
+      LW_SIGNAL_FOUND, LW_FROM_CONSTANT, LW_SIGNAL_UNDECLARED, LW_ENUM_UNDECLARED, LW_ENUM_AMBIGUOUS,
+      LW_ENUM_TYPE_UNDECLARED, LW_ENUM_NO_VALUE, FX_IS_LOAD, FX_IS_STORE, FX_IS_SYSCALL, FX_IS_INSTRUCTION,
+      FX_NUMBER1, FX_WORD_CONSTANT, FX_WORD_BIG, FX_CHECKS, FX_EMITS_ARG, FX_EMITS_EFFECT, LW_NOT_IN_ITERATE,
+      LW_LEFT_ARRAY_VALUE, LW_RIGHT_ARRAY_VALUE, LW_RIGHT_PAIR, LW_INDICES_FAILS, LW_INDEXES, LW_INDEX_INT,
+      LW_INDEX_OUTSIDE, LW_IS_NEXT, LW_CONVERTS, LW_INTEGER_OP, LW_COMPARE_OP, LW_LOGIC_OP, LW_SHIFT_OP,
+      LW_POINTER_ARITHMETIC, LUB_A_SIGNED, LUB_B_SIGNED, LUB_SUBTYPE, LW_MEMBER_NOW, LW_END_SEED, LW_END_DEFINES,
+      LW_END_RANGE, LW_END_SIGNAL_ARRAY, LW_NEVER_LIVE, LW_NEVER_FAILS, LW_MEMBERS_LIVE, LW_MEMBER_STARTS,
+      LW_MEMBERS_CLOSE, LW_GROUP_FAILS, LW_CREATES, LW_PUSHES, LW_FAILS, LW_LONG0_UNSIGNED, LW_GOES, LW_ROW_CTX,
+      LW_INDICES_REWRITES, LW_RANGE_REWRITES, LW_NEVER_WRITES, LW_END_WRITES, LW_EQ_CLOSES, LW_MEMBER_CLOSES,
+      LW_GROUP_ARRAY, LW_FL_MEMBER, LOWER_FAILED, LOWER_INCOMPLETE, LOWER_READY, AT_PS_DEPENDENCE, AT_PS_ROWS,
+      AT_PS_PREFIX, AT_PS_PLACE, AT_PS_WALK, AT_PS_LABELSUM, AT_PS_SIZE, PO_DEPENDENCE_LIVE, PO_TO_END,
+      PO_LOOKS_LABEL, PO_ROWS_LIVE, PO_LEFT_RANGE, PO_RIGHT_RANGE, PO_RANGE_FAILS, PO_LEFT_PREV, PO_RIGHT_PREV,
+      PO_COUNTS, PO_PREFIX_LIVE, PO_PLACE_LIVE, PO_PLACES, PO_WALK_LIVE, PO_WALK_STEP, PO_FROM_INHERITED,
+      PO_WALK_CALL, PO_LIVE, PO_M0, PO_M1, PO_M2, PO_M3, PO_M4, PO_M5, PO_M6, PO_M7, PO_FOUND, PO_UNSURE,
+      PO_END_FAILS, PO_SEGMENT_FULL, PO_LABELSUM_LIVE, PO_SIZE_LIVE, PO_SIZE_FAILS, PO_LABELS_FULL, PO_FAILS, PO_GOES,
+      PO_MARKS, PO_NEEDS_LABELS, POST_FAILED, POST_INCOMPLETE, POST_READY, AT_XS_PLACE, AT_XS_PAIRS, AT_XS_PREV,
+      XP_PLACE_LIVE, XP_PLACES, XP_PLACE_ENDS, XP_PAIRS_LIVE, XP_EMITS_PAIR, XP_PAIR_ROW_ENDS, XP_PAIR_ENDS,
+      XP_PREV_LIVE, XP_SCALAR, XP_STARTED, XP_TAKES_A, XP_TAKES_B, XP_PREV_SCALAR, XP_EMITS_WAR, XP_PREV_ENDS,
+      XP_DEPENDENCE_WANTED, XP_FAILS, XP_PREV_STARTED, EXPAND_FAILED, EXPAND_INCOMPLETE, ROWS_READY;
+    long LOWER_BOUND, LW_LEFT_VALUE, LW_INDICES_COUNT, LK_A, LK_B, FX_WORD, LW_INDEX_VALUE, LW_INITIAL_VALUE,
+      LW_RESULT_VALUE, LW_LONG0, LW_LONG1, LW_ROW_VALUE, POST_BOUND, PO_A, PO_B, PO_FROM_LIST, PO_TO_LIST,
+      PO_PAIR_TOTAL, EXPAND_BOUND;
+    ulong LT_SIZE, RT_SIZE, LW_ARRAY_SIZE;
   end;

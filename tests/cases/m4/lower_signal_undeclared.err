@@ -1,0 +1,1 @@
+lower_signal_undeclared.sig:5:11: error: signal Q is not declared

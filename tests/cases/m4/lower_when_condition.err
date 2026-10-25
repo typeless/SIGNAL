@@ -1,0 +1,1 @@
+lower_when_condition.sig:5:13: error: the condition of when must be boolean

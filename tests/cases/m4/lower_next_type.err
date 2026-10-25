@@ -1,0 +1,1 @@
+lower_next_type.sig:5:56: error: next expects a value of type integer, found boolean
