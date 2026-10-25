@@ -1,0 +1,1 @@
+clocks_not_inside_pairs.sig:6:41: error: clock of K1 cannot be shown inside the clock A1'1

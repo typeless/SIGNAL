@@ -3072,7 +3072,11 @@ process SIGC =
    | CK_ROUND_BOUND := long(3) * CK_DEF_BOUND + long(2) * long(CP_GUARDED) + long(4)
    | CK_BOUND := long(32) + CP_STEPS + long(CP_SAMPLE_BOUND) + long(FLAT_MEMBER_COUNT) + long(FLAT_GROUP_COUNT)
                  + long(3) * CK_DEF_BOUND + long(2) * long(CP_GUARDED) + CK_TOTAL_BOUND
-                 + long(CLOCK_ROUND_CAP - 1) * CK_ROUND_BOUND
+                 + long(CK_ROUND_LIMIT - 1) * CK_ROUND_BOUND
+   | CK_ROUND_NEED := CK_DEF_BOUND + long(CP_GUARDED) + long(2)
+   | CK_ROUND_AFFORD := long(CLOCK_ROUND_WORK) / CK_ROUND_BOUND
+   | CK_ROUND_LIMIT := integer(if CK_ROUND_NEED <= CK_ROUND_AFFORD or CK_ROUND_NEED <= long(CLOCK_ROUND_CAP) then CK_ROUND_NEED
+                               else if CK_ROUND_AFFORD > long(CLOCK_ROUND_CAP) then CK_ROUND_AFFORD else long(CLOCK_ROUND_CAP))
    | CK_INDEX := 0 .. (if CLOCKS_RUN then CK_BOUND else long(-1))
    | iterate CK_INDEX of
        (| KS_NOW := CK_STATE[?]
@@ -3496,7 +3500,7 @@ process SIGC =
                      else if KO_FULL then F_CAP_OBLIGATIONS else 0
         | KD_ENDS_ROUND := AT_KS_DEFS and not KD_LIVE
         | K_PROGRESS_NOW := CK_PROGRESS[?] or KS_ATTACHES or KS_ROOTS or KD_DONE
-        | K_ROUNDS_FULL := KD_ENDS_ROUND and K_PROGRESS_NOW and KRN >= CLOCK_ROUND_CAP
+        | K_ROUNDS_FULL := KD_ENDS_ROUND and K_PROGRESS_NOW and KRN >= CK_ROUND_LIMIT
         | K_STALLS := KD_ENDS_ROUND and not K_PROGRESS_NOW and CK_PEND_W[?] > 0
         | K_MESSAGE_NOW := if KR_NO_CLOCK or KG_NO_CLOCK then T_NO_CLOCK else if KR_DELAY_CONSTANT then T_DELAY_CONSTANT
                         else if K_CAPACITY /= 0 or K_ROUNDS_FULL then T_CAPACITY
@@ -3541,7 +3545,8 @@ process SIGC =
      end
    | CK_DONE := CLOCKS_RUN and CK_STATE = KS_DONE
    | CLOCK_TOTAL := ROW_COUNT + K_SAMPLE_COUNT
-   | CO_INDEX := 0 .. (if CK_DONE then long(OB_COUNT) * long(1 + 6 * PAIR_CAP) else long(-1))
+   | PAIR_BUDGET := long(64) * long(OB_COUNT) + long(4) * long(DEF_COUNT)
+   | CO_INDEX := 0 .. (if CK_DONE then long(2) * long(OB_COUNT) + long(6) * PAIR_BUDGET + long(2) else long(-1))
    | iterate CO_INDEX of
        (| OG_NOW := CO_STATE[?]
         | OG_O := CO_OBLIGATION[?]
@@ -3645,10 +3650,12 @@ process SIGC =
         | OG_PAIR_COUNT := if OG_STARTS then 0 else CO_PAIR_COUNT[?]
         | OG_CLOCK_AT := if OG_CLOCK_LOCAL >= 0 then OG_CLOCK_LOCAL else OG_CLOCK_COUNT
         | OG_CONTAINER_AT := if OG_CONTAINER_LOCAL >= 0 then OG_CONTAINER_LOCAL else OG_CONTAINER_COUNT
-        | OG_CELL := OG_CLOCK_AT * PAIR_CAP + OG_CONTAINER_AT
+        | OG_CELL := OG_CLOCK_AT * PAIR_STRIDE + OG_CONTAINER_AT
         | OG_FOUND := OG_CLOCK_LOCAL >= 0 and OG_CONTAINER_LOCAL >= 0 and GRID_STAMP[?][OG_CELL] = OG_STAMP
         | OG_ADDS := OG_OPENS or OG_APPLIES and not OG_FOUND
-        | OG_PAIRS_FULL := OG_ADDS and OG_PAIR_COUNT >= PAIR_CAP
+        | OG_PAIRS_FULL := OG_ADDS and (OG_PAIR_COUNT >= PAIR_CAP or long(CO_PAIR_TOTAL[?]) >= PAIR_BUDGET
+                                        or OG_CLOCK_LOCAL < 0 and OG_CLOCK_COUNT >= PAIR_STRIDE
+                                        or OG_CONTAINER_LOCAL < 0 and OG_CONTAINER_COUNT >= PAIR_STRIDE)
         | OG_NEW := OG_ADDS and not OG_PAIRS_FULL
         | OG_Q := if OG_FOUND then GRID_PAIR[?][OG_CELL] else OG_PAIR_COUNT
         | CLOCK_STAMP := CLOCK_STAMP[?] next (if OG_NEW and OG_CLOCK_LOCAL < 0 then OG_PAIR_CLOCK else -1) : OG_STAMP
@@ -3663,6 +3670,7 @@ process SIGC =
         | CO_CLOCK_COUNT := OG_CLOCK_COUNT + integer(OG_NEW and OG_CLOCK_LOCAL < 0)
         | CO_CONTAINER_COUNT := OG_CONTAINER_COUNT + integer(OG_NEW and OG_CONTAINER_LOCAL < 0)
         | CO_PAIR_COUNT := OG_PAIR_COUNT + integer(OG_NEW)
+        | CO_PAIR_TOTAL := CO_PAIR_TOTAL[?] + integer(OG_NEW)
         | OG_LINKS := OG_APPLIES and not OG_PAIRS_FULL
         | PAIR_NEXT := PAIR_NEXT[?] next (if OG_LINKS then OG_P * 5 + OG_S else -1) : OG_Q + 1
         | OG_PUSHES := OG_LINKS and not OG_FOUND
@@ -3695,7 +3703,7 @@ process SIGC =
         | CO_DEPTH := if OG_OPENS then 1 else OG_DEPTH + integer(OG_PUSHES) - integer(OG_POPS)
         |)
      with (| CO_STATE := OS_START | CO_OBLIGATION := 0 | CO_TOP := 0 | CO_TOP_SLOT := 0 | CO_DEPTH := 0
-           | CO_CLOCK_COUNT := 0 | CO_CONTAINER_COUNT := 0 | CO_PAIR_COUNT := 0 | CO_MESSAGE := 0 | CO_TOKEN := -1
+           | CO_CLOCK_COUNT := 0 | CO_CONTAINER_COUNT := 0 | CO_PAIR_COUNT := 0 | CO_PAIR_TOTAL := 0 | CO_MESSAGE := 0 | CO_TOKEN := -1
            | CO_CLOCK0 := -1 | CO_CLOCK1 := -1 | CO_CLOCK2 := -1 |)
      end
    | CO_DONE := CK_DONE and CO_STATE = OS_DONE
@@ -3901,10 +3909,11 @@ process SIGC =
         | CI_KEY := CI_KEY[?] next CL_INDEX : if TX_ARGS > 0 then long(CL_INDEX) else if SCHED_LIST then SM_ITEM_KEY[CL_INDEX]
                                             else CE_ITEM_KEY[CL_INDEX]
         | CI_INCLUDED := CI_INCLUDED[?] next CL_INDEX : not (CE_STALL and CE_SIGNAL_COUNT > 0 and not CE_ITEM_SIGNAL[CL_INDEX])
+                                                         and not (SCHED_LIST and SM_OWNERS > 0 and not SM_ITEM_OWNER[CL_INDEX])
         |)
      with (| CL_TOTAL := 0 | CL_LONGEST := 0 |)
      end
-   | CE_OVERFLOW := CE_COUNT > CLOCK_NAME_CAP or SCHED_LIST and SM_COUNT > CLOCK_NAME_CAP or CL_TOTAL > CLOCK_TEXT_CAP
+   | CE_OVERFLOW := CE_COUNT > CLOCK_NAME_CAP or SCHED_LIST and SM_COUNT > CLOCK_NAME_CAP or CL_TOTAL + 2 * CE_ITEMS > CLOCK_TEXT_CAP
    | CR_INDEX := 0 .. (if CE_OVERFLOW then -1 else CL_TOTAL - 1)
    | iterate CR_INDEX of
        (| CR_ITEM := if CR_INDEX >= CI_END[CR_ITEM[?]] then CR_ITEM[?] + 1 else CR_ITEM[?]
@@ -4397,14 +4406,14 @@ process SIGC =
    | SCHEDULE_ARGUMENT0 := if SCHED_NODES >= SCHED_NODE_CAP then F_CAP_SCHEDULE_NODES
                          else if SE_ECOUNT > EFFECT_ORDER_CAP then F_CAP_EFFECTS else F_CAP_EDGES
    | SCHEDULE_READY := SCHEDULE_RUN and SCHEDULE_MESSAGE = 0
-   | SWS_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY and SKB_RUN then WAR_COUNT - 1 else -1)
+   | SWS_INDEX := 0 .. (if SCHEDULE_READY and SKB_RUN then WAR_COUNT - 1 else -1)
    | iterate SWS_INDEX of
        (| WS_READER := WAR_READER[SWS_INDEX]
         | WS_MARKS := (WS_READER < ROW_COUNT and ROWS_LOOP[WS_READER] >= 0 and ROWS_OP[WS_READER] /= OP_SEED) and (SKA_LOOP_POPS[ROWS_LOOP[WS_READER]] < LOOP_MEMBERS[ROWS_LOOP[WS_READER]])
         | WAR_SNAP1 := WAR_SNAP1[?] next (if WS_MARKS then WAR_SIGNAL[SWS_INDEX] else -1) : ROWS_LOOP[WS_READER] + 1
         |)
      end
-   | SSC_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY then FLAT_SIGNAL_COUNT - 1 else -1)
+   | SSC_INDEX := 0 .. (if SCHEDULE_READY then FLAT_SIGNAL_COUNT - 1 else -1)
    | iterate SSC_INDEX of
        (| C_L1 := if SNAP_GATHER1[SSC_INDEX] > 0 then SNAP_GATHER1[SSC_INDEX] else WAR_SNAP1[SSC_INDEX]
         | SNAP_LOOP_COUNT := SNAP_LOOP_COUNT[?] next C_L1 - 1 : SNAP_LOOP_COUNT[?][C_L1 - 1] + 1
@@ -4413,21 +4422,21 @@ process SIGC =
         |)
      with SNAP_TOTAL := 0
      end
-   | SNS_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY then FLAT_LOOP_COUNT - 1 else -1)
+   | SNS_INDEX := 0 .. (if SCHEDULE_READY then FLAT_LOOP_COUNT - 1 else -1)
    | iterate SNS_INDEX of
        (| SNAP_START := SNAP_START[?] next SNS_INDEX : SNS_SUM[?]
         | SNS_SUM := SNS_SUM[?] + SNAP_LOOP_COUNT[SNS_INDEX]
         |)
      with SNS_SUM := 0
      end
-   | SNP_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY then FLAT_SIGNAL_COUNT - 1 else -1)
+   | SNP_INDEX := 0 .. (if SCHEDULE_READY then FLAT_SIGNAL_COUNT - 1 else -1)
    | iterate SNP_INDEX of
        (| N_L := (if SNAP_GATHER1[SNP_INDEX] > 0 then SNAP_GATHER1[SNP_INDEX] else WAR_SNAP1[SNP_INDEX]) - 1
         | SNAP_LIST := SNAP_LIST[?] next (if N_L >= 0 then SNAP_START[N_L] + SNAP_FILL[?][N_L] else -1) : SNP_INDEX
         | SNAP_FILL := SNAP_FILL[?] next N_L : SNAP_FILL[?][N_L] + 1
         |)
      end
-   | LOP_INDEX := 0 .. (if SCHEDULE_DUMP and SCHEDULE_READY and SKA_RUN then SKA_COUNT + SKB_COUNT - 1 else -1)
+   | LOP_INDEX := 0 .. (if SCHEDULE_READY and SKA_RUN then SKA_COUNT + SKB_COUNT - 1 else -1)
    | iterate LOP_INDEX of
        (| O_FIRST_RUN := LOP_INDEX < SKA_COUNT
         | O_NODE := if O_FIRST_RUN then SKA_ORDER[LOP_INDEX] else SKB_ORDER[LOP_INDEX - SKA_COUNT]
@@ -5184,17 +5193,19 @@ process SIGC =
     constant integer SEGMENT_CAP = 4194304;
     constant integer CLOCK_CAP = 1048576;
     constant integer DEF_CAP = 262144;
-    constant integer OB_CAP = 16384;
+    constant integer OB_CAP = 4194304;
     constant integer CLOCK_ROUND_CAP = 16;
-    constant integer PAIR_CAP = 64;
-    constant integer PAIR_NEXT_CAP = 320;
-    constant integer GRID_CAP = 4096;
-    constant integer CLOCK_NAME_CAP = 256;
+    constant integer CLOCK_ROUND_WORK = 1048576;
+    constant integer PAIR_CAP = 1048576;
+    constant integer PAIR_NEXT_CAP = 5242880;
+    constant integer PAIR_STRIDE = 4096;
+    constant integer GRID_CAP = 16777216;
+    constant integer CLOCK_NAME_CAP = 65536;
     constant integer CLOCK_TEXT_CAP = 65536;
     constant integer EDGE_CAP = 16777216;
     constant integer SCHED_NODE_CAP = 5308417;
-    constant integer EFFECT_ORDER_CAP = 1024;
-    constant integer EFFECT_PAIR_CAP = 1048576;
+    constant integer EFFECT_ORDER_CAP = 4096;
+    constant integer EFFECT_PAIR_CAP = 16777216;
     constant ulong HASH_K1 = ulong(2685821657736338717);
     constant ulong HASH_K2 = ulong(4354685564936845355);
     constant integer HASH_SHIFT = 42;
@@ -6818,4 +6829,6 @@ process SIGC =
       F_PUSH, F_SCAN, F_REACHED, F_SCAN_ENDS, F_PAIRS, F_PAIR_FAILS, F_PAIRS_END, EF_FAILED, SCHEDULE_READY, WS_MARKS,
       O_FIRST_RUN, O_TAKES;
     long SCHEDULE_DUMP_BOUND, M_KEY, M_SELF_KEY, SM_OWNER_KEY, SM_EFFECT_KEY, SM_ROW_KEY, EF_BOUND;
+    integer CK_ROUND_LIMIT, CO_PAIR_TOTAL;
+    long CK_ROUND_NEED, CK_ROUND_AFFORD, PAIR_BUDGET;
   end;
