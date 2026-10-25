@@ -3073,10 +3073,7 @@ process SIGC =
    | CK_BOUND := long(32) + CP_STEPS + long(CP_SAMPLE_BOUND) + long(FLAT_MEMBER_COUNT) + long(FLAT_GROUP_COUNT)
                  + long(3) * CK_DEF_BOUND + long(2) * long(CP_GUARDED) + CK_TOTAL_BOUND
                  + long(CK_ROUND_LIMIT - 1) * CK_ROUND_BOUND
-   | CK_ROUND_NEED := CK_DEF_BOUND + long(CP_GUARDED) + long(2)
-   | CK_ROUND_AFFORD := long(CLOCK_ROUND_WORK) / CK_ROUND_BOUND
-   | CK_ROUND_LIMIT := integer(if CK_ROUND_NEED <= CK_ROUND_AFFORD or CK_ROUND_NEED <= long(CLOCK_ROUND_CAP) then CK_ROUND_NEED
-                               else if CK_ROUND_AFFORD > long(CLOCK_ROUND_CAP) then CK_ROUND_AFFORD else long(CLOCK_ROUND_CAP))
+   | CK_ROUND_LIMIT := integer(CK_DEF_BOUND + long(CP_GUARDED) + long(2))
    | CK_INDEX := 0 .. (if CLOCKS_RUN then CK_BOUND else long(-1))
    | iterate CK_INDEX of
        (| KS_NOW := CK_STATE[?]
@@ -3545,8 +3542,69 @@ process SIGC =
      end
    | CK_DONE := CLOCKS_RUN and CK_STATE = KS_DONE
    | CLOCK_TOTAL := ROW_COUNT + K_SAMPLE_COUNT
-   | PAIR_BUDGET := long(64) * long(OB_COUNT) + long(4) * long(DEF_COUNT)
-   | CO_INDEX := 0 .. (if CK_DONE then long(2) * long(OB_COUNT) + long(6) * PAIR_BUDGET + long(2) else long(-1))
+   | OW_INDEX := 0 .. (if CK_DONE then long(2) * long(OB_COUNT) * (long(4) * long(CLOCK_TOTAL) + long(1)) else long(-1))
+   | iterate OW_INDEX of
+       (| OV_NOW := OW_STATE[?]
+        | OV_O := OW_O[?]
+        | OV_SIDE := OW_SIDE[?]
+        | OV_STARTS := OV_NOW = OS_START and OV_O < OB_COUNT
+        | OV_WALKS := OV_NOW = OS_WALK
+        | OV_F_0 := if OV_SIDE = 0 then OB_SMALL[OV_O] else OB_BIG[OV_O]
+        | OV_F_1 := OV_F_0 + CK_LINK[OV_F_0]
+        | OV_F_2 := OV_F_1 + CK_LINK[OV_F_1]
+        | OV_F_3 := OV_F_2 + CK_LINK[OV_F_2]
+        | OV_F_4 := OV_F_3 + CK_LINK[OV_F_3]
+        | OV_F_5 := OV_F_4 + CK_LINK[OV_F_4]
+        | OV_F_6 := OV_F_5 + CK_LINK[OV_F_5]
+        | OV_F_7 := OV_F_6 + CK_LINK[OV_F_6]
+        | OV_F_8 := OV_F_7 + CK_LINK[OV_F_7]
+        | OV_F_9 := OV_F_8 + CK_LINK[OV_F_8]
+        | OV_F_10 := OV_F_9 + CK_LINK[OV_F_9]
+        | OV_F_11 := OV_F_10 + CK_LINK[OV_F_10]
+        | OV_F_12 := OV_F_11 + CK_LINK[OV_F_11]
+        | OV_F_13 := OV_F_12 + CK_LINK[OV_F_12]
+        | OV_F_14 := OV_F_13 + CK_LINK[OV_F_13]
+        | OV_F_15 := OV_F_14 + CK_LINK[OV_F_14]
+        | OV_F_16 := OV_F_15 + CK_LINK[OV_F_15]
+        | OV_F_17 := OV_F_16 + CK_LINK[OV_F_16]
+        | OV_F_18 := OV_F_17 + CK_LINK[OV_F_17]
+        | OV_F_19 := OV_F_18 + CK_LINK[OV_F_18]
+        | OV_F_20 := OV_F_19 + CK_LINK[OV_F_19]
+        | OV_FIRST := OV_F_20 + CK_OFFICIAL[OV_F_20]
+        | OV_N := OW_NODE[?]
+        | OV_S := OW_SLOT[?]
+        | OV_DEPTH := OW_DEPTH[?]
+        | OV_KIND := NODE_KIND[OV_N]
+        | OV_SPLITS := OV_KIND = CLK_SUM or OV_KIND = CLK_PRODUCT
+        | OV_POPS := OV_WALKS and OV_S >= 3
+        | OV_SLOT_LIVE := OV_WALKS and not OV_POPS
+        | OV_APPLIES := OV_SLOT_LIVE and (if OV_S = 0 then OV_SIDE = 0 and OV_KIND /= CLK_ROOT else OV_SPLITS)
+        | OV_NEXT := if OV_S = 0 then NODE_PARENT1[OV_N] - 1 else if OV_S = 1 then NODE_LEFT1[OV_N] - 1 else NODE_RIGHT1[OV_N] - 1
+        | OV_CAND := if OV_STARTS then OV_FIRST else OV_NEXT
+        | OV_LOOK := if OV_CAND < 0 then 0 else OV_CAND
+        | OV_STAMP := 2 * OV_O + OV_SIDE + 1
+        | OV_PUSHES := OV_APPLIES and OV_CAND >= 0 and OW_STAMP[?][OV_LOOK] /= OV_STAMP
+        | OV_ENTERS := OV_STARTS or OV_PUSHES
+        | OW_STAMP := OW_STAMP[?] next (if OV_ENTERS then OV_CAND else -1) : OV_STAMP
+        | OW_STACK_NODE := OW_STACK_NODE[?] next (if OV_PUSHES then OV_DEPTH - 1 else -1) : OV_N
+        | OW_STACK_SLOT := OW_STACK_SLOT[?] next (if OV_PUSHES then OV_DEPTH - 1 else -1) : OV_S + 1
+        | OV_BELOW := if OV_DEPTH >= 2 then OV_DEPTH - 2 else 0
+        | OV_FINISHES := OV_POPS and OV_DEPTH = 1
+        | OW_COUNT := if OV_STARTS then 1 else OW_COUNT[?] + integer(OV_PUSHES)
+        | OW_CLOCKS := if OV_FINISHES and OV_SIDE = 0 then OW_COUNT[?] else OW_CLOCKS[?]
+        | OW_BOUND := OW_BOUND[?] + (if OV_FINISHES and OV_SIDE = 1 then long(OW_CLOCKS[?]) * long(OW_COUNT[?]) else long(0))
+        | OW_STATE := if OV_STARTS then OS_WALK else if OV_NOW = OS_START then OS_DONE else if OV_FINISHES then OS_START else OV_NOW
+        | OW_SIDE := if OV_FINISHES then 1 - OV_SIDE else OV_SIDE
+        | OW_O := OV_O + integer(OV_FINISHES and OV_SIDE = 1)
+        | OW_NODE := if OV_ENTERS then OV_CAND else if OV_POPS then OW_STACK_NODE[?][OV_BELOW] else OV_N
+        | OW_SLOT := if OV_ENTERS then 0 else if OV_POPS then OW_STACK_SLOT[?][OV_BELOW] else if OV_WALKS then OV_S + 1 else OV_S
+        | OW_DEPTH := if OV_STARTS then 1 else OV_DEPTH + integer(OV_PUSHES) - integer(OV_POPS)
+        |)
+     with (| OW_STATE := OS_START | OW_O := 0 | OW_SIDE := 0 | OW_NODE := 0 | OW_SLOT := 0 | OW_DEPTH := 0
+           | OW_COUNT := 0 | OW_CLOCKS := 0 | OW_BOUND := long(0) |)
+     end
+   | OW_DONE := CK_DONE and OW_STATE = OS_DONE
+   | CO_INDEX := 0 .. (if OW_DONE then long(2) * long(OB_COUNT) + long(6) * OW_BOUND + long(2) else long(-1))
    | iterate CO_INDEX of
        (| OG_NOW := CO_STATE[?]
         | OG_O := CO_OBLIGATION[?]
@@ -3653,7 +3711,7 @@ process SIGC =
         | OG_CELL := OG_CLOCK_AT * PAIR_STRIDE + OG_CONTAINER_AT
         | OG_FOUND := OG_CLOCK_LOCAL >= 0 and OG_CONTAINER_LOCAL >= 0 and GRID_STAMP[?][OG_CELL] = OG_STAMP
         | OG_ADDS := OG_OPENS or OG_APPLIES and not OG_FOUND
-        | OG_PAIRS_FULL := OG_ADDS and (OG_PAIR_COUNT >= PAIR_CAP or long(CO_PAIR_TOTAL[?]) >= PAIR_BUDGET
+        | OG_PAIRS_FULL := OG_ADDS and (OG_PAIR_COUNT >= PAIR_CAP
                                         or OG_CLOCK_LOCAL < 0 and OG_CLOCK_COUNT >= PAIR_STRIDE
                                         or OG_CONTAINER_LOCAL < 0 and OG_CONTAINER_COUNT >= PAIR_STRIDE)
         | OG_NEW := OG_ADDS and not OG_PAIRS_FULL
@@ -3670,7 +3728,6 @@ process SIGC =
         | CO_CLOCK_COUNT := OG_CLOCK_COUNT + integer(OG_NEW and OG_CLOCK_LOCAL < 0)
         | CO_CONTAINER_COUNT := OG_CONTAINER_COUNT + integer(OG_NEW and OG_CONTAINER_LOCAL < 0)
         | CO_PAIR_COUNT := OG_PAIR_COUNT + integer(OG_NEW)
-        | CO_PAIR_TOTAL := CO_PAIR_TOTAL[?] + integer(OG_NEW)
         | OG_LINKS := OG_APPLIES and not OG_PAIRS_FULL
         | PAIR_NEXT := PAIR_NEXT[?] next (if OG_LINKS then OG_P * 5 + OG_S else -1) : OG_Q + 1
         | OG_PUSHES := OG_LINKS and not OG_FOUND
@@ -3703,7 +3760,7 @@ process SIGC =
         | CO_DEPTH := if OG_OPENS then 1 else OG_DEPTH + integer(OG_PUSHES) - integer(OG_POPS)
         |)
      with (| CO_STATE := OS_START | CO_OBLIGATION := 0 | CO_TOP := 0 | CO_TOP_SLOT := 0 | CO_DEPTH := 0
-           | CO_CLOCK_COUNT := 0 | CO_CONTAINER_COUNT := 0 | CO_PAIR_COUNT := 0 | CO_PAIR_TOTAL := 0 | CO_MESSAGE := 0 | CO_TOKEN := -1
+           | CO_CLOCK_COUNT := 0 | CO_CONTAINER_COUNT := 0 | CO_PAIR_COUNT := 0 | CO_MESSAGE := 0 | CO_TOKEN := -1
            | CO_CLOCK0 := -1 | CO_CLOCK1 := -1 | CO_CLOCK2 := -1 |)
      end
    | CO_DONE := CK_DONE and CO_STATE = OS_DONE
@@ -3825,18 +3882,19 @@ process SIGC =
         | E1_MARK := if E1_WAITS then E1_GUARD else if E1_STALLED then E1 else -1
         | E1_NEW := E1_MARK >= 0 and not CE_SEEN[?][E1_MARK]
         | CE_SEEN := CE_SEEN[?] next E1_MARK : true
-        | E1_APPENDS := E1_WAITS and E1_NEW or E1_STALLED and (E1_SIGNAL or E1_NEW)
-        | E1_FITS := E1_APPENDS and CE_COUNT[?] < CLOCK_NAME_CAP
-        | E1_SLOT := if E1_FITS then CE_COUNT[?] else -1
+        | E1_APPENDS := E1_WAITS and E1_NEW or E1_STALLED and E1_SIGNAL
+        | E1_OTHER := E1_STALLED and not E1_SIGNAL and E1_NEW
+        | E1_SLOT := if E1_APPENDS and CE_COUNT[?] < CLOCK_NAME_CAP then CE_COUNT[?] else -1
+        | E1_OTHER_SLOT := if E1_OTHER and CE_OTHER_COUNT[?] < CLOCK_NAME_CAP then CE_OTHER_COUNT[?] else -1
         | E1_MEMBER := if CE_GUARDS then E1_GUARD else E1_X
         | E1_TOKEN := ROWS_TOKEN[E1_GUARD]
         | E1_KEY := if not CE_GUARDS then long(0) else if E1_TOKEN < 0 then long(16777217)
                   else long(TOKEN_LINE[E1_TOKEN]) * long(16777216) + long(TOKEN_COLUMN[E1_TOKEN])
         | CE_ITEM_MEMBER := CE_ITEM_MEMBER[?] next E1_SLOT : E1_MEMBER
         | CE_ITEM_KEY := CE_ITEM_KEY[?] next E1_SLOT : E1_KEY
-        | CE_ITEM_SIGNAL := CE_ITEM_SIGNAL[?] next E1_SLOT : E1_SIGNAL
+        | CE_OTHER_MEMBER := CE_OTHER_MEMBER[?] next E1_OTHER_SLOT : E1_X
         | CE_COUNT := CE_COUNT[?] + integer(E1_APPENDS)
-        | CE_SIGNAL_COUNT := CE_SIGNAL_COUNT[?] + integer(E1_APPENDS and E1_SIGNAL)
+        | CE_OTHER_COUNT := CE_OTHER_COUNT[?] + integer(E1_OTHER)
         | CE_MIN0 := if CE_MIN0[?] < 0 and E1 = CE_Q0 then E1_X else CE_MIN0[?]
         | CE_MIN1 := if CE_MIN1[?] < 0 and E1 = CE_Q1 then E1_X else CE_MIN1[?]
         | CE_MIN2 := if CE_MIN2[?] < 0 and E1 = CE_Q2 then E1_X else CE_MIN2[?]
@@ -3845,20 +3903,25 @@ process SIGC =
         | CE_FS1 := if CE_FS1[?] < 0 and E1_PLACED and E1_ROOT = CE_Q1 then E1_X else CE_FS1[?]
         | CE_FS2 := if CE_FS2[?] < 0 and E1_PLACED and E1_ROOT = CE_Q2 then E1_X else CE_FS2[?]
         |)
-     with (| CE_COUNT := 0 | CE_SIGNAL_COUNT := 0 | CE_MIN0 := -1 | CE_MIN1 := -1 | CE_MIN2 := -1 | CE_FS1 := -1 | CE_FS2 := -1 |)
+     with (| CE_COUNT := 0 | CE_OTHER_COUNT := 0 | CE_MIN0 := -1 | CE_MIN1 := -1 | CE_MIN2 := -1 | CE_FS1 := -1 | CE_FS2 := -1 |)
      end
    | CE_KEY1 := if CE_FS1 >= 0 then CE_FS1 else FLAT_SIGNAL_COUNT + CE_Q1
    | CE_KEY2 := if CE_FS2 >= 0 then CE_FS2 else FLAT_SIGNAL_COUNT + CE_Q2
    | CE_SWAP := CE_FITS and CE_KEY2 < CE_KEY1
-   | CE_ITEMS := if TX_ARGS > 0 then TX_ARGS else if SCHED_LIST then (if SM_COUNT > CLOCK_NAME_CAP then CLOCK_NAME_CAP else SM_COUNT)
-               else if CE_COUNT > CLOCK_NAME_CAP then CLOCK_NAME_CAP else CE_COUNT
+   | CE_OTHERS := CE_COUNT = 0
+   | SM_OWNED := SM_OWNERS > 0
+   | CE_ITEMS_WANTED := if TX_ARGS > 0 then TX_ARGS else if SCHED_LIST then (if SM_OWNED then SM_OWNERS else SM_EFFECTS)
+                        else if CE_OTHERS then CE_OTHER_COUNT else CE_COUNT
+   | CE_ITEMS := if CE_ITEMS_WANTED > CLOCK_NAME_CAP then CLOCK_NAME_CAP else CE_ITEMS_WANTED
    | CL_INDEX := 0 .. CE_ITEMS - 1
    | iterate CL_INDEX of
        (| L_EFFECT := SCHED_PAIR
-        | L_POSITION := SCHED_LIST and not SM_ITEM_OWNER[CL_INDEX]
+        | L_POSITION := SCHED_LIST and not SM_OWNED
         | L_PLAIN := L_EFFECT or L_POSITION
-        | L_M := if SCHED_LIST then SM_ITEM_VALUE[CL_INDEX] else if SCHED_PAIR then (if CL_INDEX = 0 then EF_FIRST_ROW else EF_SECOND_ROW)
-                 else if CE_ARGS = 0 then CE_ITEM_MEMBER[CL_INDEX] else if CL_INDEX = 0 then CE_MIN0
+        | L_M := if SCHED_LIST then (if SM_OWNED then SM_OWNER_ITEM_ROW[CL_INDEX] else SM_EFFECT_ITEM_ROW[CL_INDEX])
+                 else if SCHED_PAIR then (if CL_INDEX = 0 then EF_FIRST_ROW else EF_SECOND_ROW)
+                 else if CE_ARGS = 0 then (if CE_OTHERS then CE_OTHER_MEMBER[CL_INDEX] else CE_ITEM_MEMBER[CL_INDEX])
+                 else if CL_INDEX = 0 then CE_MIN0
                  else if CL_INDEX = 1 and not CE_SWAP or CL_INDEX = 2 and CE_SWAP then CE_MIN1 else CE_MIN2
         | L_SIGNAL := not L_PLAIN and L_M < FLAT_SIGNAL_COUNT
         | L_SAMPLE := not L_PLAIN and L_M >= ROW_COUNT
@@ -3906,14 +3969,14 @@ process SIGC =
         | CI_D2 := CI_D2[?] next CL_INDEX : L_D2
         | CI_S := CI_S[?] next CL_INDEX : L_S
         | CI_END := CI_END[?] next CL_INDEX : CL_TOTAL
-        | CI_KEY := CI_KEY[?] next CL_INDEX : if TX_ARGS > 0 then long(CL_INDEX) else if SCHED_LIST then SM_ITEM_KEY[CL_INDEX]
-                                            else CE_ITEM_KEY[CL_INDEX]
-        | CI_INCLUDED := CI_INCLUDED[?] next CL_INDEX : not (CE_STALL and CE_SIGNAL_COUNT > 0 and not CE_ITEM_SIGNAL[CL_INDEX])
-                                                         and not (SCHED_LIST and SM_OWNERS > 0 and not SM_ITEM_OWNER[CL_INDEX])
+        | CI_KEY := CI_KEY[?] next CL_INDEX : if TX_ARGS > 0 then long(CL_INDEX)
+                                            else if SCHED_LIST then (if SM_OWNED then long(0) else SM_EFFECT_ITEM_KEY[CL_INDEX])
+                                            else if CE_OTHERS then long(0) else CE_ITEM_KEY[CL_INDEX]
         |)
      with (| CL_TOTAL := 0 | CL_LONGEST := 0 |)
      end
-   | CE_OVERFLOW := CE_COUNT > CLOCK_NAME_CAP or SCHED_LIST and SM_COUNT > CLOCK_NAME_CAP or CL_TOTAL + 2 * CE_ITEMS > CLOCK_TEXT_CAP
+   | CE_OVERFLOW := CE_ITEMS_WANTED > CLOCK_NAME_CAP
+                  or CL_TOTAL + (if CE_LIST and CE_ITEMS > 0 then 2 * (CE_ITEMS - 1) else 0) > CLOCK_TEXT_CAP
    | CR_INDEX := 0 .. (if CE_OVERFLOW then -1 else CL_TOTAL - 1)
    | iterate CR_INDEX of
        (| CR_ITEM := if CR_INDEX >= CI_END[CR_ITEM[?]] then CR_ITEM[?] + 1 else CR_ITEM[?]
@@ -3956,7 +4019,7 @@ process SIGC =
         | S_J := CS_J[?]
         | S_K := CS_K[?]
         | S_LIVE := S_I < CE_ITEMS
-        | S_SKIPS := S_I = S_J or not CI_INCLUDED[S_I] or not CI_INCLUDED[S_J]
+        | S_SKIPS := S_I = S_J
         | S_I_START := if S_I = 0 then 0 else CI_END[S_I - 1]
         | S_J_START := if S_J = 0 then 0 else CI_END[S_J - 1]
         | S_I_BYTE := if S_K < CI_END[S_I] - S_I_START then integer(CE_TEXT[S_I_START + S_K]) else -1
@@ -3969,22 +4032,21 @@ process SIGC =
         | S_ROW_ENDS := S_DECIDED and S_J = CE_ITEMS - 1
         | S_RANK := CS_LESS[?] + integer(S_DECIDED and S_LESS)
         | S_DUPLICATE := CS_DUPLICATE[?] or S_DECIDED and not S_SKIPS and S_EQUAL and S_J < S_I
-        | CE_ORDER := CE_ORDER[?] next (if S_ROW_ENDS and CI_INCLUDED[S_I] then S_RANK else -1) : S_I
+        | CE_ORDER := CE_ORDER[?] next (if S_ROW_ENDS then S_RANK else -1) : S_I
         | CE_DUPLICATE := CE_DUPLICATE[?] next (if S_ROW_ENDS then S_I else -1) : S_DUPLICATE
         | CS_LESS := if S_ROW_ENDS then 0 else S_RANK
         | CS_DUPLICATE := not S_ROW_ENDS and S_DUPLICATE
         | CS_I := S_I + integer(S_ROW_ENDS)
         | CS_J := if S_ROW_ENDS then 0 else S_J + integer(S_DECIDED)
         | CS_K := if S_DECIDED then 0 else S_K + 1
-        | CE_INCLUDED_COUNT := CE_INCLUDED_COUNT[?] + integer(S_ROW_ENDS and CI_INCLUDED[S_I])
         |)
-     with (| CS_I := 0 | CS_J := 0 | CS_K := 0 | CS_LESS := 0 | CS_DUPLICATE := false | CE_INCLUDED_COUNT := 0 |)
+     with (| CS_I := 0 | CS_J := 0 | CS_K := 0 | CS_LESS := 0 | CS_DUPLICATE := false |)
      end
    | CJ_INDEX := 0 .. (if CE_OVERFLOW then -1 else CL_TOTAL + 3 * CE_ITEMS)
    | iterate CJ_INDEX of
        (| J_R := CJ_R[?]
         | J_O := CJ_O[?]
-        | J_LIVE := J_R < CE_INCLUDED_COUNT
+        | J_LIVE := J_R < CE_ITEMS
         | J_ITEM := CE_ORDER[J_R]
         | J_SKIPS := CE_DUPLICATE[J_ITEM] and not SCHED_LIST
         | J_START := if J_ITEM = 0 then 0 else CI_END[J_ITEM - 1]
@@ -4313,14 +4375,14 @@ process SIGC =
         | M_NEW := M_OWNS and not SM_SEEN[?][M_OWNER]
         | SM_SEEN := SM_SEEN[?] next (if M_OWNS then M_OWNER else -1) : true
         | M_EFFECT := M_IN and not M_OWNS and ROWS_OP[SM_INDEX] = OP_EFFECT
-        | M_APPENDS := M_NEW or M_EFFECT
-        | M_SLOT := if M_APPENDS and SM_COUNT[?] < CLOCK_NAME_CAP then SM_COUNT[?] else -1
+        | M_OWNER_SLOT := if M_NEW and SM_OWNERS[?] < CLOCK_NAME_CAP then SM_OWNERS[?] else -1
+        | M_EFFECT_SLOT := if M_EFFECT and SM_EFFECTS[?] < CLOCK_NAME_CAP then SM_EFFECTS[?] else -1
         | M_ROW := if M_NEW then M_OWNER else SM_INDEX
         | M_KEY := (if ROWS_TOKEN[M_ROW] < 0 then long(16777217) else long(TOKEN_LINE[ROWS_TOKEN[M_ROW]]) * long(16777216) + long(TOKEN_COLUMN[ROWS_TOKEN[M_ROW]]))
-        | SM_ITEM_VALUE := SM_ITEM_VALUE[?] next M_SLOT : M_ROW
-        | SM_ITEM_KEY := SM_ITEM_KEY[?] next M_SLOT : (if M_NEW then long(0) else M_KEY)
-        | SM_ITEM_OWNER := SM_ITEM_OWNER[?] next M_SLOT : M_NEW
-        | SM_COUNT := SM_COUNT[?] + integer(M_APPENDS)
+        | SM_OWNER_ITEM_ROW := SM_OWNER_ITEM_ROW[?] next M_OWNER_SLOT : M_OWNER
+        | SM_EFFECT_ITEM_ROW := SM_EFFECT_ITEM_ROW[?] next M_EFFECT_SLOT : SM_INDEX
+        | SM_EFFECT_ITEM_KEY := SM_EFFECT_ITEM_KEY[?] next M_EFFECT_SLOT : M_KEY
+        | SM_EFFECTS := SM_EFFECTS[?] + integer(M_EFFECT)
         | SM_OWNERS := SM_OWNERS[?] + integer(M_NEW)
         | M_SELF_KEY := (if ROWS_TOKEN[SM_INDEX] < 0 then long(16777217) else long(TOKEN_LINE[ROWS_TOKEN[SM_INDEX]]) * long(16777216) + long(TOKEN_COLUMN[ROWS_TOKEN[SM_INDEX]]))
         | M_OWNER_BETTER := M_NEW and M_KEY < SM_OWNER_KEY[?]
@@ -4333,7 +4395,7 @@ process SIGC =
         | SM_ROW_KEY := if M_ROW_BETTER then M_SELF_KEY else SM_ROW_KEY[?]
         | SM_ROW_TOKEN := if M_ROW_BETTER then ROWS_TOKEN[SM_INDEX] else SM_ROW_TOKEN[?]
         |)
-     with (| SM_COUNT := 0 | SM_OWNERS := 0 | SM_OWNER_KEY := long(9223372036854775807) | SM_OWNER_TOKEN := -1
+     with (| SM_EFFECTS := 0 | SM_OWNERS := 0 | SM_OWNER_KEY := long(9223372036854775807) | SM_OWNER_TOKEN := -1
            | SM_EFFECT_KEY := long(9223372036854775807) | SM_EFFECT_TOKEN := -1
            | SM_ROW_KEY := long(9223372036854775807) | SM_ROW_TOKEN := -1 |)
      end
@@ -4398,7 +4460,7 @@ process SIGC =
    | EF_FIRST_ROW := SE_EROW[EF_FIRST]
    | EF_SECOND_ROW := SE_EROW[EF_SECOND]
    | SCHEDULE_MESSAGE := if not SCHEDULE_RUN then 0 else if SCHED_OVERFLOW then T_CAPACITY
-                       else if SC_RUN then (if SM_OWNERS > 0 then T_SIGNAL_CYCLE else if SM_COUNT > 0 then T_EFFECT_CYCLE
+                       else if SC_RUN then (if SM_OWNERS > 0 then T_SIGNAL_CYCLE else if SM_EFFECTS > 0 then T_EFFECT_CYCLE
                                             else T_CLOCK_CAUSALITY)
                        else if EF_FAILED then T_EFFECTS_UNORDERED else 0
    | SCHEDULE_TOKEN := if SCHEDULE_MESSAGE = T_SIGNAL_CYCLE then SM_OWNER_TOKEN
@@ -5922,8 +5984,6 @@ process SIGC =
     constant integer CLOCK_CAP = 1048576;
     constant integer DEF_CAP = 262144;
     constant integer OB_CAP = 4194304;
-    constant integer CLOCK_ROUND_CAP = 16;
-    constant integer CLOCK_ROUND_WORK = 1048576;
     constant integer PAIR_CAP = 1048576;
     constant integer PAIR_NEXT_CAP = 5242880;
     constant integer PAIR_STRIDE = 4096;
@@ -8006,7 +8066,8 @@ process SIGC =
     [CLOCK_NAME_CAP] integer CE_ITEM_MEMBER, CI_P, CI_A_AT, CI_A_LENGTH, CI_F1, CI_N1, CI_D1, CI_F2, CI_B_AT,
       CI_B_LENGTH, CI_F3, CI_N2, CI_D2, CI_S, CI_END, CE_ORDER;
     [CLOCK_NAME_CAP] long CE_ITEM_KEY, CI_KEY;
-    [CLOCK_NAME_CAP] boolean CE_ITEM_SIGNAL, CI_INCLUDED, CE_DUPLICATE;
+    [CLOCK_NAME_CAP] integer CE_OTHER_MEMBER;
+    [CLOCK_NAME_CAP] boolean CE_DUPLICATE;
     [CLOCK_TEXT_CAP] ubyte CE_TEXT, CLOCK_TEXT;
     integer CLOCK_MESSAGE, CLOCK_TOKEN, CLOCK_ARGUMENT0, CF_SIGNAL_SOURCE, CLOCKS_COLUMN_ROWS, CLOCK_POSITION_TOKEN,
       CLOCKS_NUMBER_VALUE, CP_OP, CP_OP_UNIONS, CP_UNIONS, CP_SAMPLE_BOUND, CP_DEF_BOUND, CP_GUARDED, KS_NOW, KC, KK,
@@ -8046,12 +8107,12 @@ process SIGC =
       CLOCK_MESSAGE_RAW, CE_ARGS, CE_Q0, CE_Q1, CE_Q2, E0_0, E0_1, E0_2, E0_3, E0_4, E0_5, E0_6, E0_7, E0_8, E0_9,
       E0_10, E0_11, E0_12, E0_13, E0_14, E0_15, E0_16, E0_17, E0_18, E0_19, E0_20, E0, E1_X, E1_0, E1_1, E1_2, E1_3,
       E1_4, E1_5, E1_6, E1_7, E1_8, E1_9, E1_10, E1_11, E1_12, E1_13, E1_14, E1_15, E1_16, E1_17, E1_18, E1_19, E1_20,
-      E1, E1_GUARD, E1_MARK, E1_SLOT, E1_MEMBER, E1_TOKEN, CE_COUNT, CE_SIGNAL_COUNT, CE_MIN0, CE_MIN1, CE_MIN2,
-      E1_ROOT, CE_FS1, CE_FS2, CE_KEY1, CE_KEY2, CE_ITEMS, L_M, L_ROW, L_SOURCE, L_NAME_KEY, L_INSTANCE, L_BASE,
+      E1, E1_GUARD, E1_MARK, E1_SLOT, E1_OTHER_SLOT, E1_MEMBER, E1_TOKEN, CE_COUNT, CE_OTHER_COUNT, CE_MIN0, CE_MIN1, CE_MIN2,
+      E1_ROOT, CE_FS1, CE_FS2, CE_KEY1, CE_KEY2, CE_ITEMS_WANTED, CE_ITEMS, L_M, L_ROW, L_SOURCE, L_NAME_KEY, L_INSTANCE, L_BASE,
       L_SUFFIX, L_TOKEN, L_P, L_A, L_F1, L_N1, L_F2, L_B, L_F3, L_N2, L_S, L_D1_ALL, L_D2_ALL, L_D1, L_D2, L_A_LENGTH,
       L_B_LENGTH, L_LENGTH, CL_TOTAL, CL_LONGEST, CR_ITEM, CR_OFFSET, CR_P_END, CR_A_END, CR_F1_END, CR_N1_END,
       CR_F2_END, CR_B_END, CR_F3_END, CR_N2_END, CR_NAME_AT, CR_FRAGMENT, S_I, S_J, S_K, S_I_START, S_J_START,
-      S_I_BYTE, S_J_BYTE, S_RANK, CS_LESS, CS_I, CS_J, CS_K, CE_INCLUDED_COUNT, J_R, J_O, J_ITEM, J_START,
+      S_I_BYTE, S_J_BYTE, S_RANK, CS_LESS, CS_I, CS_J, CS_K, J_R, J_O, J_ITEM, J_START,
       J_SEPARATOR, CJ_POSITION, CJ_EMITTED, CJ_R, CJ_O, CE_GUARD_TOKEN;
     boolean CLOCK_FAILED, CLOCK_INCOMPLETE, CLOCKS_READY, CLOCKS_DUMP, CLOCKS_RUN, CP_LEFT_CTX, CP_RIGHT_CTX,
       CP_SAMPLES, AT_KS_ROWS, AT_KS_SAMPLES, AT_KS_GROUPS, AT_KS_REWRITE, AT_KS_TARGETS, AT_KS_GUARDS, AT_KS_SCAN,
@@ -8068,7 +8129,7 @@ process SIGC =
       OG_K_SPLITS, OG_POPS, OG_SLOT_LIVE, OG_APPLIES, OG_FOUND, OG_ADDS, OG_PAIRS_FULL, OG_NEW, OG_LINKS, OG_PUSHES,
       OG_H0, OG_H1, OG_H2, OG_H3, OG_H4, OG_HOLDS, OG_FINISHES, OG_NOT_INSIDE, OG_FAILS, CO_DONE, CF_SIGNALS,
       CF_GOING, CF_INPUT, CF_NOT_ROOT, CF_LISTS, CF_FAILED, CE_STALL, CE_GUARDS, CE_LIST, CE_FITS, CE_FROM_CK,
-      E1_SIGNAL, E1_WAITS, E1_STALLED, E1_NEW, E1_APPENDS, E1_FITS, E1_PLACED, CE_SWAP, L_SIGNAL, L_SAMPLE, L_FLAT,
+      E1_SIGNAL, E1_WAITS, E1_STALLED, E1_NEW, E1_APPENDS, E1_OTHER, E1_PLACED, CE_OTHERS, SM_OWNED, CE_SWAP, L_SIGNAL, L_SAMPLE, L_FLAT,
       L_BRACKET, L_PREFIXED, CE_OVERFLOW, S_LIVE, S_SKIPS, S_KEYS_DIFFER, S_EQUAL, S_DECIDED, S_LESS, S_ROW_ENDS,
       S_DUPLICATE, CS_DUPLICATE, J_LIVE, J_SKIPS, J_EMITS, J_ADVANCES;
     long CLOCKS_DUMP_BOUND, CP_STEPS, CK_TOTAL_BOUND, CK_DEF_BOUND, CK_ROUND_BOUND, CK_BOUND, E1_KEY;
@@ -8088,9 +8149,8 @@ process SIGC =
     [EFFECT_ORDER_CAP] integer SE_EROW;
     [EFFECT_PAIR_CAP] boolean EF_ORDERED;
     [TYPE_CAP] integer RES_COUNT;
-    [CLOCK_NAME_CAP] integer SM_ITEM_VALUE;
-    [CLOCK_NAME_CAP] long SM_ITEM_KEY;
-    [CLOCK_NAME_CAP] boolean SM_ITEM_OWNER;
+    [CLOCK_NAME_CAP] integer SM_OWNER_ITEM_ROW, SM_EFFECT_ITEM_ROW;
+    [CLOCK_NAME_CAP] long SM_EFFECT_ITEM_KEY;
     [PARSE_CAP] integer SE_INDEX, SWC_INDEX, SN_INDEX, SPL_INDEX, SKO_INDEX, SKA_INDEX, SKB_INDEX, SL_INDEX,
       SCA_INDEX, SCB_INDEX, SM_INDEX, EF_INDEX, SWS_INDEX, SSC_INDEX, SNS_INDEX, SNP_INDEX, LOP_INDEX;
     integer TX_ARGS, SCHEDULE_ARGUMENT2, SCHEDULE_COLUMN_ROWS, SCHED_LOOP_BASE, SCHED_NODES, SE_CLOCK_END, SE_DEP_END,
@@ -8103,7 +8163,7 @@ process SIGC =
       SKB_POPPED, SKB_TOP, SKB_COUNT, SKB_PRESENT, SKB_POP_LOOP, SKB_NODE, SKB_STEP, SKB_CURSOR, SL_ERROR_LOOP,
       L_POPS, LO_SUM, SC_N, A_NODE, A_K, A_LEN, A_S, A_ACC, SCA_NODE, SCA_K, SCA_ACC, SCB_INIT_NODE, SCB_NODE_NOW,
       SCB_K, SCB_LEN0, SCB_S, SCB_NEW_DEC, SCB_POPPED, SCB_TOP, SCB_COUNT, SCB_PRESENT, SCB_NODE, SCB_STEP,
-      SCB_CURSOR, M_NODE, M_OWNER, M_SLOT, M_ROW, SM_COUNT, SM_OWNERS, SM_OWNER_TOKEN, SM_EFFECT_TOKEN, SM_ROW_TOKEN,
+      SCB_CURSOR, M_NODE, M_OWNER, M_OWNER_SLOT, M_EFFECT_SLOT, M_ROW, SM_EFFECTS, SM_OWNERS, SM_OWNER_TOKEN, SM_EFFECT_TOKEN, SM_ROW_TOKEN,
       EF_E, F_I, F_PH, F_ROW, F_RES, F_STAMP, F_SUP, F_NODE, F_K, F_LEN, F_S, F_PUSHED, EF_TOP, F_J, F_JROW, F_JSUP,
       F_PI, F_PJ, EF_FIRST, EF_SECOND, EF_PH, EF_I, EF_J, EF_NODE, EF_K, EF_FIRST_ROW, EF_SECOND_ROW,
       SCHEDULE_MESSAGE, SCHEDULE_TOKEN, SCHEDULE_ARGUMENT0, WS_READER, C_L1, SNAP_TOTAL, SNS_SUM, N_L, O_NODE, O_LOOP;
@@ -8115,13 +8175,20 @@ process SIGC =
       SKA_SUCC_PUSH, SKA_POPS, SKA_PUSH, SKB_RUN, SKB_IN_INIT, SKB_INIT_PRESENT, SKB_INIT_PUSH, SKB_EXPANDING,
       SKB_COUNTS, SKB_SUCC_PUSH, SKB_POPS, SKB_PUSH, SKB_FAILED, L_FAILED1, L_FAILED2, SC_OUTER, SC_INNER, SC_RUN,
       A_EXPANDING, A_HIT, SCB_IN_INIT, SCB_INIT_PRESENT, SCB_INIT_PUSH, SCB_EXPANDING, SCB_COUNTS, SCB_SUCC_PUSH,
-      SCB_POPS, SCB_PUSH, M_IN, M_OWNS, M_NEW, M_EFFECT, M_APPENDS, M_OWNER_BETTER, M_EFFECT_BETTER, M_ROW_BETTER,
+      SCB_POPS, SCB_PUSH, M_IN, M_OWNS, M_NEW, M_EFFECT, M_OWNER_BETTER, M_EFFECT_BETTER, M_ROW_BETTER,
       EF_RUN, F_ACTIVE, F_START1, F_SKIP, F_TO_PAIRS, F_START2, F_DFS, F_EXPANDING, F_VISITS, F_POPS, F_DFS_ENDS,
       F_PUSH, F_SCAN, F_REACHED, F_SCAN_ENDS, F_PAIRS, F_PAIR_FAILS, F_PAIRS_END, EF_FAILED, SCHEDULE_READY, WS_MARKS,
       O_FIRST_RUN, O_TAKES;
     long SCHEDULE_DUMP_BOUND, M_KEY, M_SELF_KEY, SM_OWNER_KEY, SM_EFFECT_KEY, SM_ROW_KEY, EF_BOUND;
-    integer CK_ROUND_LIMIT, CO_PAIR_TOTAL;
-    long CK_ROUND_NEED, CK_ROUND_AFFORD, PAIR_BUDGET;
+    integer CK_ROUND_LIMIT, OV_NOW, OV_O, OV_SIDE, OV_F_0, OV_F_1, OV_F_2, OV_F_3, OV_F_4, OV_F_5, OV_F_6, OV_F_7, OV_F_8,
+      OV_F_9, OV_F_10, OV_F_11, OV_F_12, OV_F_13, OV_F_14, OV_F_15, OV_F_16, OV_F_17, OV_F_18, OV_F_19, OV_F_20,
+      OV_FIRST, OV_N, OV_S, OV_DEPTH,
+      OV_KIND, OV_NEXT, OV_CAND, OV_LOOK, OV_STAMP, OV_BELOW, OW_COUNT, OW_CLOCKS, OW_STATE, OW_SIDE, OW_O, OW_NODE,
+      OW_SLOT, OW_DEPTH;
+    boolean OV_STARTS, OV_WALKS, OV_SPLITS, OV_POPS, OV_SLOT_LIVE, OV_APPLIES, OV_PUSHES, OV_ENTERS, OV_FINISHES, OW_DONE;
+    long OW_BOUND;
+    [CLOCK_CAP] integer OW_STAMP, OW_STACK_NODE, OW_STACK_SLOT;
+    [PARSE_CAP] integer OW_INDEX;
     [EMIT_TYPE_CAP] integer XT_KIND, XT_BYTES, XT_ELEMENT, XT_EB;
     [EMIT_TYPE_CAP] boolean XT_SIGNED;
     [EMIT_TYPE_CAP] ulong XT_SIZE, XT_WORDS;
