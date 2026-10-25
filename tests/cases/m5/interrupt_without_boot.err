@@ -1,0 +1,1 @@
+interrupt_without_boot.sig:5:5: error: a program with Interrupt pragmas needs a Boot pragma to enable them

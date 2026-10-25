@@ -1,0 +1,1 @@
+pragma_not_event.sig:6:16: error: input signal TICK named by a pragma must be event

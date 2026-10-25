@@ -1,0 +1,1 @@
+pragma_shared_root.sig:2:16: error: input signals A and B share one root clock; each Interrupt or Boot input needs its own

@@ -1,0 +1,1 @@
+input_unnamed.sig:2:26: error: input signal RESET must be named by an Interrupt or Boot pragma

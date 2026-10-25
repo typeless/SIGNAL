@@ -1,0 +1,1 @@
+syscall_virt.sig:11:14: error: syscall is not available on QEMU virt

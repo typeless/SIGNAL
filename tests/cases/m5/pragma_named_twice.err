@@ -1,0 +1,1 @@
+pragma_named_twice.sig:7:16: error: input signal TICK is named by two pragmas

@@ -1,0 +1,1 @@
+free_root_expression.sig:8:11: error: the root clock of [expression at 8:11] is not the clock of an Interrupt or Boot input

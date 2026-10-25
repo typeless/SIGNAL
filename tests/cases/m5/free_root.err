@@ -1,0 +1,1 @@
+free_root.sig:3:22: error: the root clock of STEPS is not the clock of an Interrupt or Boot input

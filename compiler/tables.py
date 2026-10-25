@@ -14,7 +14,7 @@ SEED_WORDS = [
     "clock'", "state'", "cur'", "on'",
     "process", "where", "end", "init", "true", "false", "when", "default", "and", "or", "xor", "not", "modulo",
     "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with", "if", "then", "else", "procedure",
-    "node", "function", "automaton", "label", "on", "external", "indices",
+    "node", "function", "automaton", "label", "on", "external", "indices", "pragmas", "Interrupt", "Boot",
 ]
 KEYWORDS = {
     "process", "where", "end", "init", "integer", "boolean", "event", "true", "false", "when", "default", "and", "or",
@@ -26,7 +26,7 @@ NAME_CONSTANTS = {
     "store": "N_STORE", "syscall": "N_SYSCALL",
     "instruction": "N_INSTRUCTION", "Automaton_Initial_State": "N_INITIAL", "Automaton_Transition": "N_TRANSITION",
     "Automaton_IsIn": "N_ISIN", "clock'": "N_CLOCK_MARK", "state'": "N_STATE_MARK", "cur'": "N_CURRENT_MARK",
-    "on'": "N_ON_MARK", "indices": "N_INDICES",
+    "on'": "N_ON_MARK", "indices": "N_INDICES", "pragmas": "N_PRAGMAS", "Interrupt": "N_INTERRUPT", "Boot": "N_BOOT",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -233,6 +233,21 @@ TEMPLATES = [
     ("CLOCK_CAUSALITY", "causality cycle between clocks", []),
     ("EFFECTS_UNORDERED", "effects # and # on resource # have no order between them; order them with -->", ["CLOCK", "CLOCK", "TYPE"]),
     ("ARRAYS_ADDRESS", "arrays need more than 2^64 bytes of address space", []),
+    ("PRAGMAS_TOP", "pragmas are allowed only on the top model", []),
+    ("PRAGMA_UNKNOWN", "pragma # is not supported; use Interrupt or Boot", ["NAME"]),
+    ("PRAGMAS_END", "expected 'end pragmas', found #", ["TOKEN"]),
+    ("INTERRUPT_STATEMENT", "Interrupt expects an interrupt number in quotes, found #", ["TOKEN"]),
+    ("INTERRUPT_NUMBER", "interrupt number # must be a decimal from 16 to 31", ["TOKEN"]),
+    ("INTERRUPT_TWICE", "interrupt # is used twice", ["NUMBER"]),
+    ("BOOT_TWICE", "pragma Boot is used twice", []),
+    ("PRAGMA_INPUT", "pragma object # is not an input signal", ["NAME"]),
+    ("PRAGMA_EVENT", "input signal # named by a pragma must be event", ["NAME"]),
+    ("PRAGMA_TWICE", "input signal # is named by two pragmas", ["NAME"]),
+    ("INPUT_UNNAMED", "input signal # must be named by an Interrupt or Boot pragma", ["NAME"]),
+    ("VIRT_ROOT", "the root clock of # is not the clock of an Interrupt or Boot input", ["CLOCK"]),
+    ("SYSCALL_VIRT", "syscall is not available on QEMU virt", []),
+    ("BOOT_MISSING", "a program with Interrupt pragmas needs a Boot pragma to enable them", []),
+    ("INPUT_SHARED", "input signals # and # share one root clock; each Interrupt or Boot input needs its own", ["NAME", "NAME"]),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
@@ -320,7 +335,8 @@ PARSE_STATES = [
     "CONSTANT_NAME", "CONSTANT_EQUAL", "CONSTANT_DEFINITION", "INTEGER_CONSTANT", "CONSTANT_ELEMENT",
     "CONSTANT_SCALAR", "CONSTANT_SEPARATOR", "LABEL_NAME", "LABEL_SEPARATOR", "PROCESS", "PATH_COPY",
     "GUARD_COLONS", "ITERATE_NAME", "ITERATE_OF", "EQUATION", "DEPENDENCE", "EQUATION_END", "GROUP_MEMBER", "POP",
-    "OPERAND", "PARAMETER", "PARAMETER_CLOSE", "OPERATOR", "BRANCH", "STALL", "DONE", "FAILED",
+    "OPERAND", "PARAMETER", "PARAMETER_CLOSE", "OPERATOR", "BRANCH", "PRAGMA_NAME", "PRAGMA_OPEN", "PRAGMA_OBJECT",
+    "PRAGMA_CLOSE", "PRAGMA_STATEMENT", "STALL", "DONE", "FAILED",
 ]
 OPERAND_CASES = ["EMPTY_CALL", "LITERAL", "CALL", "PARAMETERS", "SIGNAL", "OPEN_PAREN", "IF", "PREFIX", "PLUS", "FAIL"]
 OPERATOR_CASES = ["REDUCE", "BINARY", "THEN", "ELSE", "DELAY", "PREVIOUS", "OPEN_SQUARE", "CLOSE", "COMMA", "RETURN"]
@@ -404,7 +420,7 @@ FORMS = [
     "LDR_X", "LDR_W", "LDRSW_X", "LDRH_W", "LDRSH_X", "LDRB_W", "STR_X", "STR_W", "STRH_W", "STRB_W",
     "LDR_X_REG", "LDR_W_REG", "LDRSW_X_REG", "LDRH_W_REG", "LDRSH_X_REG", "LDRB_W_REG", "STR_X_REG", "STR_W_REG",
     "STRH_W_REG", "STRB_W_REG", "LDR_X_POST", "STR_X_POST", "STR_W_POST", "STRB_W_POST", "LDRB_W_PRE",
-    "B", "BL", "B_COND", "CBZ_W", "CBZ_X", "CBNZ_X", "ADRP", "RET", "SVC_80", "WORD",
+    "B", "BL", "B_COND", "CBZ_W", "CBZ_X", "CBNZ_X", "ADRP", "RET", "SVC_80", "WORD", "WFI",
 ]
 MOVE_X = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 2, 21))
 MOVE_W = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 1, 21))
@@ -488,12 +504,14 @@ FORM_SPECS = [
     ("ret", 0xD65F03C0, (), False, "NONE"),
     ("svc 0x80", 0xD4001001, (), False, "NONE"),
     ("word", 0x00000000, WORD32, False, "NONE"),
+    ("wfi", 0xD503207F, (), False, "NONE"),
 ]
 FORM_FIELD_SLOTS = 4
 MACHO_BASE = 0x100000000
 TEXT_OFFSET = 392
 COMMAND_BYTES = 360
 SEGMENT_BYTES = 16384
+ELF_VARIABLES = ["CONSTANT", "SIGNED_BYTES", "MEMORY_BYTES"]
 HEADER_VARIABLES = ["CONSTANT", "TEXT_BYTES", "DATA_BYTES", "SIGNED_BYTES", "LINKEDIT_BYTES", "SIGNATURE_BYTES"]
 SIGNATURE_VARIABLES = ["CONSTANT", "SIGNATURE_BYTES", "DIRECTORY_BYTES", "PAGES", "SIGNED_BYTES"]
 SUPERBLOB_HEADER_BYTES = 20
@@ -515,7 +533,7 @@ OP_CONDITIONS = {
     "EQ": ("EQ", "EQ"), "NE": ("NE", "NE"), "LT": ("LT", "LO"), "LE": ("LE", "LS"), "GT": ("GT", "HI"), "GE": ("GE", "HS"),
 }
 OP_SHIFTS = {"SHL": "LSLV_X", "SHR": "LSRV_X"}
-GLOBAL_LABELS = ["malformed", "reserve_failed", "read_value", "put_int", "put_uint", "put_bool", "step", "read_done"]
+GLOBAL_LABELS = ["malformed", "reserve_failed", "read_value", "put_int", "put_uint", "put_bool", "step", "read_done", "wait", "complete"]
 EMIT_SOURCES = [
     "row", "left", "right", "right_left", "right_right", "param", "value_row",
     "arg0", "arg1", "arg2", "arg3", "arg4", "arg5", "arg6",
@@ -526,14 +544,14 @@ EMIT_SOURCES = [
     "window_offset", "window_bytes", "reservation", "line_capacity", "root_count",
     "load_param", "store_param", "load_indexed_row", "load_indexed_index", "load_indexed_element",
     "store_indexed_element", "instruction_op", "shift_op", "pair_form", "signed_condition", "unsigned_condition",
-    "loop_start", "loop_end", "local0", "local1", "local2", "local3", "local4", "put_output",
+    "loop_start", "loop_end", "local0", "local1", "local2", "local3", "local4", "put_output", "root_irq",
 ] + GLOBAL_LABELS
 EMIT_PREDICATES = [
     "always", "flag", "has_arg1", "has_arg2", "has_arg3", "has_arg4", "has_arg5", "has_arg6", "right_loads",
     "counted", "uncounted", "bounded", "keys_differ",
 ]
 MICRO_KINDS = ["EMIT", "LI", "LOAD", "STORE", "OPERAND", "ADDRESS", "PLACE"]
-TARGET_KINDS = ["NONE", "LABEL", "TABLE", "WINDOW", "SIG", "MEM", "CLK", "IN", "OUT", "MALFORMED_TEXT", "RESERVE_TEXT"]
+TARGET_KINDS = ["NONE", "LABEL", "TABLE", "WINDOW", "SIG", "MEM", "CLK", "IN", "OUT", "MALFORMED_TEXT", "RESERVE_TEXT", "TAIL", "STACK"]
 SOURCE_BASE = 1 << 20
 CC = CONDITIONS
 CODE_COLUMNS = [
@@ -541,9 +559,18 @@ CODE_COLUMNS = [
 ]
 EMIT_TEXT = "presence input malformed at step memory reservation failed"
 UNIT_PHASES = [
-    "PROLOGUE", "RESERVE", "WINDOW", "JUMP_STEP", "RESERVE_FAILED", "READ_VALUE", "STEP", "READ_LINE", "VALUE_INPUT",
-    "READ_TAIL", "ORDER", "DELAY", "OUTPUT_HEAD", "OUTPUT", "OUTPUT_TAIL", "FINISH",
+    "PROLOGUE", "RESERVE", "WINDOW", "JUMP_STEP", "BOOT", "WAIT", "DISPATCH", "WAIT_TAIL", "RESERVE_FAILED", "READ_VALUE",
+    "STEP", "READ_LINE", "VALUE_INPUT", "READ_TAIL", "ORDER", "DELAY", "OUTPUT_HEAD", "OUTPUT", "OUTPUT_TAIL", "FINISH",
 ]
+VIRT_SUFFIX = "_VIRT"
+VIRT_BASE = 0x40000000
+VIRT_TEXT_OFFSET = 120
+BOOT_ID = 1024
+SPECIAL_ID = 1020
+GICC_PAGE = 0x0801
+GICC_IAR = 0x0C
+GICC_EOIR = 0x10
+UART_PAGE = 0x0900
 
 
 def step(kind, when, form=0, a0=0, a1=0, a2=0, a3=0, target=("NONE", 0)):
@@ -610,6 +637,18 @@ def loop_bound(when):
 
 def system_call(number):
     return [emit("MOVZ_X", 16, 0, number), emit("SVC_80")]
+
+
+PUT_NUMBER = [
+    place("put_int"), emit("SUBS_X_IMM", XZR, 0, 0),
+    emit("B_COND", a3=CC["GE"], to=label("put_uint")), emit("MOVZ_W", 10, 0, 45), emit("STRB_W_POST", 10, 20, 1),
+    emit("SUB_X", 0, XZR, 0), place("put_uint"), emit("ORR_X", 9, XZR, 0), emit("SUB_X_IMM", SP, SP, 32),
+    emit("ADD_X_IMM", 11, SP, 0), emit("ADD_X_IMM", 15, SP, 0), emit("MOVZ_X", 12, 0, 10), place("local0"),
+    emit("UDIV_X", 13, 9, 12), emit("MSUB_X", 14, 13, 12, 9), emit("ADD_W_IMM", 14, 14, 48),
+    emit("STRB_W_POST", 14, 11, 1), emit("ORR_X", 9, XZR, 13), emit("CBNZ_X", 9, to=label("local0")), place("local1"),
+    emit("LDRB_W_PRE", 14, 11, -1), emit("STRB_W_POST", 14, 20, 1), emit("SUBS_X", XZR, 11, 15),
+    emit("B_COND", a3=CC["NE"], to=label("local1")), emit("ADD_X_IMM", SP, SP, 32), emit("RET"),
+]
 
 
 EMIT_TEMPLATES = [
@@ -770,18 +809,52 @@ EMIT_TEMPLATES = [
         emit("ADD_X_IMM", 1, 1, to=("OUT", 0)), emit("SUB_X", 2, 20, 1), emit("MOVZ_X", 0, 0, 1), *system_call(4),
     ]),
     ("FINISH", [
-        emit("B", to=label("step")), place("put_int"), emit("SUBS_X_IMM", XZR, 0, 0),
-        emit("B_COND", a3=CC["GE"], to=label("put_uint")), emit("MOVZ_W", 10, 0, 45), emit("STRB_W_POST", 10, 20, 1),
-        emit("SUB_X", 0, XZR, 0), place("put_uint"), emit("ORR_X", 9, XZR, 0), emit("SUB_X_IMM", SP, SP, 32),
-        emit("ADD_X_IMM", 11, SP, 0), emit("ADD_X_IMM", 15, SP, 0), emit("MOVZ_X", 12, 0, 10), place("local0"),
-        emit("UDIV_X", 13, 9, 12), emit("MSUB_X", 14, 13, 12, 9), emit("ADD_W_IMM", 14, 14, 48),
-        emit("STRB_W_POST", 14, 11, 1), emit("ORR_X", 9, XZR, 13), emit("CBNZ_X", 9, to=label("local0")), place("local1"),
-        emit("LDRB_W_PRE", 14, 11, -1), emit("STRB_W_POST", 14, 20, 1), emit("SUBS_X", XZR, 11, 15),
-        emit("B_COND", a3=CC["NE"], to=label("local1")), emit("ADD_X_IMM", SP, SP, 32), emit("RET"), place("put_bool"),
+        emit("B", to=label("step")), *PUT_NUMBER, place("put_bool"),
         emit("CBZ_W", 0, to=label("local2")), emit("MOVZ_W", 9, 0, 0x7274), emit("MOVK_W", 9, 0, 0x6575, 1),
         emit("STR_W_POST", 9, 20, 4), emit("RET"), place("local2"), emit("MOVZ_W", 9, 0, 0x6166),
         emit("MOVK_W", 9, 0, 0x736C, 1), emit("STR_W_POST", 9, 20, 4), emit("MOVZ_W", 9, 0, 101),
         emit("STRB_W_POST", 9, 20, 1), emit("RET"),
+    ]),
+]
+
+
+
+def put_bytes(text):
+    return [step_row for byte in text.encode() for step_row in (emit("MOVZ_W", 9, 0, byte), emit("STRB_W_POST", 9, 20, 1))]
+
+
+EMIT_TEMPLATES += [
+    ("PROLOGUE_VIRT", [
+        emit("ADRP", 9, to=("STACK", 0)), emit("ADD_X_IMM", 9, 9, to=("STACK", 0)), emit("ADD_X_IMM", SP, 9, 0),
+        emit("MOVZ_X", 22),
+    ]),
+    ("WINDOW_VIRT", [
+        emit("ADRP", 0, to=("TAIL", "row")), emit("ADD_X_IMM", 0, 0, to=("TAIL", "row")), emit("ADRP", 8, to=("WINDOW", "row")),
+        emit("STR_X", 0, 8, to=("WINDOW", "row")),
+    ]),
+    ("BOOT", [emit("MOVZ_X", 21, 0, BOOT_ID), emit("B", to=label("step"))]),
+    ("WAIT", [place("wait"), emit("WFI"), emit("MOVZ_X", 9, 0, GICC_PAGE, 1), emit("LDR_W", 21, 9, GICC_IAR)]),
+    ("DISPATCH", [
+        emit("SUBS_W_IMM", XZR, 21, "row", when="flag"), emit("B_COND", a3=CC["EQ"], to=label("step"), when="flag"),
+    ]),
+    ("WAIT_TAIL", [
+        place("complete"), emit("SUBS_W_IMM", XZR, 21, SPECIAL_ID), emit("B_COND", a3=CC["HS"], to=label("wait")),
+        emit("MOVZ_X", 9, 0, GICC_PAGE, 1), emit("STR_W", 21, 9, GICC_EOIR), emit("B", to=label("wait")),
+    ]),
+    ("CLOCK_ROOT_VIRT", [
+        emit("SUBS_W_IMM", XZR, 21, "root_irq"), emit("CSINC_W", 9, XZR, XZR, CC["EQ"] ^ 1),
+        st(9, ("CLK", "row"), UINTEGER_TYPE),
+    ]),
+    ("OUTPUT_TAIL_VIRT", [
+        emit("MOVZ_W", 10, 0, 10), emit("STRB_W_POST", 10, 20, 1), emit("ADRP", 1, to=("OUT", 0)),
+        emit("ADD_X_IMM", 1, 1, to=("OUT", 0)), emit("SUB_X", 2, 20, 1), emit("MOVZ_X", 9, 0, UART_PAGE, 1), emit("MOVZ_X", 11),
+        place("local0"), emit("LDRB_W_REG", 10, 1, 11), emit("STR_W", 10, 9, 0), emit("ADD_X_IMM", 11, 11, 1),
+        emit("SUBS_X", XZR, 11, 2), emit("B_COND", a3=CC["NE"], to=label("local0")),
+    ]),
+    ("FINISH_VIRT", [
+        emit("B", to=label("complete")), *PUT_NUMBER,
+        place("put_bool"), emit("CBZ_W", 0, to=label("local2")), *put_bytes("true"), emit("RET"), place("local2"),
+        *put_bytes("false"), emit("RET"),
     ]),
 ]
 
@@ -856,6 +929,17 @@ def macho_header_words():
         + struct.pack("<IIII", 0x1D, 16, signed_bytes, signature_bytes)
     )
     assert len(header) == TEXT_OFFSET
+    return [struct.unpack_from("<I", header, 4 * k)[0] for k in range(len(header) // 4)]
+
+
+def elf_header_words():
+    signed_bytes, memory_bytes = (MARKER_BASE + k for k in range(1, 3))
+    header = (
+        b"\x7fELF\x02\x01\x01" + bytes(9)
+        + struct.pack("<HHIQQQIHHHHHH", 2, 183, 1, VIRT_BASE + VIRT_TEXT_OFFSET, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+        + struct.pack("<IIQQQQQQ", 1, 7, 0, VIRT_BASE, VIRT_BASE, signed_bytes, memory_bytes, SEGMENT_BYTES)
+    )
+    assert len(header) == VIRT_TEXT_OFFSET
     return [struct.unpack_from("<I", header, 4 * k)[0] for k in range(len(header) // 4)]
 
 
@@ -1124,6 +1208,15 @@ def build():
     table("HEADER_FIELD", "short", header_fields)
     for index, name in enumerate(HEADER_VARIABLES):
         integer(f"HV_{name}", index)
+    elf_words, elf_fields = split_markers(elf_header_words(), ELF_VARIABLES)
+    integer("ELF_WORD_COUNT", len(elf_words))
+    table("ELF_WORD", "uinteger", elf_words, lambda v: f"uinteger({v})")
+    table("ELF_FIELD", "short", elf_fields)
+    for index, name in enumerate(ELF_VARIABLES):
+        integer(f"EV_{name}", index)
+    constants.append(("VIRT_BASE", f"constant long VIRT_BASE = {VIRT_BASE};"))
+    integer("VIRT_TEXT_OFFSET", VIRT_TEXT_OFFSET)
+    integer("BOOT_ID", BOOT_ID)
     signature_words, signature_fields = split_markers(signature_header_words(), SIGNATURE_VARIABLES)
     integer("SIGNATURE_HEADER_BYTES", 4 * len(signature_words))
     table("SIGNATURE_WORD", "uinteger", signature_words, lambda v: f"uinteger({v})")
@@ -1149,6 +1242,10 @@ def build():
         integer(f"UPH_{name}", index)
     integer("UPH_DONE", len(UNIT_PHASES))
     table("UNIT_PHASE_TEMPLATE", "integer", [template_names.index(name) if name in template_names else -1 for name in UNIT_PHASES])
+    table("UNIT_PHASE_TEMPLATE_VIRT", "integer", [
+        template_names.index(name + VIRT_SUFFIX) if name + VIRT_SUFFIX in template_names
+        else template_names.index(name) if name in template_names else -1 for name in UNIT_PHASES
+    ])
     starts, lengths, label_counts, step_rows = emit_template_rows()
     table("ET_START", "integer", starts)
     table("ET_LENGTH", "integer", lengths)

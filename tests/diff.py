@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CASES = ROOT / "tests" / "cases"
 DUMP = ROOT / "tests" / "dump.py"
 STAGE0 = ROOT / "bootstrap" / "sigc.py"
+VIRT_SUITE = "m5"
 BUILD = ROOT / "build" / "m4"
 PASS_NUMBERS = {"tokens": 1, "program": 2, "flat": 3, "rows": 4, "clocks": 5, "schedule": 6, "code": 7}
 DUMP_PASS_LINE = "constant integer DUMP_PASS = 0;"
@@ -99,7 +100,7 @@ def main():
         if failure:
             print(failure, file=sys.stderr)
             return 2
-    sources = sorted(CASES.rglob("*.sig"))
+    sources = [s for s in sorted(CASES.rglob("*.sig")) if s.relative_to(CASES).parts[0] != VIRT_SUITE]
     differing = 0
     with tempfile.TemporaryDirectory() as scratch:
         for source in sources:

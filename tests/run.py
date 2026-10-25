@@ -11,6 +11,8 @@ BUILD = ROOT / "build" / "tests"
 COMPILER = ROOT / "bootstrap" / "sigc.py"
 COMPILE_TIMEOUT_SECONDS = 60
 RUN_TIMEOUT_SECONDS = 5
+VIRT_SUITE = "m5"
+QEMU = ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-kernel"]
 
 
 def compile_case(compiler, source, executable):
@@ -23,9 +25,9 @@ def compile_case(compiler, source, executable):
     )
 
 
-def read_trace(executable, line_count, input_path):
+def read_trace(command, line_count, input_path):
     stdin = open(input_path, "rb") if input_path.exists() else subprocess.DEVNULL
-    process = subprocess.Popen([str(executable)], stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(command, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
@@ -80,7 +82,8 @@ def run_trace_case(compiler, source, expected_path):
             report.append(f"expected stderr containing {expected_stderr.strip()!r}, got {stderr.strip()!r}")
         timed_out = False
     else:
-        actual, timed_out, returncode = read_trace(executable, len(expected), source.with_suffix(".in"))
+        command = [*QEMU, str(executable)] if source.relative_to(CASES).parts[0] == VIRT_SUITE else [str(executable)]
+        actual, timed_out, returncode = read_trace(command, len(expected), source.with_suffix(".in"))
         report = []
     if actual == expected and not report:
         return []
@@ -113,6 +116,8 @@ def main():
         compiler = [str(Path(selected[position + 1]).resolve())]
         del selected[position:position + 2]
     sources = sorted(CASES.rglob("*.sig"))
+    if compiler[-1] == str(COMPILER):
+        sources = [s for s in sources if s.relative_to(CASES).parts[0] != VIRT_SUITE]
     if selected:
         sources = [s for s in sources if any(name in str(s.relative_to(CASES)) for name in selected)]
     failures = 0

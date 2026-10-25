@@ -1,0 +1,1 @@
+pragma_shared_boot.sig:2:20: error: input signals START and TICK share one root clock; each Interrupt or Boot input needs its own

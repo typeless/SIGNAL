@@ -48,6 +48,7 @@ Every milestone ends with test programs that run on this Mac; a milestone is don
 - The interrupt-controller and timer drivers are SIGNAL code written per D3; the runtime sets up the stack, dispatches interrupts to input signals (D2, D8) and writes step lines to the UART, as it writes them to stdout on macOS (D15). Array capacities are physical memory (D6).
 - Output format: ELF (D14).
 - Exit check: a timer-interrupt program under `qemu-system-aarch64 -M virt` prints the expected sequence on the UART.
+- Done 2026-10-25: the exit check passes. `tests/cases/m5/timer.sig`, compiled by stage 2, prints the boot line and 1 to 10 on the PL011 under QEMU 11.1.2; `python3 tests/selfhost.py` printed `stage2 matches stage1`, `stage3 matches stage2`, `run.py: 305 passed, 0 failed` and `diff.py: 282 cases, 0 differ`.
 
 ## M6 — Thumb-2
 
