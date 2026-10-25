@@ -53,7 +53,8 @@ Every milestone ends with test programs that run on this Mac; a milestone is don
 ## M6 — Thumb-2
 
 - Second backend for Cortex-M; capacities are physical (D6).
-- Exit check: the M5 test programs, retargeted, pass under `qemu-system-arm` on a Cortex-M machine.
+- Target: QEMU `mps2-an385` (Cortex-M3), selected by a `Machine` pragma; output ELF32 (D16).
+- Exit check: the M5 test programs, retargeted, pass under `qemu-system-arm` on a Cortex-M machine, and `tests/differential.py` finds no trace difference between Cortex-M and macOS on its seeds (D16).
 
 ## Not scheduled
 
