@@ -1,0 +1,1 @@
+array_bound.sig:5:17: error: the bound of 'array' must be a positive integer literal or constant name

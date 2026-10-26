@@ -1,0 +1,1 @@
+repeat_in_expression.sig:5:14: error: '|*' can only be the whole definition of a signal

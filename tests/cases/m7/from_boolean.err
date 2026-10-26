@@ -1,0 +1,1 @@
+from_boolean.sig:5:14: error: operator from expects event operands, found boolean

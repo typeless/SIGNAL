@@ -1,0 +1,1 @@
+count_declaration_init.sig:2:28: error: initial value of N is unused: N is not defined by $, cell or var

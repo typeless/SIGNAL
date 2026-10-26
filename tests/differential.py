@@ -24,7 +24,8 @@ TYPES = {
 ARITHMETIC = ["+", "-", "*", "/", "modulo"]
 BITWISE = ["and", "or", "xor"]
 SHIFTS = ["shl", "shr"]
-COMPARISONS = ["=", "/=", "<", "<=", ">", ">="]
+COMPARISONS = ["=", "/=", "<", "<=", ">", ">=", "==", "<<="]
+EVENT_OPERATORS = ["^+", "^*", "^-"]
 CONNECTIVES = ["and", "or", "xor"]
 LONG_MAX = 2**63 - 1
 
@@ -86,6 +87,39 @@ class Program:
             else:
                 self.definitions.append(f"{signal} := {self.expression(name, MAX_DEPTH)}")
         self.sum_body = self.expression(self.sum_type, 2, inside_iterate=True)
+        self.templates()
+
+    def templates(self):
+        rng = self.rng
+        scalars = [o for o in self.outputs if o[1] != "boolean"]
+        repeated, repeated_type = rng.choice([(f"(N * {rng.randrange(1, 9)})", "integer")] + scalars)
+        repeat_count = rng.randrange(1, 5)
+        array_bound = rng.randrange(1, 5)
+        self.template_outputs = ["MC", "MV", "MA", "MF", "MK", "MR", "ME", "MAR"]
+        self.template_body = [
+            f"XC := ({self.expression('integer', 1)}) when {self.phase()}",
+            f"MC := XC cell {self.phase()} init {rng.randrange(-3, 4)}",
+            f"VE := (N * {rng.randrange(1, 9)}) when {self.phase()}",
+            f"MV := (var VE init {rng.randrange(-3, 4)}) + N",
+            f"H1 := when {self.phase()}",
+            f"H2 := when {self.phase()}",
+            "MA := H1 after H2",
+            "MF := H1 from H2",
+            f"MK := H1 count {rng.randrange(1, 5)}",
+            f"XR := {repeated} |* {repeat_count}",
+            f"MR := integer(XR[{rng.randrange(repeat_count)}])",
+            f"HE := when {self.phase()}",
+            f"XE := HE |* {repeat_count}",
+            f"ME := N when XE[{rng.randrange(repeat_count)}]",
+            f"array J to {array_bound} of (| AR := AR[?] + J * N |) with AR := 0 end",
+            "MAR := AR",
+        ]
+        self.template_declarations = [
+            "integer XC, VE, AR;",
+            "event H1, H2, HE;",
+            f"[{repeat_count}] {repeated_type} XR;",
+            f"[{repeat_count}] event XE;",
+        ]
 
     def leaf(self, name, inside_iterate):
         rng = self.rng
@@ -113,8 +147,9 @@ class Program:
         bits, signed = TYPES[name]
         kinds = ["arithmetic", "arithmetic", "convert", "if"]
         kinds += ["negate"] if signed else ["bitwise", "bitwise", "not", "shift", "shift"]
+        kinds += ["abs"] if signed else []
         if not inside_iterate:
-            kinds.append("merge")
+            kinds += ["merge", "recover", "clocked"]
         kind = rng.choice(kinds)
         below = depth - 1
         if kind == "arithmetic":
@@ -123,6 +158,14 @@ class Program:
             return f"({self.expression(name, below, inside_iterate)} {rng.choice(BITWISE)} {self.expression(name, below, inside_iterate)})"
         if kind == "not":
             return f"(not {self.expression(name, below, inside_iterate)})"
+        if kind == "abs":
+            return f"abs({self.expression(name, min(below, 1), inside_iterate)})"
+        if kind == "recover":
+            index = f"((integer({self.expression('integer', 0)}) + (N - N)) modulo {TABLE_SIZE + 2})"
+            return f"{name}(TAB[{index}] \\\\ {literal(rng, self.table_type)})"
+        if kind == "clocked":
+            return (f"((({self.expression(name, below)}) when ({self.event(1)}))"
+                    f" default (({name}(N) - {name}(N)) + {self.expression(name, below)}))")
         if kind == "negate":
             return f"(-{self.expression(name, below, inside_iterate)})"
         if kind == "shift":
@@ -140,19 +183,40 @@ class Program:
         return (f"(if {self.condition(below, inside_iterate)} then {self.expression(name, below, inside_iterate)}"
                 f" else {self.expression(name, below, inside_iterate)})")
 
+    def phase(self):
+        modulus = self.rng.randrange(2, 5)
+        return f"((N modulo {modulus}) = {self.rng.randrange(modulus)})"
+
+    def event(self, depth):
+        rng = self.rng
+        kind = rng.choice(["when", "true", "false", "combine"] if depth > 0 else ["when", "true", "false"])
+        if kind == "when":
+            return f"(when {self.phase()})"
+        if kind == "true":
+            return f"[: {self.phase()}]"
+        if kind == "false":
+            return f"[/: {self.phase()}]"
+        return f"({self.event(depth - 1)} {rng.choice(EVENT_OPERATORS)} {self.event(depth - 1)})"
+
     def condition(self, depth, inside_iterate=False):
         rng = self.rng
         below = max(depth - 1, 0)
-        kind = rng.choice(["compare", "compare", "compare", "not", "connective"]) if depth > 0 else "compare"
+        kinds = ["compare", "compare", "compare", "not", "connective"] + ([] if inside_iterate else ["left_tt"])
+        kind = rng.choice(kinds) if depth > 0 else "compare"
+        if kind == "left_tt":
+            return f"left_tt(({self.comparison(below)} and (N = N)), ({self.comparison(below)} and (N = N)))"
         if kind == "not":
             return f"(not {self.condition(below, inside_iterate)})"
         if kind == "connective":
             return f"({self.condition(below, inside_iterate)} {rng.choice(CONNECTIVES)} {self.condition(below, inside_iterate)})"
-        name = rng.choice(list(TYPES))
-        return f"({self.expression(name, below, inside_iterate)} {rng.choice(COMPARISONS)} {self.expression(name, below, inside_iterate)})"
+        return self.comparison(below, inside_iterate)
+
+    def comparison(self, depth, inside_iterate=False):
+        name = self.rng.choice(list(TYPES))
+        return f"({self.expression(name, depth, inside_iterate)} {self.rng.choice(COMPARISONS)} {self.expression(name, depth, inside_iterate)})"
 
     def source(self, machine):
-        outputs = "; ".join(f"{name} {signal}" for signal, name in self.outputs)
+        outputs = "; ".join([f"{name} {signal}" for signal, name in self.outputs] + [f"integer {signal}" for signal in self.template_outputs])
         signals = [signal for signal, _ in self.outputs]
         delays = [f"Z{signal} := {signal} $" for signal, name in self.outputs if name != "boolean"]
         body = [
@@ -162,9 +226,10 @@ class Program:
             "I := indices(TABLE_SIZE)",
             f"iterate I of (| R := R[?] + ({self.sum_body}) | P := P[?] next I : R |) with R := {self.sum_type}(0) end",
             "SUM := P[(N - 1) modulo TABLE_SIZE]",
-            *(["G := TAB[ORDER]"] if any("G[" in line for line in self.definitions) else []),
+            *(["G := TAB[ORDER]"] if any("G[" in line for line in self.definitions + self.template_body) else []),
             *self.definitions,
             *delays,
+            *self.template_body,
             " ^= ".join(signals + ["TICK"]),
         ]
         declarations = [
@@ -175,8 +240,9 @@ class Program:
             f"{self.sum_type} R, SUM;",
             f"[TABLE_SIZE] {self.sum_type} P;",
             "[TABLE_SIZE] integer I;",
-            *([f"[TABLE_SIZE] {self.table_type} G;"] if any("G[" in line for line in self.definitions) else []),
+            *([f"[TABLE_SIZE] {self.table_type} G;"] if any("G[" in line for line in self.definitions + self.template_body) else []),
             *[f"{name} Z{signal};" for signal, name in self.outputs if name != "boolean"],
+            *self.template_declarations,
         ]
         lines = ["process RANDOM =", "  ( ? event START, TICK;", f"    ! {outputs}; )"]
         if machine:

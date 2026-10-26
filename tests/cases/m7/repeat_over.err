@@ -1,0 +1,1 @@
+repeat_over.sig:4:13: error: '|*' produces 6 elements but the array has 4

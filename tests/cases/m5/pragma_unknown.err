@@ -1,1 +1,0 @@
-pragma_unknown.sig:5:5: error: pragma Main is not supported; use Interrupt, Boot or Machine

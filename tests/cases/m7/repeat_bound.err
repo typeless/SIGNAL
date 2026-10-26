@@ -1,0 +1,1 @@
+repeat_bound.sig:5:16: error: the bound of '|*' must be a positive integer literal or constant name

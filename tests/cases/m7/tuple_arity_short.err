@@ -1,0 +1,1 @@
+tuple_arity_short.sig:4:6: error: wrong number of arguments for A: expected 3, found 2

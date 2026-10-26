@@ -1,0 +1,1 @@
+cell_guarded.sig:4:24: error: 'cell' cannot be used inside a guard, case branch, label or state action

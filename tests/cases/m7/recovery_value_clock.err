@@ -1,0 +1,1 @@
+recovery_value_clock.sig:3:13: error: clock of X cannot be shown inside the clock [expression at 3:21]

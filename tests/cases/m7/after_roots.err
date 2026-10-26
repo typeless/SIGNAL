@@ -1,0 +1,1 @@
+after_roots.sig:5:14: error: clock of [expression at 5:14] fits no tree: it relates root clocks A and B

@@ -1,0 +1,1 @@
+count_boolean.sig:4:14: error: operator count expects event operands, found boolean

@@ -1,0 +1,1 @@
+cell_in_expression.sig:5:14: error: 'cell' can only be the whole definition of a signal

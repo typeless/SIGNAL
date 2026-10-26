@@ -3,7 +3,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from run import QEMU_COMMANDS
+from run import STAGE2_ONLY
 
 ROOT = Path(__file__).resolve().parent.parent
 CASES = ROOT / "tests" / "cases"
@@ -101,7 +101,7 @@ def main():
         if failure:
             print(failure, file=sys.stderr)
             return 2
-    sources = [s for s in sorted(CASES.rglob("*.sig")) if s.relative_to(CASES).parts[0] not in QEMU_COMMANDS]
+    sources = [s for s in sorted(CASES.rglob("*.sig")) if s.relative_to(CASES).parts[0] not in STAGE2_ONLY]
     differing = 0
     with tempfile.TemporaryDirectory() as scratch:
         for source in sources:

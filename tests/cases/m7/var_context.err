@@ -1,0 +1,1 @@
+var_context.sig:7:12: error: var is supported only where its context clock is the defined signal's clock

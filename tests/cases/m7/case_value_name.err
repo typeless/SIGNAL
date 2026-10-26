@@ -1,0 +1,1 @@
+case_value_name.sig:4:26: error: a case value must be a literal, found 'ZN'

@@ -1,0 +1,1 @@
+repeat_event_boolean.sig:5:13: error: '|*' expects a value of type event, found boolean

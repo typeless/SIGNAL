@@ -15,6 +15,7 @@ QEMU_COMMANDS = {
     "m5": ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-kernel"],
     "m6": ["qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic", "-no-reboot", "-kernel"],
 }
+STAGE2_ONLY = {"m5", "m6", "m7"}
 
 
 def compile_case(compiler, source, executable):
@@ -119,7 +120,7 @@ def main():
         del selected[position:position + 2]
     sources = sorted(CASES.rglob("*.sig"))
     if compiler[-1] == str(COMPILER):
-        sources = [s for s in sources if s.relative_to(CASES).parts[0] not in QEMU_COMMANDS]
+        sources = [s for s in sources if s.relative_to(CASES).parts[0] not in STAGE2_ONLY]
     if selected:
         sources = [s for s in sources if any(name in str(s.relative_to(CASES)) for name in selected)]
     failures = 0

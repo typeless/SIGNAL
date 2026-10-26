@@ -1,0 +1,7 @@
+process P =
+  ( ! integer S; )
+  (| N := ZN + 1 | ZN := N $ init 0
+   | array I to 7 of (| Q := Q[?] next I : I * 2 |) end
+   | S := N + Q[3]
+   |)
+  where integer ZN, N; [4] integer Q; end;

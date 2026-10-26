@@ -9,25 +9,30 @@ ANCHOR = "    type ARGS = external;\n"
 
 SEED_WORDS = [
     "event", "boolean", "short", "integer", "long", "ubyte", "ushort", "uinteger", "ulong", "pointer",
-    "load", "store", "syscall", "instruction",
+    "load", "store", "syscall", "instruction", "abs", "left_tt",
     "Automaton_Initial_State", "Automaton_Transition", "Automaton_IsIn",
     "clock'", "state'", "cur'", "on'",
     "process", "where", "end", "init", "true", "false", "when", "default", "and", "or", "xor", "not", "modulo",
     "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with", "if", "then", "else", "procedure",
     "node", "function", "automaton", "label", "on", "external", "indices", "pragmas", "Interrupt", "Boot", "Machine",
+    "cell", "var", "after", "from", "count", "case", "in", "array", "to",
+    "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "rep'",
 ]
+FRESH_FIRST = "cell'"
+FRESH_LAST = "rep'"
 KEYWORDS = {
     "process", "where", "end", "init", "integer", "boolean", "event", "true", "false", "when", "default", "and", "or",
     "xor", "not", "modulo", "short", "long", "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with",
     "if", "then", "else", "procedure", "node", "function", "automaton", "label", "on", "external",
+    "cell", "var", "after", "from", "count", "case", "in", "array", "to",
 }
 NAME_CONSTANTS = {
     "event": "N_EVENT", "boolean": "N_BOOLEAN", "ubyte": "N_UBYTE", "ulong": "N_ULONG", "load": "N_LOAD",
     "store": "N_STORE", "syscall": "N_SYSCALL",
-    "instruction": "N_INSTRUCTION", "Automaton_Initial_State": "N_INITIAL", "Automaton_Transition": "N_TRANSITION",
+    "instruction": "N_INSTRUCTION", "abs": "N_ABS", "left_tt": "N_LEFT_TT", "Automaton_Initial_State": "N_INITIAL", "Automaton_Transition": "N_TRANSITION",
     "Automaton_IsIn": "N_ISIN", "clock'": "N_CLOCK_MARK", "state'": "N_STATE_MARK", "cur'": "N_CURRENT_MARK",
     "on'": "N_ON_MARK", "indices": "N_INDICES", "pragmas": "N_PRAGMAS", "Interrupt": "N_INTERRUPT", "Boot": "N_BOOT",
-    "Machine": "N_MACHINE",
+    "Machine": "N_MACHINE", "rep'": "N_REPEAT_MARK",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -36,31 +41,129 @@ SYMBOLS = [
     (")", "CLOSE"), ("=", "EQUAL"), (";", "SEMICOLON"), (",", "COMMA"), ("?", "QUESTION"), ("!", "BANG"),
     ("<", "LESS"), (">", "GREATER"), ("^", "CARET"), ("#", "HASH"), ("[", "OPEN_BRACKET"), ("]", "CLOSE_BRACKET"),
     (":", "COLON"), ("{", "OPEN_BRACE"), ("}", "CLOSE_BRACE"),
+    ("^+", "CLOCK_PLUS"), ("^*", "CLOCK_TIMES"), ("^-", "CLOCK_MINUS"), ("==", "EQUAL_EQUAL"),
+    ("<<=", "LESS_LESS_EQUAL"), ("[:", "OPEN_COLON"), ("[/:", "OPEN_SLASH_COLON"), ("\\\\", "BACKSLASHES"),
+    ("|*", "BAR_STAR"),
 ]
-SYMBOL_BASE = 64
-OTHER_CODES = [("EOF", 0), ("NAME", 100), ("NUMBER", 101), ("STRING", 102)]
-CODE_LIMIT = 104
+SYMBOL_BASE = 80
+OTHER_CODES = [("EOF", 0), ("NAME", 128), ("NUMBER", 129), ("STRING", 130)]
+CODE_LIMIT = 132
+ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34, "'": 39, "?": 63, "%": 37}
 
 OPS = [
     "CONST", "SIGNAL", "ENUMCONST", "CALL", "DELAY", "PREV", "INDEX", "NEG", "NOT", "UWHEN", "CLOCK", "IF", "BRANCH",
     "DEFAULT", "WHEN", "XOR", "OR", "AND", "EQ", "NE", "LT", "LE", "GT", "GE", "ADD", "SUB", "MUL", "DIV", "MOD",
     "SHL", "SHR", "NEXT", "PAIR", "RANGE", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK", "EFFECT",
     "INPUT", "COPY", "CONVERT", "TABLE", "ELEMENT", "GATHER", "ITER", "SEED", "ARG",
+    "CLOCK_PLUS", "CLOCK_TIMES", "OPEN_COLON", "OPEN_SLASH_COLON", "LEFT_TT", "CLOCK_MINUS", "ABS", "OPERAND", "ZERO",
+    "RECOVER", "RECOVER_SQUARE", "INDEX_OPERAND", "SIZE", "SIZE_LESS", "CELL", "VAR", "AFTER", "FROM", "COUNT",
+    "REPEAT", "ONE", "RIGHT_OPERAND", "TARGET_SIGNAL", "INDEX_SIGNAL", "REPEAT_RANGE", "ARRAY_RANGE", "REPEAT_BODY",
 ]
 MONOCHRONOUS = {
     "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR",
     "CONVERT", "ELEMENT", "GATHER", "PAIR", "NEXT", "PREV", "ITER", "IF", "BRANCH", "ARG", "RANGE",
 }
-OPENERS = {"CALL", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK"}
+OPENERS = {"CALL", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK", "OPEN_COLON", "OPEN_SLASH_COLON"}
+BRACKETED = {"OPEN_SQUARE", "OPEN_COLON", "OPEN_SLASH_COLON"}
+COMPOSITES = {
+    "CLOCK_PLUS": (["CLOCK"], ["CLOCK", "DEFAULT"]), "CLOCK_TIMES": (["CLOCK"], ["CLOCK", "WHEN"]),
+    "OPEN_COLON": ([], ["UWHEN"]), "OPEN_SLASH_COLON": ([], ["NOT", "UWHEN"]), "LEFT_TT": ([], ["WHEN", "DEFAULT"]),
+    "CLOCK_MINUS": (["CLOCK"], ["CLOCK", "WHEN", "NOT", "OPERAND", "CLOCK", "DEFAULT", "UWHEN"]),
+    "ABS": ([], ["ZERO", "LT", "OPERAND", "NEG", "OPERAND", "BRANCH", "IF"]),
+    "RECOVER": (["INDEX_OPERAND", "ZERO", "GE", "INDEX_OPERAND", "SIZE_LESS", "LE", "AND", "WHEN"], ["RIGHT_OPERAND", "EQ", "INDEX_OPERAND", "ZERO", "GE", "AND", "RIGHT_OPERAND", "RIGHT_OPERAND", "BRANCH", "IF", "DEFAULT"]),
+    "RECOVER_SQUARE": ([], ["SIZE", "MOD", "SIZE", "ADD", "SIZE", "MOD", "INDEX"]),
+    "REPEAT_RANGE": ([], ["ZERO", "RIGHT_OPERAND", "ONE", "SUB", "RANGE"]),
+    "ARRAY_RANGE": ([], ["ZERO", "RIGHT_OPERAND", "RANGE"]),
+    "REPEAT_BODY": ([], ["TARGET_SIGNAL", "PREV", "INDEX_SIGNAL", "OPERAND", "PAIR", "NEXT"]),
+}
 LEAVES = {"CONST", "SIGNAL", "ENUMCONST"}
-UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV"}
+TEMPLATE_ROW_KINDS = ["EMIT", "LEFT", "RIGHT", "DEFINE", "GROUP", "END"]
+TEMPLATE_VALUE_REFS = ["LITERAL", "INIT", "INIT_DECL", "BOUND"]
+TEMPLATE_REFS = {"TARGET": -2, "OPERAND": -3, "BOUND": -4}
+TEMPLATE_KINDS = {"CELL": 1, "AFTER": 1, "FROM": 1, "COUNT": 1, "VAR": 2}
+TEMPLATE_SKIPS_LEFT = {"AFTER", "FROM", "COUNT"}
+
+
+def template_emit(op, name=None, value=0, ref="LITERAL", type=None):
+    return ("EMIT", op, name, value, ref, type)
+
+
+def define(name, type):
+    return ("DEFINE", None, name, 0, "LITERAL", type)
+
+
+LEFT_ROW = ("LEFT", None, None, 0, "LITERAL", None)
+RIGHT_ROW = ("RIGHT", None, None, 0, "LITERAL", None)
+GROUP_ROW = ("GROUP", None, None, 0, "LITERAL", None)
+END_ROW = ("END", None, None, 0, "LITERAL", None)
+
+
+def template_literal(value, type="short"):
+    return template_emit("CONST", value=value, type=type)
+
+
+def counter_rest(next_count):
+    return [
+        LEFT_ROW, template_emit("CLOCK"), define("h1'", "event"),
+        RIGHT_ROW, template_emit("CLOCK"), define("h2'", "event"),
+        template_emit("SIGNAL", "h1'"), template_emit("SIGNAL", "h2'"), template_emit("DEFAULT"), define("m'", "event"),
+        template_literal(1, "boolean"), template_emit("SIGNAL", "h2'"), template_emit("WHEN"), template_emit("SIGNAL", "za'"), template_emit("DEFAULT"),
+        define("a'", "boolean"),
+        template_emit("SIGNAL", "a'"), template_emit("DELAY", value=0, type="boolean"), define("za'", "boolean"),
+        template_emit("SIGNAL", "n'"), template_emit("SIGNAL", "zs'"), template_emit("DEFAULT"), define("s'", "TARGET"),
+        template_emit("SIGNAL", "s'"), template_emit("DELAY", value=0, type="short"), define("zs'", "TARGET"),
+        *next_count, define("n'", "TARGET"),
+        template_emit("SIGNAL", "zs'"), template_literal(1), template_emit("ADD"), template_emit("SIGNAL", "za'"), template_emit("WHEN"), template_emit("SIGNAL", "h1'"),
+        template_emit("WHEN"), define("i'", "TARGET"),
+        template_emit("SIGNAL", "a'"), template_emit("SIGNAL", "m'"), GROUP_ROW,
+        template_emit("SIGNAL", "s'"), template_emit("SIGNAL", "m'"), GROUP_ROW, END_ROW,
+    ]
+
+
+COUNTER_INLINE = [
+    template_emit("SIGNAL", "n'"), template_emit("SIGNAL", "h1'"), template_emit("WHEN"), template_literal(0), template_emit("SIGNAL", "h1'"), template_emit("WHEN"),
+    template_emit("DEFAULT"),
+]
+TEMPLATE_PROGRAMS = {
+    "CELL": ([template_emit("SIGNAL", "zcell'"), template_emit("DEFAULT")], [
+        template_emit("SIGNAL", "TARGET"), template_emit("DELAY", ref="INIT_DECL"), define("zcell'", "TARGET"),
+        LEFT_ROW, template_emit("CLOCK"), RIGHT_ROW, template_emit("UWHEN"), template_emit("DEFAULT"), define("cell'", "event"),
+        template_emit("SIGNAL", "TARGET"), template_emit("SIGNAL", "cell'"), GROUP_ROW, END_ROW,
+    ]),
+    "VAR": ([template_emit("SIGNAL", "varm'"), template_emit("SIGNAL", "TARGET"), template_emit("CLOCK"), template_emit("WHEN")], [
+        template_emit("SIGNAL", "OPERAND"), template_emit("SIGNAL", "zvar'"), template_emit("DEFAULT"), define("varm'", "OPERAND"),
+        template_emit("SIGNAL", "varm'"), template_emit("DELAY", ref="INIT_DECL"), define("zvar'", "OPERAND"),
+        template_emit("SIGNAL", "OPERAND"), template_emit("CLOCK"), template_emit("SIGNAL", "TARGET"), template_emit("CLOCK"), template_emit("DEFAULT"),
+        define("var'", "event"),
+        template_emit("SIGNAL", "varm'"), template_emit("SIGNAL", "var'"), GROUP_ROW, END_ROW,
+    ]),
+    "AFTER": (COUNTER_INLINE, counter_rest([
+        template_literal(0), template_emit("SIGNAL", "h2'"), template_emit("WHEN"), template_emit("SIGNAL", "i'"), template_emit("DEFAULT")])),
+    "FROM": (COUNTER_INLINE, counter_rest([
+        template_literal(1), template_emit("SIGNAL", "h2'"), template_emit("WHEN"), template_emit("SIGNAL", "h1'"), template_emit("WHEN"), template_literal(0),
+        template_emit("SIGNAL", "h2'"), template_emit("WHEN"), template_emit("DEFAULT"), template_emit("SIGNAL", "i'"), template_emit("DEFAULT")])),
+    "COUNT": ([
+        template_literal(0), template_emit("SIGNAL", "zcount'"), template_emit("CONST", ref="BOUND", type="BOUND"), template_emit("GE"), template_emit("WHEN"),
+        template_emit("SIGNAL", "zcount'"), template_literal(1), template_emit("ADD"), template_emit("DEFAULT")], [
+        template_emit("SIGNAL", "TARGET"), template_emit("DELAY", ref="BOUND", type="BOUND"), define("zcount'", "TARGET"),
+        LEFT_ROW, template_emit("CLOCK"), define("h1'", "event"),
+        template_emit("SIGNAL", "TARGET"), template_emit("SIGNAL", "h1'"), GROUP_ROW, END_ROW,
+    ]),
+}
+UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV", "VAR"}
 BINARY = [
     ("default", "DEFAULT", 3), ("when", "WHEN", 4), ("xor", "XOR", 11), ("or", "OR", 12), ("and", "AND", 13),
     ("=", "EQ", 16), ("/=", "NE", 16), ("<", "LT", 16), ("<=", "LE", 16), (">", "GT", 16), (">=", "GE", 16),
     ("+", "ADD", 17), ("-", "SUB", 17), ("*", "MUL", 18), ("/", "DIV", 18), ("modulo", "MOD", 18),
     ("shl", "SHL", 18), ("shr", "SHR", 18), ("next", "NEXT", 1), (":", "PAIR", 2), ("..", "RANGE", 1),
+    ("^+", "CLOCK_PLUS", 6), ("^*", "CLOCK_TIMES", 7), ("^-", "CLOCK_MINUS", 6), ("==", "EQ", 15), ("<<=", "LE", 15),
+    ("\\\\", "RECOVER", 23), ("cell", "CELL", 21), ("after", "AFTER", 5), ("from", "FROM", 5), ("count", "COUNT", 5),
+    ("|*", "REPEAT", 18),
 ]
-PREFIX = [("when", "UWHEN", 8), ("not", "NOT", 14), ("-", "NEG", 20), ("^", "CLOCK", 24)]
+PREFIX = [
+    ("when", "UWHEN", 8), ("not", "NOT", 14), ("-", "NEG", 20), ("^", "CLOCK", 24),
+    ("[:", "OPEN_COLON", 1), ("[/:", "OPEN_SLASH_COLON", 1), ("var", "VAR", 21),
+]
 MODEL_CLASSES = ["process", "procedure", "node", "function", "automaton"]
 
 TYPE_KINDS = ["EVENT", "BOOLEAN", "INT", "POINTER", "ENUM", "ARRAY", "EXTERNAL"]
@@ -119,7 +222,6 @@ TEMPLATES = [
     ("EXPECTED_INTEGER_CONSTANT", "expected an integer constant, found #", ["TOKEN"]),
     ("CAPACITY_POSITIVE", "array capacity must be strictly positive", []),
     ("EXPECTED_TYPE", "expected a type, found #", ["TOKEN"]),
-    ("EVENT_ARRAYS", "arrays of event are not supported", []),
     ("EXTERNAL_SIGNAL", "type # is external; signals cannot have that type", ["TYPE"]),
     ("INPUT_SCALAR", "input signal # must be a scalar", ["NAME"]),
     ("ARRAYS_TO_MODELS", "arrays cannot be passed to models", []),
@@ -138,13 +240,25 @@ TEMPLATES = [
     ("ITERATE_GUARDED", "iterate is not allowed inside a guarded process", []),
     ("ARROW_NAMES", "--> requires signal names", []),
     ("EXPECTED_DEFINITION", "expected ':=' or '^=', found #", ["TOKEN"]),
-    ("DELAY_INITIAL", "the initial value of a delay must be a constant", []),
+    ("DELAY_INITIAL", "the initial value of a delay must be a literal or a constant name", []),
     ("STATIC_PARAMETER", "expected a static parameter, found #", ["TOKEN"]),
     ("EXPECTED_EXPRESSION", "expected an expression, found #", ["TOKEN"]),
     ("EXPECTED_THEN", "expected 'then'", []),
     ("EXPECTED_ELSE", "expected 'else'", []),
     ("UNBALANCED", "unbalanced parenthesis", []),
     ("EXPECTED_OPERATOR", "expected an operator, found #", ["TOKEN"]),
+    ("RECOVERY_ACCESS", "expected an array access before #", ["TOKEN"]),
+    ("ABS_SIGNED", "abs expects a signed integer, found #", ["TYPE"]),
+    ("CASE_VALUE", "a case value must be a literal, found #", ["TOKEN"]),
+    ("CASE_DUPLICATE", "value # is listed twice in this case", ["TOKEN"]),
+    ("CLASS_NEEDS_OUTPUT", "# # must declare at least one output", ["CODE", "NAME"]),
+    ("FUNCTION_MEMORY", "function # cannot contain #", ["NAME", "TOKEN"]),
+    ("FUNCTION_CALL", "function # cannot call # #", ["NAME", "CODE", "NAME"]),
+    ("WHOLE_DEFINITION", "# can only be the whole definition of a signal", ["TOKEN"]),
+    ("VAR_NAME", "var takes a signal name", []),
+    ("VAR_CONTEXT", "var is supported only where its context clock is the defined signal's clock", []),
+    ("TEMPLATE_GUARDED", "# cannot be used inside a guard, case branch, label or state action", ["TOKEN"]),
+    ("CONSTANT_BOUND", "the bound of # must be a positive integer literal or constant name", ["TOKEN"]),
     ("LABEL_UNDECLARED", "label # is not declared", ["NAME"]),
     ("NO_INPUT", "automaton # has no input; its control clock is the upper bound of its inputs", ["NAME"]),
     ("WRONG_ARGUMENTS", "wrong number of arguments for #: expected #, found #", ["NAME", "NUMBER", "NUMBER"]),
@@ -234,8 +348,7 @@ TEMPLATES = [
     ("CLOCK_CAUSALITY", "causality cycle between clocks", []),
     ("EFFECTS_UNORDERED", "effects # and # on resource # have no order between them; order them with -->", ["CLOCK", "CLOCK", "TYPE"]),
     ("ARRAYS_ADDRESS", "arrays need more than 2^64 bytes of address space", []),
-    ("PRAGMAS_TOP", "pragmas are allowed only on the top model", []),
-    ("PRAGMA_UNKNOWN", "pragma # is not supported; use Interrupt, Boot or Machine", ["NAME"]),
+    ("PRAGMA_TOP_ONLY", "pragma # is allowed on the top model only", ["NAME"]),
     ("PRAGMAS_END", "expected 'end pragmas', found #", ["TOKEN"]),
     ("INTERRUPT_STATEMENT", "Interrupt expects an interrupt number in quotes, found #", ["TOKEN"]),
     ("INTERRUPT_NUMBER", "interrupt number # must be a decimal from 16 to 31", ["TOKEN"]),
@@ -254,6 +367,15 @@ TEMPLATES = [
     ("INTERRUPT_NUMBER_MPS2", "interrupt number # must be a decimal from 15 to 47", ["TOKEN"]),
     ("SYSCALL_MPS2", "syscall is not available on mps2-an385", []),
     ("IMAGE_SIZE", "the program needs more than the 4 MiB of RAM on mps2-an385", []),
+    ("ESCAPE", "unknown escape '#' in a string", ["CHARACTER"]),
+    ("ESCAPE_RANGE", "escape value # does not fit in a byte", ["NUMBER"]),
+    ("HIDES_OUTPUT", "signal # is an # of # and cannot be hidden", ["NAME", "FRAGMENT", "NAME"]),
+    ("MODEL_IN_INNER_WHERE", "a model cannot be declared in an inner where", []),
+    ("INIT_UNUSED", "initial value of # is unused: # is not defined by $, cell or var", ["NAME", "NAME"]),
+    ("REPEAT_TYPE", "'|*' expects a value of type #, found #", ["TYPE", "TYPE"]),
+    ("COUNTER_EVENT", "operator # expects event operands, found #", ["FRAGMENT", "TYPE"]),
+    ("REPEAT_SIZE", "'|*' produces # elements but the array has #", ["NUMBER", "NUMBER"]),
+    ("RANGE_FIT", "the index range has # elements but the array has #", ["NUMBER", "NUMBER"]),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
@@ -342,14 +464,18 @@ PARSE_STATES = [
     "CONSTANT_SCALAR", "CONSTANT_SEPARATOR", "LABEL_NAME", "LABEL_SEPARATOR", "PROCESS", "PATH_COPY",
     "GUARD_COLONS", "ITERATE_NAME", "ITERATE_OF", "EQUATION", "DEPENDENCE", "EQUATION_END", "GROUP_MEMBER", "POP",
     "OPERAND", "PARAMETER", "PARAMETER_CLOSE", "OPERATOR", "BRANCH", "PRAGMA_NAME", "PRAGMA_OPEN", "PRAGMA_OBJECT",
-    "PRAGMA_CLOSE", "PRAGMA_STATEMENT", "STALL", "DONE", "FAILED",
+    "PRAGMA_CLOSE", "PRAGMA_STATEMENT", "PRAGMA_OTHER", "PRAGMA_SKIP", "PRAGMA_TEXT", "SET_NAME", "SET_SEPARATOR",
+    "SET_EMIT", "ALIAS_END", "HIDE_NAME", "HIDE_SEPARATOR", "DECLARE_INIT", "TUPLE_NAME", "TUPLE_SEPARATOR", "CASE_IN",
+    "CASE_BRANCH", "CASE_COPY", "CASE_LITERAL", "CASE_SCAN", "CASE_ELSE_VALUE", "CASE_COMPARE", "CASE_JOIN",
+    "CASE_SEPARATOR", "CASE_WHEN", "CASE_GUARD", "STATE_SIGNAL", "STATE_CALL", "STATE_WHEN", "STATE_GUARD", "SYNC",
+    "REPEAT_START", "INDEX_EMIT", "REPEAT_EMIT", "ARRAY_TO", "INDEX_TYPE", "INDEX_DECLARE", "STALL", "DONE", "FAILED",
 ]
 OPERAND_CASES = ["EMPTY_CALL", "LITERAL", "CALL", "PARAMETERS", "SIGNAL", "OPEN_PAREN", "IF", "PREFIX", "PLUS", "FAIL"]
-OPERATOR_CASES = ["REDUCE", "BINARY", "THEN", "ELSE", "DELAY", "PREVIOUS", "OPEN_SQUARE", "CLOSE", "COMMA", "RETURN"]
-FRAMES = ["COMPOSE", "LABEL", "GUARD", "ITERATE"]
-DELAY_INITS = ["NONE", "CONST", "ENUMCONST"]
+OPERATOR_CASES = ["REDUCE", "BINARY", "THEN", "ELSE", "DELAY", "PREVIOUS", "OPEN_SQUARE", "CLOSE", "COMMA", "RETURN", "INIT"]
+FRAMES = ["COMPOSE", "LABEL", "GUARD", "ITERATE", "CASE"]
+DELAY_INITS = ["NONE", "CONST", "ENUMCONST", "NAME", "SIZE"]
 FINISH_PHASES = [
-    "START", "LABEL", "USE", "SIGNAL", "STATEMENT", "REWRITE_EQ", "REWRITE_MEMBER", "REWRITE_GUARD",
+    "START", "LABEL", "USE", "SIGNAL", "HIDE", "INITS", "STATEMENT", "REWRITE_EQ", "REWRITE_MEMBER", "REWRITE_GUARD",
     "REWRITE_TRIGGER", "CLOCK", "STATE", "CUR", "CUR_TAIL", "GROUP", "GUARD_START", "DEFINE_PARSE", "DEFINE_FINISH",
     "READ_PARSE", "READ_FINISH", "READ_MEMBERS", "READ_DEPS", "ON", "FILTER", "DONE", "FAILED",
 ]
@@ -1426,7 +1552,7 @@ def build():
     column_ids = [fragments.add(column + " ") for column in ALL_COLUMNS]
     role_word_ids = [fragments.add(word) for word in ROLE_WORDS]
     capacity_ids = [fragments.add(name) for name in CAPACITY_TABLES]
-    symbol_ids = [fragments.add(text) for text, _ in SYMBOLS]
+    symbol_ids = [0 if "\\" in text else fragments.add(text) for text, _ in SYMBOLS]
     piece_ids = [[fragments.add(piece) for piece in template_pieces(text)] for _, text, _ in TEMPLATES]
 
     seed = " ".join(SEED_WORDS)
@@ -1448,17 +1574,66 @@ def build():
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'"
     for code, character in enumerate(alphabet):
         name_char[ord(character)] = code
+    for continuation in range(0x80, 0xC0):
+        name_char[continuation] = len(alphabet) + continuation - 0x80
     table("NAME_CHAR", "short", name_char)
+    integer("NAME_FANOUT", len(alphabet) + 0x40)
     single = [0] * 256
-    double = [0] * 256
     for index, (text, _) in enumerate(SYMBOLS):
-        code = SYMBOL_BASE + index
         if len(text) == 1:
-            single[ord(text)] = code
-        elif len(text) == 2 and text != ":=":
-            double[ord(text[0])] = code
+            single[ord(text)] = SYMBOL_BASE + index
     table("SINGLE_SYMBOL", "short", single)
-    table("DOUBLE_SYMBOL", "short", double)
+    pairs = [(text, SYMBOL_BASE + index) for index, (text, _) in enumerate(SYMBOLS) if len(text) == 2]
+    firsts = sorted({text[0] for text, _ in pairs})
+    seconds = sorted({text[1] for text, _ in pairs})
+    pair_row = [0] * 256
+    pair_column = [0] * 256
+    for row, character in enumerate(firsts, 1):
+        pair_row[ord(character)] = row
+    for column, character in enumerate(seconds, 1):
+        pair_column[ord(character)] = column
+    pair_width = len(seconds) + 1
+    pair_code = [0] * ((len(firsts) + 1) * pair_width)
+    for text, code in pairs:
+        pair_code[pair_row[ord(text[0])] * pair_width + pair_column[ord(text[1])]] = code
+    table("PAIR_ROW", "short", pair_row)
+    table("PAIR_COLUMN", "short", pair_column)
+    integer("PAIR_WIDTH", pair_width)
+    table("PAIR_CODE", "short", pair_code)
+    triple_second = [0] * 256
+    triple_third = [0] * 256
+    triple_code = [0] * 256
+    for index, (text, _) in enumerate(SYMBOLS):
+        if len(text) == 3:
+            assert triple_code[ord(text[0])] == 0
+            triple_second[ord(text[0])] = ord(text[1])
+            triple_third[ord(text[0])] = ord(text[2])
+            triple_code[ord(text[0])] = SYMBOL_BASE + index
+    table("TRIPLE_SECOND", "short", triple_second)
+    table("TRIPLE_THIRD", "short", triple_third)
+    table("TRIPLE_CODE", "short", triple_code)
+    escape_value = [0] * 256
+    for character, value in ESCAPES.items():
+        escape_value[ord(character)] = value
+    table("ESCAPE_VALUE", "short", escape_value)
+    hex_digit = [0] * 256
+    for value, character in enumerate("0123456789abcdef"):
+        hex_digit[ord(character)] = value + 1
+        hex_digit[ord(character.upper())] = value + 1
+    table("HEX_DIGIT", "short", hex_digit)
+    keyword_keys = {}
+    for word in KEYWORDS:
+        key = 0
+        for character in word:
+            key = key * 32 + ord(character) - ord("a") + 1
+        keyword_keys[word] = key
+    modulus = next(m for m in range(len(KEYWORDS), 4096) if len({key % m for key in keyword_keys.values()}) == len(KEYWORDS))
+    slots = [0] * modulus
+    for key in keyword_keys.values():
+        slots[key % modulus] = key
+    integer("KEYWORD_LENGTH_MAX", max(len(word) for word in KEYWORDS))
+    integer("KEYWORD_MODULUS", modulus)
+    table("KEYWORD_KEYS", "ulong", slots, lambda key: f"ulong({key})")
     table("SYMBOL_FRAGMENT", "short", symbol_ids)
 
     for index, op in enumerate(OPS):
@@ -1467,10 +1642,55 @@ def build():
     table("OP_IS_OPENER", "short", [int(op in OPENERS) for op in OPS])
     table("OP_ARITY", "short", [0 if op in LEAVES else 1 if op in UNARY else 2 for op in OPS])
     table("OP_MONOCHRONOUS", "short", [int(op in MONOCHRONOUS) for op in OPS])
-    op_text = {op: text for text, op, _ in BINARY}
-    op_text.update({op: text for text, op, _ in PREFIX})
+    table("OP_BRACKETED", "short", [int(op in BRACKETED) for op in OPS])
+    tp_rows = []
+    tp_inline_start, tp_inline_length, tp_rest_start = [], [], []
+    for op in OPS:
+        inline, rest = TEMPLATE_PROGRAMS.get(op, ([], []))
+        tp_inline_start.append(len(tp_rows))
+        tp_inline_length.append(len(inline))
+        tp_rows.extend(inline)
+        tp_rest_start.append(len(tp_rows))
+        tp_rows.extend(rest)
+    def template_ref(ref):
+        if ref is None:
+            return -1
+        if ref in TEMPLATE_REFS:
+            return TEMPLATE_REFS[ref]
+        return SEED_WORDS.index(ref)
+    table("OP_TEMPLATE_KIND", "short", [TEMPLATE_KINDS.get(op, 0) for op in OPS])
+    table("OP_TEMPLATE_SKIPS_LEFT", "short", [int(op in TEMPLATE_SKIPS_LEFT) for op in OPS])
+    table("OP_TEMPLATE_INLINE_START", "short", tp_inline_start)
+    table("OP_TEMPLATE_INLINE_LENGTH", "short", tp_inline_length)
+    table("OP_TEMPLATE_REST_START", "short", tp_rest_start)
+    table("TEMPLATE_ROW_KIND", "short", [TEMPLATE_ROW_KINDS.index(row[0]) for row in tp_rows])
+    table("TEMPLATE_ROW_OP", "short", [OPS.index(row[1]) if row[1] else -1 for row in tp_rows])
+    table("TEMPLATE_ROW_NAME", "integer", [template_ref(row[2]) for row in tp_rows])
+    table("TEMPLATE_ROW_VALUE", "integer", [row[3] for row in tp_rows])
+    table("TEMPLATE_ROW_REF", "short", [TEMPLATE_VALUE_REFS.index(row[4]) for row in tp_rows])
+    table("TEMPLATE_ROW_TYPE", "integer", [template_ref(row[5]) for row in tp_rows])
+    for index, name in enumerate(TEMPLATE_ROW_KINDS):
+        integer(f"TPK_{name}", index)
+    for index, name in enumerate(TEMPLATE_VALUE_REFS):
+        integer(f"TPV_{name}", index)
+    for name, value in TEMPLATE_REFS.items():
+        integer(f"TPR_{name}", value)
+    integer("N_FRESH_FIRST", SEED_WORDS.index(FRESH_FIRST))
+    integer("N_FRESH_LAST", SEED_WORDS.index(FRESH_LAST))
+    stage_ops = []
+    for side, label in enumerate(["PRE", "POST"]):
+        starts = []
+        for op in OPS:
+            starts.append(len(stage_ops))
+            stage_ops.extend(OPS.index(part) for part in COMPOSITES.get(op, ([], []))[side])
+        table(f"OP_{label}_START", "short", starts)
+        table(f"OP_{label}_LENGTH", "short", [len(COMPOSITES.get(op, ([], []))[side]) for op in OPS])
+    table("STAGE_OP", "short", stage_ops)
+    op_text = {}
+    for text, op, _ in BINARY + PREFIX:
+        op_text.setdefault(op, text)
     op_text.update({"DELAY": "$", "IF": "if", "BRANCH": "if"})
-    table("OP_TEXT_FRAGMENT", "short", [fragments.add(op_text[op]) if op in op_text else 0 for op in OPS])
+    table("OP_TEXT_FRAGMENT", "short", [fragments.add(op_text[op]) if op in op_text and op not in COMPOSITES else 0 for op in OPS])
 
     def code_of(text):
         if text in KEYWORDS:
@@ -1589,7 +1809,7 @@ def build():
     table("SCALAR_PROGRAM", "short", [
         SCALAR_ATOMS.index(program[step]) if step < len(program) else 0
         for program in scalar_programs for step in range(SCALAR_WIDTH)])
-    integer("OP_COUNT", len(OPS))
+    integer("OP_TOTAL", len(OPS))
     integer("ARG_WIDTH", ARG_WIDTH)
     integer("CALL_PARAMS_STEP", CALL_PARAMS_STEP)
     integer("PARAM_STEPS", PARAM_STEPS)
@@ -1743,6 +1963,10 @@ def declaration_pattern(name):
 
 
 def rewrite(source_text, constants):
+    names = [name for name, _ in constants]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise SystemExit(f"tables.py: constants generated twice: {', '.join(duplicates)}")
     for name, declaration in constants:
         pattern = declaration_pattern(name)
         replacement = "    " + declaration + "\n"

@@ -3,6 +3,7 @@ process P =
     ! integer TALLY; )
   pragmas
     Main
+    Boot {START}
     Interrupt {TICK} "27"
   end pragmas
   (| TALLY := ZCOUNT + 1

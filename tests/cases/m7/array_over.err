@@ -1,0 +1,1 @@
+array_over.sig:4:35: error: the index range has 8 elements but the array has 4

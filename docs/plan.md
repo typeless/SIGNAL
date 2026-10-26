@@ -76,6 +76,7 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
   - **Program and lexer:** a top model of any class (XI–1); Latin-1 letters in names and escapes in strings (II–1).
 - Lifts: D10 "Constants are integer literals…" (constant names as initial values only), D11 "state actions are deferred", D13 "without escapes".
 - Exit program: the M2 automaton cases with state actions added, and each rewrite's trace equal to the S1 definition written out by hand.
+- Done 2026-10-26: the exit check passes. `python3 tests/run.py --compiler build/m4/stage2 m7` printed `135 passed, 0 failed`, with each rewrite's expected trace written by hand from S1; `python3 tests/differential.py 200` printed `200 seeds passed, 0 failed`; `python3 tests/selfhost.py` printed `stage2 matches stage1`, `stage3 matches stage2`, `run.py: 460 passed, 0 failed` and `diff.py: 282 cases, 0 differ`. The amendments made while building it are marked in D17.
 
 ## M8 — Models, parameters and modules
 
