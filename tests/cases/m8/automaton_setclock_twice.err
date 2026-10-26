@@ -1,0 +1,1 @@
+automaton_setclock_twice.sig:13:10: error: an automaton sets its clock once

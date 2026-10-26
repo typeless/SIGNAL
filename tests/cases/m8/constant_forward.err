@@ -1,0 +1,1 @@
+constant_forward.sig:9:26: error: the definition of constant A is not a constant expression

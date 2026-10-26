@@ -1,0 +1,1 @@
+ref_undeclared.sig:12:13: error: ref Z names no signal of an enclosing model

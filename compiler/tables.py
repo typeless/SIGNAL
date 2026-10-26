@@ -10,13 +10,15 @@ ANCHOR = "    type ARGS = external;\n"
 SEED_WORDS = [
     "event", "boolean", "short", "integer", "long", "ubyte", "ushort", "uinteger", "ulong", "pointer",
     "load", "store", "syscall", "instruction", "abs", "left_tt",
-    "Automaton_Initial_State", "Automaton_Transition", "Automaton_IsIn",
+    "Automaton_Initial_State", "Automaton_Transition", "Automaton_SetClock", "Automaton_Clock",
+    "Automaton_SetCurrentStateId", "Automaton_IsIn",
     "clock'", "state'", "cur'", "on'",
     "process", "where", "end", "init", "true", "false", "when", "default", "and", "or", "xor", "not", "modulo",
     "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with", "if", "then", "else", "procedure",
     "node", "function", "automaton", "label", "on", "external", "indices", "pragmas", "Interrupt", "Boot", "Machine",
     "cell", "var", "after", "from", "count", "case", "in", "array", "to",
-    "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "rep'",
+    "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe",
+    "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "tick'", "rep'",
 ]
 FRESH_FIRST = "cell'"
 FRESH_LAST = "rep'"
@@ -25,14 +27,17 @@ KEYWORDS = {
     "xor", "not", "modulo", "short", "long", "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with",
     "if", "then", "else", "procedure", "node", "function", "automaton", "label", "on", "external",
     "cell", "var", "after", "from", "count", "case", "in", "array", "to",
+    "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe",
 }
 NAME_CONSTANTS = {
     "event": "N_EVENT", "boolean": "N_BOOLEAN", "ubyte": "N_UBYTE", "ulong": "N_ULONG", "load": "N_LOAD",
     "store": "N_STORE", "syscall": "N_SYSCALL",
     "instruction": "N_INSTRUCTION", "abs": "N_ABS", "left_tt": "N_LEFT_TT", "Automaton_Initial_State": "N_INITIAL", "Automaton_Transition": "N_TRANSITION",
+    "Automaton_SetClock": "N_SET_CLOCK", "Automaton_Clock": "N_AUTOMATON_CLOCK",
+    "Automaton_SetCurrentStateId": "N_SET_CURRENT_STATE_ID",
     "Automaton_IsIn": "N_ISIN", "clock'": "N_CLOCK_MARK", "state'": "N_STATE_MARK", "cur'": "N_CURRENT_MARK",
     "on'": "N_ON_MARK", "indices": "N_INDICES", "pragmas": "N_PRAGMAS", "Interrupt": "N_INTERRUPT", "Boot": "N_BOOT",
-    "Machine": "N_MACHINE", "rep'": "N_REPEAT_MARK",
+    "Machine": "N_MACHINE", "rep'": "N_REPEAT_MARK", "tick'": "N_TICK_MARK",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -43,9 +48,9 @@ SYMBOLS = [
     (":", "COLON"), ("{", "OPEN_BRACE"), ("}", "CLOSE_BRACE"),
     ("^+", "CLOCK_PLUS"), ("^*", "CLOCK_TIMES"), ("^-", "CLOCK_MINUS"), ("==", "EQUAL_EQUAL"),
     ("<<=", "LESS_LESS_EQUAL"), ("[:", "OPEN_COLON"), ("[/:", "OPEN_SLASH_COLON"), ("\\\\", "BACKSLASHES"),
-    ("|*", "BAR_STAR"),
+    ("|*", "BAR_STAR"), ("**", "STAR_STAR"),
 ]
-SYMBOL_BASE = 80
+SYMBOL_BASE = 84
 OTHER_CODES = [("EOF", 0), ("NAME", 128), ("NUMBER", 129), ("STRING", 130)]
 CODE_LIMIT = 132
 ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34, "'": 39, "?": 63, "%": 37}
@@ -58,6 +63,7 @@ OPS = [
     "CLOCK_PLUS", "CLOCK_TIMES", "OPEN_COLON", "OPEN_SLASH_COLON", "LEFT_TT", "CLOCK_MINUS", "ABS", "OPERAND", "ZERO",
     "RECOVER", "RECOVER_SQUARE", "INDEX_OPERAND", "SIZE", "SIZE_LESS", "CELL", "VAR", "AFTER", "FROM", "COUNT",
     "REPEAT", "ONE", "RIGHT_OPERAND", "TARGET_SIGNAL", "INDEX_SIGNAL", "REPEAT_RANGE", "ARRAY_RANGE", "REPEAT_BODY",
+    "SLOT", "POW",
 ]
 MONOCHRONOUS = {
     "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR",
@@ -70,13 +76,14 @@ COMPOSITES = {
     "OPEN_COLON": ([], ["UWHEN"]), "OPEN_SLASH_COLON": ([], ["NOT", "UWHEN"]), "LEFT_TT": ([], ["WHEN", "DEFAULT"]),
     "CLOCK_MINUS": (["CLOCK"], ["CLOCK", "WHEN", "NOT", "OPERAND", "CLOCK", "DEFAULT", "UWHEN"]),
     "ABS": ([], ["ZERO", "LT", "OPERAND", "NEG", "OPERAND", "BRANCH", "IF"]),
+    "POW": ([], ["OPERAND", "MUL"]),
     "RECOVER": (["INDEX_OPERAND", "ZERO", "GE", "INDEX_OPERAND", "SIZE_LESS", "LE", "AND", "WHEN"], ["RIGHT_OPERAND", "EQ", "INDEX_OPERAND", "ZERO", "GE", "AND", "RIGHT_OPERAND", "RIGHT_OPERAND", "BRANCH", "IF", "DEFAULT"]),
     "RECOVER_SQUARE": ([], ["SIZE", "MOD", "SIZE", "ADD", "SIZE", "MOD", "INDEX"]),
     "REPEAT_RANGE": ([], ["ZERO", "RIGHT_OPERAND", "ONE", "SUB", "RANGE"]),
     "ARRAY_RANGE": ([], ["ZERO", "RIGHT_OPERAND", "RANGE"]),
     "REPEAT_BODY": ([], ["TARGET_SIGNAL", "PREV", "INDEX_SIGNAL", "OPERAND", "PAIR", "NEXT"]),
 }
-LEAVES = {"CONST", "SIGNAL", "ENUMCONST"}
+LEAVES = {"CONST", "SIGNAL", "ENUMCONST", "SLOT"}
 TEMPLATE_ROW_KINDS = ["EMIT", "LEFT", "RIGHT", "DEFINE", "GROUP", "END"]
 TEMPLATE_VALUE_REFS = ["LITERAL", "INIT", "INIT_DECL", "BOUND"]
 TEMPLATE_REFS = {"TARGET": -2, "OPERAND": -3, "BOUND": -4}
@@ -158,13 +165,14 @@ BINARY = [
     ("shl", "SHL", 18), ("shr", "SHR", 18), ("next", "NEXT", 1), (":", "PAIR", 2), ("..", "RANGE", 1),
     ("^+", "CLOCK_PLUS", 6), ("^*", "CLOCK_TIMES", 7), ("^-", "CLOCK_MINUS", 6), ("==", "EQ", 15), ("<<=", "LE", 15),
     ("\\\\", "RECOVER", 23), ("cell", "CELL", 21), ("after", "AFTER", 5), ("from", "FROM", 5), ("count", "COUNT", 5),
-    ("|*", "REPEAT", 18),
+    ("|*", "REPEAT", 18), ("**", "POW", 19),
 ]
 PREFIX = [
     ("when", "UWHEN", 8), ("not", "NOT", 14), ("-", "NEG", 20), ("^", "CLOCK", 24),
     ("[:", "OPEN_COLON", 1), ("[/:", "OPEN_SLASH_COLON", 1), ("var", "VAR", 21),
 ]
-MODEL_CLASSES = ["process", "procedure", "node", "function", "automaton"]
+MODEL_CLASSES = ["process", "procedure", "node", "function", "automaton", "action"]
+ATTRIBUTES = ["safe", "deterministic", "unsafe"]
 
 TYPE_KINDS = ["EVENT", "BOOLEAN", "INT", "POINTER", "ENUM", "ARRAY", "EXTERNAL"]
 BUILTIN_KIND = [0, 1, 2, 2, 2, 2, 2, 2, 2, 3]
@@ -207,7 +215,7 @@ DUMP_ORDERS = [
 CLOCK_KINDS = ["NONE", "ROOT", "SAMPLE", "PRODUCT", "SUM"]
 
 ARGUMENT_KINDS = [
-    "NONE", "TOKEN", "LITERAL", "NAME", "TYPE", "NUMBER", "CODE", "FRAGMENT", "CHARACTER", "FLAT", "TEXT", "LONG", "CLOCK",
+    "NONE", "TOKEN", "LITERAL", "NAME", "TYPE", "NUMBER", "CODE", "FRAGMENT", "CHARACTER", "FLAT", "TEXT", "LONG", "CLOCK", "MODEL",
 ]
 TEMPLATES = [
     ("UNEXPECTED_CHARACTER", "unexpected character '#'", ["CHARACTER"]),
@@ -252,7 +260,7 @@ TEMPLATES = [
     ("CASE_VALUE", "a case value must be a literal, found #", ["TOKEN"]),
     ("CASE_DUPLICATE", "value # is listed twice in this case", ["TOKEN"]),
     ("CLASS_NEEDS_OUTPUT", "# # must declare at least one output", ["CODE", "NAME"]),
-    ("FUNCTION_MEMORY", "function # cannot contain #", ["NAME", "TOKEN"]),
+    ("FUNCTION_MEMORY", "# cannot contain #", ["MODEL", "TOKEN"]),
     ("FUNCTION_CALL", "function # cannot call # #", ["NAME", "CODE", "NAME"]),
     ("WHOLE_DEFINITION", "# can only be the whole definition of a signal", ["TOKEN"]),
     ("VAR_NAME", "var takes a signal name", []),
@@ -278,9 +286,35 @@ TEMPLATES = [
     ("CALLS_IN_ITERATE", "model calls are not allowed inside iterate", []),
     ("UNSAFE_CALL", "unsafe model # is called from # #", ["NAME", "CODE", "NAME"]),
     ("MODEL_UNDECLARED", "model # is not declared", ["NAME"]),
-    ("NO_STATIC_PARAMETERS", "model # takes no static parameters", ["NAME"]),
+    ("PARAMETER_UNDECLARED", "# is not a constant, a type or a model", ["NAME"]),
+    ("PARAMETER_KIND", "parameter # of # expects #", ["NAME", "NAME", "FRAGMENT"]),
+    ("PARAMETER_TYPE", "parameter # expects #, found #", ["NAME", "TYPE", "TYPE"]),
+    ("SLOT_DEFINED", "# is a parameter of # and cannot be defined", ["NAME", "NAME"]),
+    ("FORMAL_ARRAY", "a formal type cannot be an array or an element type", []),
+    ("MODULE_NESTED", "a module cannot be declared here", []),
+    ("MODEL_TYPE_CALL", "# is a model type and cannot be called", ["NAME"]),
+    ("MODEL_TYPE_EXPECTED", "# is not a model type", ["NAME"]),
+    ("PARAMETER_INTERFACE", "parameter # expects the interface of #, found #", ["NAME", "NAME", "NAME"]),
+    ("PARAMETER_MODEL_FORMALS", "# has static parameters and cannot be an actual model", ["NAME"]),
+    ("PRIVATE_OUTSIDE", "private is allowed only in a module", []),
+    ("MODULE_UNDECLARED", "module # is not declared", ["NAME"]),
+    ("PRIVATE_NAME", "# is private to module #", ["NAME", "NAME"]),
+    ("NOT_IMPORTED", "# is declared in module #, which is not used here", ["NAME", "NAME"]),
     ("CALLS_ITSELF", "model # calls itself", ["NAME"]),
-    ("TOO_MANY_OUTPUTS", "model # has # outputs; only models with at most one output can be called", ["NAME", "NUMBER"]),
+    ("OUTPUT_COUNT", "model # has # outputs; the definition names #", ["NAME", "NUMBER", "NUMBER"]),
+    ("TUPLE_CALL_PLACED", "a call with several outputs cannot be guarded", []),
+    ("ACTION_UNLABELLED", "action # is called outside a labelled process", ["NAME"]),
+    ("ATTRIBUTE_CLASS", "a # cannot be #", ["CODE", "CODE"]),
+    ("ATTRIBUTE_CALL", "# cannot call #", ["MODEL", "MODEL"]),
+    ("LABEL_NO_TICK", "label # has no tick", ["NAME"]),
+    ("REF_UNDECLARED", "ref # names no signal of an enclosing model", ["NAME"]),
+    ("REF_PLACED", "ref must precede the embedded models", []),
+    ("PRIORITY_CONSTANT", "the priority of a transition must be a constant integer", []),
+    ("ONE_SETCLOCK", "an automaton sets its clock once", []),
+    ("POWER_RANGE", "the exponent of ** must be at least 1", []),
+    ("POWER_CONSTANT", "the exponent of ** must be a constant integer", []),
+    ("POWER_CHAIN", "a chain of ** needs parentheses", []),
+    ("PRIVATE_TARGET", "private must be followed by constant, type or a model class", []),
     ("FLAT_UNDECLARED", "signal # is not declared", ["FLAT"]),
     ("STATIC_COUNT", "# expects # static parameters, found #", ["NAME", "NUMBER", "NUMBER"]),
     ("WORD_CONSTANT", "the word of # must be an integer constant", ["NAME"]),
@@ -376,6 +410,9 @@ TEMPLATES = [
     ("COUNTER_EVENT", "operator # expects event operands, found #", ["FRAGMENT", "TYPE"]),
     ("REPEAT_SIZE", "'|*' produces # elements but the array has #", ["NUMBER", "NUMBER"]),
     ("RANGE_FIT", "the index range has # elements but the array has #", ["NUMBER", "NUMBER"]),
+    ("CONSTANT_EXPRESSION", "the definition of constant # is not a constant expression", ["NAME"]),
+    ("INIT_EXPRESSION", "the initial value of a delay is not a constant expression", []),
+    ("CONSTANT_DIVIDE", "a constant expression divides by zero", []),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
@@ -403,7 +440,8 @@ UTF8_REASONS = [
     ("INVALID_START", "invalid start byte"), ("INVALID_CONTINUATION", "invalid continuation byte"),
     ("UNEXPECTED_END", "unexpected end of data"),
 ]
-ROLE_WORDS = ["signal", "type", "model", "constant", "label"]
+ROLE_WORDS = ["signal", "type", "model", "constant", "label", "parameter", "module"]
+PARAMETER_KINDS = ["value", "type", "model", "signal"]
 
 LAYOUTS = [
     "NONE", "OS", "COMPILE", "DUMP_ERROR", "DUMP_TOKENS", "DUMP_PROGRAM", "DUMP_CODE", "ENCODE", "OS_OUTPUT", "PRESENCE",
@@ -461,14 +499,15 @@ PARSE_STATES = [
     "OUTPUTS", "MODEL_CLOSE", "MODEL_BODY", "MODEL_AFTER", "PROGRAM", "END_SEMICOLON", "END_CHECK", "TYPE_STATEMENT",
     "TYPE_SKIP", "TYPE", "TYPE_SIZE", "TYPE_CLOSE", "TYPE_NAME", "TYPE_INTERN", "DECLARE_NAME", "DECLARE_SEPARATOR",
     "CONSTANT_NAME", "CONSTANT_EQUAL", "CONSTANT_DEFINITION", "INTEGER_CONSTANT", "CONSTANT_ELEMENT",
-    "CONSTANT_SCALAR", "CONSTANT_SEPARATOR", "LABEL_NAME", "LABEL_SEPARATOR", "PROCESS", "PATH_COPY",
+    "CONSTANT_SCALAR", "CONSTANT_SEPARATOR", "LABEL_NAME", "LABEL_SEPARATOR", "REF_NAME", "REF_SEPARATOR", "PROCESS", "PATH_COPY",
     "GUARD_COLONS", "ITERATE_NAME", "ITERATE_OF", "EQUATION", "DEPENDENCE", "EQUATION_END", "GROUP_MEMBER", "POP",
     "OPERAND", "PARAMETER", "PARAMETER_CLOSE", "OPERATOR", "BRANCH", "PRAGMA_NAME", "PRAGMA_OPEN", "PRAGMA_OBJECT",
     "PRAGMA_CLOSE", "PRAGMA_STATEMENT", "PRAGMA_OTHER", "PRAGMA_SKIP", "PRAGMA_TEXT", "SET_NAME", "SET_SEPARATOR",
     "SET_EMIT", "ALIAS_END", "HIDE_NAME", "HIDE_SEPARATOR", "DECLARE_INIT", "TUPLE_NAME", "TUPLE_SEPARATOR", "CASE_IN",
     "CASE_BRANCH", "CASE_COPY", "CASE_LITERAL", "CASE_SCAN", "CASE_ELSE_VALUE", "CASE_COMPARE", "CASE_JOIN",
     "CASE_SEPARATOR", "CASE_WHEN", "CASE_GUARD", "STATE_SIGNAL", "STATE_CALL", "STATE_WHEN", "STATE_GUARD", "SYNC",
-    "REPEAT_START", "INDEX_EMIT", "REPEAT_EMIT", "ARRAY_TO", "INDEX_TYPE", "INDEX_DECLARE", "STALL", "DONE", "FAILED",
+    "REPEAT_START", "INDEX_EMIT", "REPEAT_EMIT", "ARRAY_TO", "INDEX_TYPE", "INDEX_DECLARE", "CONSTANT_END", "INIT_END", "PARAMETER_OPEN", "PARAMETER_DECL", "PARAMETER_END", "MODULE_NAME", "MODULE_EQUAL", "MODULE_END",
+    "USE_NAME", "USE_SEPARATOR", "MODEL_COPY", "PARAMETER_MODEL", "PARAMETER_MODEL_NAME", "STALL", "DONE", "FAILED",
 ]
 OPERAND_CASES = ["EMPTY_CALL", "LITERAL", "CALL", "PARAMETERS", "SIGNAL", "OPEN_PAREN", "IF", "PREFIX", "PLUS", "FAIL"]
 OPERATOR_CASES = ["REDUCE", "BINARY", "THEN", "ELSE", "DELAY", "PREVIOUS", "OPEN_SQUARE", "CLOSE", "COMMA", "RETURN", "INIT"]
@@ -476,9 +515,10 @@ FRAMES = ["COMPOSE", "LABEL", "GUARD", "ITERATE", "CASE"]
 DELAY_INITS = ["NONE", "CONST", "ENUMCONST", "NAME", "SIZE"]
 FINISH_PHASES = [
     "START", "LABEL", "USE", "SIGNAL", "HIDE", "INITS", "STATEMENT", "REWRITE_EQ", "REWRITE_MEMBER", "REWRITE_GUARD",
-    "REWRITE_TRIGGER", "CLOCK", "STATE", "CUR", "CUR_TAIL", "GROUP", "GUARD_START", "DEFINE_PARSE", "DEFINE_FINISH",
+    "REWRITE_TRIGGER", "CLOCK", "STATE", "PICK", "CUR", "CUR_TAIL", "GROUP", "TICK", "GUARD_START", "DEFINE_PARSE", "DEFINE_FINISH",
     "READ_PARSE", "READ_FINISH", "READ_MEMBERS", "READ_DEPS", "ON", "FILTER", "DONE", "FAILED",
 ]
+TICK_STEPS = ["LABEL", "USE", "EQUATION", "SCAN", "PART", "COPY", "CLOCK", "DEFAULT", "END"]
 LOWER_STATES = [
     "SIGNAL", "LABEL", "VALUE", "ARRAY", "TABLE", "LOOP", "EQUATION", "GROUP", "START", "SCAN", "ENTRY", "NEVER",
     "MEMBERS", "DONE", "FAILED",
@@ -491,7 +531,7 @@ KEY_FAMILIES = ["SIGNAL", "LABEL", "CALL_LABEL", "VALUE", "PAIR", "ARRAY"]
 KEY_STRIDE = 8
 INSTANTIATE_PHASES = [
     "ROOT", "INSTANCE", "LABEL", "SIGNAL", "FINISH_SIGNAL", "LOOP", "EQUATION", "FINISH_EQUATION", "GROUP",
-    "FINISH_GROUP", "DEPENDENCE", "ENTRY", "ANCESTRY", "PATH", "INPUT", "EMIT", "DONE", "FAILED",
+    "FINISH_GROUP", "DEPENDENCE", "ENTRY", "ANCESTRY", "PATH", "INPUT", "EMIT", "SLOT", "BIND", "DONE", "FAILED",
 ]
 SHAPES = ["NAME", "NUMBER", "FRAGMENT", "POSITION", "TYPE", "USE", "END_POINT", "LIST", "GROUP"]
 SCALAR_ATOMS = ["NAME", "NUMBER", "FRAGMENT", "LINE", "COLUMN", "TYPE_HEAD", "TYPE_ELEMENT"]
@@ -1551,7 +1591,10 @@ def build():
     role_ids = [fragments.add(role) for role in ROLES]
     column_ids = [fragments.add(column + " ") for column in ALL_COLUMNS]
     role_word_ids = [fragments.add(word) for word in ROLE_WORDS]
+    parameter_kind_ids = [fragments.add(f"a {expected}, found a {found}") for expected in PARAMETER_KINDS for found in PARAMETER_KINDS]
     capacity_ids = [fragments.add(name) for name in CAPACITY_TABLES]
+    model_description_ids = [fragments.add(f"{model_class} " if model_class == "function" else f"{attribute} {model_class} ")
+                             for attribute in ATTRIBUTES for model_class in MODEL_CLASSES]
     symbol_ids = [0 if "\\" in text else fragments.add(text) for text, _ in SYMBOLS]
     piece_ids = [[fragments.add(piece) for piece in template_pieces(text)] for _, text, _ in TEMPLATES]
 
@@ -1625,7 +1668,7 @@ def build():
     for word in KEYWORDS:
         key = 0
         for character in word:
-            key = key * 32 + ord(character) - ord("a") + 1
+            key = (key * 32 + ord(character) - ord("a") + 1) % 2 ** 64
         keyword_keys[word] = key
     modulus = next(m for m in range(len(KEYWORDS), 4096) if len({key % m for key in keyword_keys.values()}) == len(KEYWORDS))
     slots = [0] * modulus
@@ -1713,6 +1756,13 @@ def build():
     table("PREFIX_PRECEDENCE", "short", prefix_precedence)
     class_codes = [code_of(word) for word in MODEL_CLASSES]
     table("MODEL_CLASS", "short", [int(code in class_codes) for code in range(CODE_LIMIT)])
+    table("CLASS_INDEX", "short", [class_codes.index(code) if code in class_codes else 0 for code in range(CODE_LIMIT)])
+    integer("CLASS_COUNT", len(MODEL_CLASSES))
+    attribute_codes = [code_of(word) for word in ATTRIBUTES]
+    table("ATTRIBUTE_OF_CODE", "short", [attribute_codes.index(code) + 1 if code in attribute_codes else 0 for code in range(CODE_LIMIT)])
+    for index, word in enumerate(ATTRIBUTES):
+        integer(f"ATTRIBUTE_{word.upper()}", index)
+    table("MODEL_DESCRIPTION_FRAGMENT", "short", model_description_ids)
 
     for index, kind in enumerate(TYPE_KINDS):
         integer(f"TK_{kind}", index)
@@ -1726,6 +1776,10 @@ def build():
     table("ROLE_FRAGMENT", "short", role_ids)
     for index, word in enumerate(ROLE_WORDS):
         integer(f"F_ROLE_{word.upper()}", role_word_ids[index])
+    for index, kind in enumerate(PARAMETER_KINDS):
+        integer(f"PK_{kind.upper()}", index)
+    integer("PARAMETER_KIND_COUNT", len(PARAMETER_KINDS))
+    table("PARAMETER_KIND_FRAGMENT", "short", parameter_kind_ids)
     dump_order = []
     for name, columns in DUMP_ORDERS:
         integer(f"ORDER_{name}_START", len(dump_order))
@@ -1786,7 +1840,7 @@ def build():
     for index, word in enumerate(SEED_WORDS[:len(BUILTIN_KIND)]):
         integer(f"BUILTIN_{word.upper()}", index)
     for prefix, names in (("P", PARSE_STATES), ("X", OPERAND_CASES + OPERATOR_CASES), ("FRAME", FRAMES),
-                          ("INIT", DELAY_INITS), ("PHASE", FINISH_PHASES),
+                          ("INIT", DELAY_INITS), ("PHASE", FINISH_PHASES), ("TS", TICK_STEPS),
                           ("IP", INSTANTIATE_PHASES), ("LS", LOWER_STATES), ("PS", POST_STATES),
                           ("XS", EXPAND_STATES), ("KS", CLOCK_STATES), ("OS", OBLIGATION_STATES), ("CLK", CLOCK_KINDS)):
         for index, name in enumerate(names):

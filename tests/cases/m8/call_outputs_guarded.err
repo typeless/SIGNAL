@@ -1,0 +1,1 @@
+call_outputs_guarded.sig:5:36: error: a call with several outputs cannot be guarded

@@ -1,0 +1,1 @@
+call_outputs_count_tuple.sig:5:19: error: model PAIR has 2 outputs; the definition names 3

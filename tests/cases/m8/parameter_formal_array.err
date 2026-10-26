@@ -1,0 +1,1 @@
+parameter_formal_array.sig:9:85: error: a formal type cannot be an array or an element type

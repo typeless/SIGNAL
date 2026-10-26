@@ -1,0 +1,1 @@
+module_private.sig:7:23: error: TICK is private to module TIMERS

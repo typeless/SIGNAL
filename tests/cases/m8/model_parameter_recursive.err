@@ -1,0 +1,1 @@
+model_parameter_recursive.sig:5:17: error: APPLY has static parameters and cannot be an actual model

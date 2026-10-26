@@ -1,0 +1,1 @@
+constant_conversion_operand.sig:8:30: error: the definition of constant U is not a constant expression

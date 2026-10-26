@@ -1,0 +1,1 @@
+constant_boolean_ubyte.sig:9:20: error: constant K has type ubyte but its definition has type boolean

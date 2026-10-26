@@ -1,0 +1,1 @@
+delay_init_signal.sig:5:21: error: the initial value of a delay is not a constant expression

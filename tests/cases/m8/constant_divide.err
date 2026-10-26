@@ -1,0 +1,1 @@
+constant_divide.sig:9:28: error: a constant expression divides by zero

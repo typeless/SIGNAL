@@ -1,0 +1,1 @@
+automaton_priority_not_constant.sig:13:53: error: the priority of a transition must be a constant integer

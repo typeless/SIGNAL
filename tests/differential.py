@@ -120,6 +120,42 @@ class Program:
             f"[{repeat_count}] {repeated_type} XR;",
             f"[{repeat_count}] event XE;",
         ]
+        self.m8()
+
+    def m8(self):
+        rng = self.rng
+        first, second, back_first, back_second = (rng.randrange(2, 5) for _ in range(4))
+        self.m8_outputs = ["PS", "PQ", "PR", "PP", "PX", "PH", "PT"]
+        self.m8_module = [
+            f"constant integer CK = ({rng.randrange(0, 20)} * 2 + 1) ** 2;",
+            "process SCALE = { integer K; } ( ? integer X; ! integer Y; ) (| Y := X * K |);",
+            "process SPLIT = ( ? integer X; ! integer Q, R; ) (| Q := X / 3 | R := X modulo 3 |);",
+        ]
+        self.m8_body = [
+            "PS := SCALE{CK}(N) + CK",
+            "(PQ, PR) := SPLIT(N)",
+            f"PP := N ** {rng.randrange(1, 5)}",
+            "LT :: PX := N + 1",
+            "PH := N when ^LT",
+            "PT := TOGGLE(N)",
+        ]
+        self.m8_declarations = [
+            "use M8;",
+            "label LT;",
+            "automaton TOGGLE =",
+            "  ( ? integer X; ! integer ST; )",
+            "  (| Automaton_Initial_State(A)",
+            f"   | Automaton_Transition(A, B, when (X modulo {first} = 0))",
+            f"   | Automaton_Transition(A, C, when (X modulo {second} = 0), 1)",
+            f"   | Automaton_Transition(B, A, when (X modulo {back_first} = 0))",
+            f"   | Automaton_Transition(C, A, when (X modulo {back_second} = 1))",
+            "   | ST := (1 when Automaton_IsIn(A)) default (2 when Automaton_IsIn(B)) default 3",
+            "   | ST ^= X",
+            "   |)",
+            "  where",
+            "    label A, B, C;",
+            "  end;",
+        ]
 
     def leaf(self, name, inside_iterate):
         rng = self.rng
@@ -216,7 +252,8 @@ class Program:
         return f"({self.expression(name, depth, inside_iterate)} {self.rng.choice(COMPARISONS)} {self.expression(name, depth, inside_iterate)})"
 
     def source(self, machine):
-        outputs = "; ".join([f"{name} {signal}" for signal, name in self.outputs] + [f"integer {signal}" for signal in self.template_outputs])
+        outputs = "; ".join([f"{name} {signal}" for signal, name in self.outputs]
+                            + [f"integer {signal}" for signal in self.template_outputs + self.m8_outputs])
         signals = [signal for signal, _ in self.outputs]
         delays = [f"Z{signal} := {signal} $" for signal, name in self.outputs if name != "boolean"]
         body = [
@@ -230,12 +267,17 @@ class Program:
             *self.definitions,
             *delays,
             *self.template_body,
+            *self.m8_body,
             " ^= ".join(signals + ["TICK"]),
         ]
-        declarations = [
+        module = [
             "constant integer TABLE_SIZE = 8;",
             f"constant [TABLE_SIZE] {self.table_type} TAB = [{', '.join(self.table)}];",
             f"constant [TABLE_SIZE] integer ORDER = [{', '.join(self.order)}];",
+            *self.m8_module,
+        ]
+        declarations = [
+            *self.m8_declarations,
             "integer N, ZN;",
             f"{self.sum_type} R, SUM;",
             f"[TABLE_SIZE] {self.sum_type} P;",
@@ -244,7 +286,8 @@ class Program:
             *[f"{name} Z{signal};" for signal, name in self.outputs if name != "boolean"],
             *self.template_declarations,
         ]
-        lines = ["process RANDOM =", "  ( ? event START, TICK;", f"    ! {outputs}; )"]
+        lines = ["module M8 =", *[f"  {line}" for line in module], "end;"]
+        lines += ["process RANDOM =", "  ( ? event START, TICK;", f"    ! {outputs}; )"]
         if machine:
             lines.append(MACHINE_PRAGMAS.rstrip("\n"))
         lines.append(f"  (| {body[0]}")
@@ -275,7 +318,7 @@ def check(compiler, seed):
         input_path = directory / f"{variant}.in"
         if machine:
             input_path.unlink(missing_ok=True)
-            command = [*QEMU_COMMANDS["m6"], str(executable)]
+            command = [*QEMU_COMMANDS["mps2-an385"], str(executable)]
         else:
             input_path.write_text("10\n" + "01\n" * TICKS)
             command = [str(executable)]

@@ -1,0 +1,1 @@
+module_not_used.sig:8:11: error: CMSDK_TIMER is declared in module TIMERS, which is not used here

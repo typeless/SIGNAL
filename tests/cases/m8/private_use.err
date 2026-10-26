@@ -1,0 +1,1 @@
+private_use.sig:2:11: error: private must be followed by constant, type or a model class

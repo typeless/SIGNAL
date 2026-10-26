@@ -95,6 +95,7 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
 - **Modules:** `module … end`, `use`, `private` (XII–1), in the compiled source file (S1: "The way this module is made available is not normalized"; D13's command line stays).
 - Lifts: D10 "Constants are integer literals…", D11 "Static parameters are limited to…", "a called model has at most one output", the D11 automaton deferrals. D11's one program-wide namespace is kept; modules restrict visibility (M8 check-in, D18).
 - Exit program: a timer driver written as one parameterised model in a module, instantiated for two CMSDK timers on `mps2-an385`, printing both timers' interrupts. Timer 0 was measured in M6 (Q4); timer 1 is probed at the check-in.
+- Done 2026-10-27: the exit check passes. `tests/cases/m8/two_timers.sig`, one timer model with type and value parameters in a module, compiled by stage 2, prints both CMSDK timers' interrupts under QEMU 11.1.2 `mps2-an385`; `python3 tests/differential.py 200` printed `200 seeds passed, 0 failed`; `python3 tests/selfhost.py` printed `stage2 matches stage1`, `stage3 matches stage2`, `run.py: 562 passed, 0 failed` and `diff.py: 278 cases, 0 differ`. The restrictions found while building it are in D10, D11 and D18.
 
 ## M9 — Clock algebra in canonical form
 

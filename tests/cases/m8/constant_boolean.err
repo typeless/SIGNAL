@@ -1,0 +1,1 @@
+constant_boolean.sig:9:22: error: constant K has type integer but its definition has type boolean

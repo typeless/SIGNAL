@@ -1,0 +1,1 @@
+parameter_subtype.sig:5:17: error: parameter K expects ubyte, found short

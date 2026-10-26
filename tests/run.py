@@ -1,4 +1,5 @@
 import os
+import re
 import selectors
 import subprocess
 import sys
@@ -12,10 +13,19 @@ COMPILER = ROOT / "bootstrap" / "sigc.py"
 COMPILE_TIMEOUT_SECONDS = 60
 RUN_TIMEOUT_SECONDS = 5
 QEMU_COMMANDS = {
-    "m5": ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-kernel"],
-    "m6": ["qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic", "-no-reboot", "-kernel"],
+    "virt": ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-no-reboot", "-kernel"],
+    "mps2-an385": ["qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic", "-no-reboot", "-kernel"],
 }
-STAGE2_ONLY = {"m5", "m6", "m7"}
+STAGE2_ONLY = {"m5", "m6", "m7", "m8"}
+
+
+def target_command(source):
+    text = source.read_text()
+    if 'Machine "mps2-an385"' in text:
+        return QEMU_COMMANDS["mps2-an385"]
+    if re.search(r"\b(Interrupt|Boot)\s*\{", text):
+        return QEMU_COMMANDS["virt"]
+    return []
 
 
 def compile_case(compiler, source, executable):
@@ -85,7 +95,7 @@ def run_trace_case(compiler, source, expected_path):
             report.append(f"expected stderr containing {expected_stderr.strip()!r}, got {stderr.strip()!r}")
         timed_out = False
     else:
-        command = [*QEMU_COMMANDS.get(source.relative_to(CASES).parts[0], []), str(executable)]
+        command = [*target_command(source), str(executable)]
         actual, timed_out, returncode = read_trace(command, len(expected), source.with_suffix(".in"))
         report = []
     if actual == expected and not report:

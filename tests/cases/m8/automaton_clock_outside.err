@@ -1,0 +1,1 @@
+automaton_clock_outside.sig:5:11: error: Automaton_Clock is allowed only in an automaton
