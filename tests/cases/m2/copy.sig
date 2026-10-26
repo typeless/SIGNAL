@@ -6,16 +6,16 @@ process COPY =
    | BUFFER := pointer(ulong(MAPPED)) default ZBUFFER
    | ZBUFFER := BUFFER $
    | BUFFER ^= N
-   | COUNT := syscall{OS}(3, 0, BUFFER, 16, 0, 0, 0)
-   | MORE := when COUNT > 0
-   | on MORE :: (| WRITTEN := syscall{OS}(4, 1, BUFFER, COUNT, 0, 0, 0) |)
-   | DONE := syscall{OS}(1, 0 when COUNT <= 0, 0, 0, 0, 0, 0)
+   | TALLY := syscall{OS}(3, 0, BUFFER, 16, 0, 0, 0)
+   | MORE := when TALLY > 0
+   | on MORE :: (| WRITTEN := syscall{OS}(4, 1, BUFFER, TALLY, 0, 0, 0) |)
+   | DONE := syscall{OS}(1, 0 when TALLY <= 0, 0, 0, 0, 0, 0)
    | WRITTEN --> DONE
    |)
   where
     type OS = external;
     integer ZN, N;
-    long MAPPED, COUNT, WRITTEN, DONE;
+    long MAPPED, TALLY, WRITTEN, DONE;
     pointer BUFFER, ZBUFFER;
     event MORE;
   end;

@@ -1,6 +1,6 @@
 process TICKER =
   ( ? event START, TICK;
-    ! integer COUNT; )
+    ! integer TALLY; )
   pragmas
     Machine "mps2-an385"
     Boot {START}
@@ -14,9 +14,9 @@ process TICKER =
    | CURRENT :: store{SYSTICK, uinteger}(pointer(SYST_CVR) when START, uinteger(0))
    | CONTROL :: store{SYSTICK, uinteger}(pointer(SYST_CSR) when START, uinteger(7))
    | RAISE --> RELOAD --> CURRENT --> CONTROL
-   | COUNT := ZCOUNT + 1
-   | ZCOUNT := COUNT $ init 0
-   | COUNT ^= TICK
+   | TALLY := ZCOUNT + 1
+   | ZCOUNT := TALLY $ init 0
+   | TALLY ^= TICK
    |)
   where
     type NVIC = external;

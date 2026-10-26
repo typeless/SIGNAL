@@ -1,10 +1,10 @@
 process P =
   ( ? event TICK;
-    ! integer COUNT; )
+    ! integer TALLY; )
   pragmas
     Interrupt {TICK} "27"
   end pragmas
-  (| COUNT := INNER(TICK)
+  (| TALLY := INNER(TICK)
    |)
   where
     process INNER =

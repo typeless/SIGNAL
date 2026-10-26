@@ -1,4 +1,4 @@
-process COUNT =
+process TALLY =
   ( ! ubyte B; )
   (| B := WORD[0]
    |)

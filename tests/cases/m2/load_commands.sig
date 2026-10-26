@@ -4,8 +4,8 @@ process LOADCOMMANDS =
    | ZN := N $ init 0
    | MAPPED := syscall{OS}(197, 0 when N = 1, 16384, 1, 2, 0, 0)
    | HEADER := pointer(ulong(MAPPED))
-   | COUNT := load{FILE, uinteger}(HEADER + 16)
-   | K := COUNT default ZK
+   | TALLY := load{FILE, uinteger}(HEADER + 16)
+   | K := TALLY default ZK
    | ZK := K $
    | K ^= N
    | MORE := uinteger(N) <= K
@@ -26,6 +26,6 @@ process LOADCOMMANDS =
     integer ZN, N;
     long MAPPED, DONE;
     pointer HEADER, P, ZP;
-    uinteger COUNT, K, ZK, STEP, ZSIZE;
+    uinteger TALLY, K, ZK, STEP, ZSIZE;
     boolean MORE;
   end;

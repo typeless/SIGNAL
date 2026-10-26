@@ -1,8 +1,8 @@
 process P =
   ( ? event START;
-    ! integer COUNT; )
+    ! integer TALLY; )
   pragmas
     Machine "lm3s6965evb"
     Boot {START}
   end pragmas
-  (| COUNT := 1 when START |);
+  (| TALLY := 1 when START |);

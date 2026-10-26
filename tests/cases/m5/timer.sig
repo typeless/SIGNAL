@@ -1,6 +1,6 @@
 process TICKER =
   ( ? event START, TICK;
-    ! integer COUNT; )
+    ! integer TALLY; )
   pragmas
     Boot {START}
     Interrupt {TICK} "27"
@@ -15,9 +15,9 @@ process TICKER =
    | TIMER_ON := instruction{TIMER, MSR_CNTV_CTL}(ulong(1) when START)
    | TICK_ARMED := instruction{TIMER, MSR_CNTV_TVAL}(PERIOD when TICK)
    | INTERFACE --> BOOT_ARMED --> TIMER_ON --> TICK_ARMED
-   | COUNT := ZCOUNT + 1
-   | ZCOUNT := COUNT $ init 0
-   | COUNT ^= TICK
+   | TALLY := ZCOUNT + 1
+   | ZCOUNT := TALLY $ init 0
+   | TALLY ^= TICK
    |)
   where
     type GIC = external;

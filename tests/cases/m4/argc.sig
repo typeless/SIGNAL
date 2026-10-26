@@ -1,8 +1,8 @@
 process ARGC =
-  ( ! integer COUNT; )
+  ( ! integer TALLY; )
   (| N := ZN + 1
    | ZN := N $ init 0
-   | COUNT := integer(instruction{ARGS, 2853766112}(ulong(N)))
+   | TALLY := integer(instruction{ARGS, 2853766112}(ulong(N)))
    |)
   where
     type ARGS = external;

@@ -1,13 +1,13 @@
 process P =
   ( ? event START, TICK;
-    ! integer COUNT; )
+    ! integer TALLY; )
   pragmas
     Boot {START}
-    Interrupt {COUNT} "27"
+    Interrupt {TALLY} "27"
   end pragmas
-  (| COUNT := ZCOUNT + 1
-   | ZCOUNT := COUNT $ init 0
-   | COUNT ^= TICK
+  (| TALLY := ZCOUNT + 1
+   | ZCOUNT := TALLY $ init 0
+   | TALLY ^= TICK
    |)
   where
     integer ZCOUNT;

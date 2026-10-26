@@ -1,6 +1,6 @@
 process LAST =
-  ( ? integer IN; ! integer O, Q; )
-  (| O := IN + 1
+  ( ? integer INP; ! integer O, Q; )
+  (| O := INP + 1
    | iterate X of S := S[?] + 1 with S := 0 end
    | Q := S
    | X := 0 .. 2
