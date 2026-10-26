@@ -99,22 +99,25 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
 
 ## M9 — Clock algebra in canonical form
 
-- **Canonical form:** a canonical form for clock formulas (S1 IV–1.3 encodes clocks as polynomials over Z/3Z), replacing D8's syntactic equalities.
-- **Using it:**
-  - clock relations `^<`, `^>`, `^#` (VI–5.3);
-  - `^0`;
-  - `assert` (VII–8);
-  - cycles whose edge clocks are exclusive;
+- **M9a Canonical form:** clock formulas as reduced ordered binary decision diagrams inside the clock pass (S1 IV–1.3 encodes clocks as polynomials over Z/3Z; the diagram is the canonical form of the same algebra), replacing D8's syntactic equalities, the pairwise obligation walk and the LCA tables; the clock tree and the `clocks` dump are kept. Constants: a signal defined only by a constant has no clock and is rejected (S1 IV–2, VI–1.1).
+  - Exit program: every m0–m8 case keeps its trace or message under an old-against-new differential run, `many_roots` moves to the rejected cases, and the self-compile reproduces stage 3.
+- **M9b Using it:**
+  - clock relations `^<`, `^>`, `^#` (VI–5.3) and `^0`;
+  - `assert` (VII–8) as a care set;
+  - cycles whose edge clocks are exclusive (IV–3.3), by split copies;
   - conditional dependences `{a --> b} when C` (XI–6.2);
   - `spec` on models with bodies (XI–6.1);
   - `:=:` (VI–6);
   - `min_clock` (XIII–1);
+  - the tick-equality check in guarded processes (VII–5, VII–6).
+  - Exit program: a program using each relation prints its expected trace; `exclusive_cycle` moves to the accepted cases.
+- **M9c Intrinsics, shared and state variables:**
   - the affine intrinsics (XIII–2), using M8's static parameters;
-  - the tick-equality check in guarded processes.
-- **Shared variables and state variables:** shared variables and partial definitions `::=` with the agreement check (V–10); state variables `statevar`, `X?` (V–11).
-- **Open for this milestone's check-in:** whether constants take their context clock (S1 IV–2) instead of D8's constant-root rule.
-- Lifts: D8 "Other partitions … wait for a canonical form", "causality cycles … are rejected until that canonical form exists"; D11 "the tick equality is otherwise not checked".
-- Exit program: every D8 test still passes or moves to the accepted cases, and a program using each relation prints its expected trace.
+  - partial definitions `::=` and `shared` with the agreement check (V–10, VI–1.1 1-c, 1-d);
+  - state variables `statevar`, `X?` (V–11).
+  - Exit program: S1 VII–7's statechart prints its expected trace, and `affine_sample{phi, d}` is present exactly at the ticks the period and phase name.
+- Lifts: D8 "Other partitions … wait for a canonical form", "causality cycles … are rejected until that canonical form exists"; D11 "the tick equality is otherwise not checked"; D17 "needs M9's partial definitions"; D18 "`spec` is not parsed" for models with bodies.
+- Decided 2026-10-27: a constant takes its clock from its context (S1 IV–2), and a constant definition no context reaches is rejected (D8, D19). Tuple partial definitions (VI–1.1 1-e) move to M10.
 
 ## M10 — Arrays and tuples, full
 
@@ -130,8 +133,9 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
   - general `iterate` and `next`, sequential enumeration (IX–13–IX–15);
   - `tr`, `*.` (IX–16).
 - **Tuples:** `struct` and `bundle` types, field access and definitions (V–5, VIII).
+  - tuple partial definitions `(X1, …, Xn) ::= E` (VI–1.1 1-e), moved from M9.
 - **Extension:** extension of operators to arrays and tuples (X–1).
-- Lifts: D10 "`$` is not supported on arrays", "`iterate` bodies hold monochronous definitions only"; D11 "Model calls … inside `iterate` are rejected", "`with` initializes an array only from…", "A top-level input signal is a scalar"; D13's `0 .. E` subset.
+- Lifts: D10 "`$` is not supported on arrays", "`iterate` bodies hold monochronous definitions only"; D11 "Model calls … inside `iterate` are rejected", "`with` initializes an array only from…", "A top-level input signal is a scalar"; D13's `0 .. E` subset; D19 "Tuple partial definitions … wait for M10".
 - Exit program: S1's `byte_adder` and matrix product, and a driver whose register block is a `struct` and whose status is a `bundle`.
 
 ## M11 — Characters and strings
