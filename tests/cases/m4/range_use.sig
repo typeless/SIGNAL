@@ -1,4 +1,4 @@
-process USE =
+process RANGE_READ =
   ( ! integer Y; )
   (| X := 0 .. 4
    | Y := X[1]
