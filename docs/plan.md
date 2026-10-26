@@ -81,7 +81,8 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
 ## M8 — Models, parameters and modules
 
 - **Constants and parameters:**
-  - constants and `$ init` values defined by any constant expression (V–8, VI–3.2);
+  - constants and `$ init` values defined by a constant expression over the arithmetic, comparison and boolean operators, conversions and earlier constants (V–8, VI–3.2); the conditional and the composite operators are not folded;
+  - `case` values that are constant names and enumeration values (requirements.md D17);
   - static parameters on user models, `P{K}(…)` (VI–1.2, XI–5);
   - models as types and parameters (XI–8).
 - **Calls and model classes:**
@@ -92,7 +93,7 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
   - `safe`, `deterministic`, `unsafe` (XI–6).
 - **Automata and operators:** automaton priority, `Automaton_Clock`, `Automaton_SetClock`, `Automaton_SetCurrentStateId` (XI–1.6); `E1 ** E2` on integers (VI–8.1).
 - **Modules:** `module … end`, `use`, `private` (XII–1), in the compiled source file (S1: "The way this module is made available is not normalized"; D13's command line stays).
-- Lifts: D11 "Static parameters are limited to…", "a called model has at most one output", the D11 automaton deferrals, D11's one program-wide namespace (for modules).
+- Lifts: D10 "Constants are integer literals…", D11 "Static parameters are limited to…", "a called model has at most one output", the D11 automaton deferrals. D11's one program-wide namespace is kept; modules restrict visibility (M8 check-in, D18).
 - Exit program: a timer driver written as one parameterised model in a module, instantiated for two CMSDK timers on `mps2-an385`, printing both timers' interrupts. Timer 0 was measured in M6 (Q4); timer 1 is probed at the check-in.
 
 ## M9 — Clock algebra in canonical form
