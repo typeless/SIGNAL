@@ -65,7 +65,7 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
   - **Automaton state actions:** `S :: P` compiles but runs in every state. Implement S1 XI–1.6's guard, `when` the automaton's state is `S`, on the state signal D11's translation already keeps.
   - **Hiding:** `P / x` is listed under M0 but neither compiler accepts it. Implement it (VII–3).
   - **Class rules:** the `function` and `node` rules (XI–1.4, XI–1.5) are checked.
-- Rewrites with no new pass logic or code templates:
+- Rewrites whose output uses only constructs the compiler already has; the parser gains an operand copier for operators S1 defines with a repeated operand, and FINISH gains a template expander for constructs S1 defines with fresh signals (`cell`, `var`, `after`, `from`, `count`):
   - **Processes:** inner `where` (VII–4; its scoping against D11's one namespace is decided here), empty composition (VII–2), `case … in … else … end` (VII–7).
   - **Equations:** tuple definitions `(X, Y) := (E1, E2)` (VIII–2).
   - **Memory:** `cell`, `after`/`from`/`count` (VI–4.3, VI–4.5); `var` (VI–4.4) where its context clock follows from a sibling operand or the defined signal (IV–2).
