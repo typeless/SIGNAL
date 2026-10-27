@@ -119,5 +119,13 @@
     - An array type of rank 2 or more has fewer than 2^31 elements.
     - `dim`, `size` and `bounds` are intrinsics unless the file declares a model of that name anywhere, in which case every call of that name is the user's model.
     - An element endpoint stands alone after `|` or `(|`, or next to `-->`. Inside `{ … }`, as a range `X[i .. j]`, or on a label it is rejected. Since it orders the whole signal, `X[0] --> X[1]` is a causality cycle, a program S1 accepts.
-    - Chained access `M[i][j]` (S1 IX–7.1) and recovery `\\` on an access with more than one index (S1 IX–7.2) are rejected until M10a2. Array inputs, array formals and array outputs of a submodel wait for M10a2.
     - Messages print a multidimensional array type with one size only.
+  - Landed 2026-10-28, M10a2: array inputs, array formals and array outputs of submodels; an array signal defined by an array signal of its type (`B := A`); chained access `M[i][j]`, the same access as `M[i, j]` (S1 IX–7.1); recovery on a multi-index access (S1 IX–7.2); enumerations with expressions; ranges and `step` inside brackets; restructuration `I : E` and element definitions `X[I] := E` (S1 IX–9, IX–11), where an element no definition reaches reads its type's default value, one of the values S1 allows; `|+`; whole-value `==`; extraction (S1 IX–8). `m1/restructure_alone`, `m2/input_array`, `m2/submodel_array_input` and `m4/lower_array_definition` became accepted. Narrowings:
+    - An enumeration, `|+`, restructuration or extraction is a value only as the whole right side of a definition; `(X |+ Y) |+ W`, `[I, J] == [J, I]` and `(M[I])[J]` are rejected.
+    - A restructuration's value array has exactly the index array's size, and its value is a scalar per index; S1 also allows a larger value array and sub-array values.
+    - A range inside brackets has constant bounds, and its elements are `integer`. A range without `step` starts at 0, as in D13, while `a .. b step c` may start anywhere; the two spellings agree from M10b on.
+    - Extraction takes at most two index arrays, each of rank 1 and all of one size, and does not mix an index array with a scalar index.
+    - An element definition `X[I] := E` stands directly after `|` or `(|`; a labelled one is rejected.
+    - `step` is a contextual name, so a signal may still be named `step`.
+    - An endpoint with more indices than its array's rank is rejected.
+    - Operators on arrays (S1 X–1) wait for M10a3, so `m1/array_operator` is still rejected.

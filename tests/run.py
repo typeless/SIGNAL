@@ -28,12 +28,12 @@ def target_command(source):
     return []
 
 
-def compile_case(compiler, source, executable):
+def compile_case(compiler, source, executable, timeout=COMPILE_TIMEOUT_SECONDS):
     return subprocess.run(
         [*compiler, str(source), "-o", str(executable)],
         capture_output=True,
         text=True,
-        timeout=COMPILE_TIMEOUT_SECONDS,
+        timeout=timeout,
         env={"PATH": ""},
     )
 

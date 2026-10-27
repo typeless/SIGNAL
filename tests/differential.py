@@ -1,10 +1,15 @@
+import functools
 import random
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-from run import QEMU_COMMANDS, compile_case, read_trace
+import run
+from run import QEMU_COMMANDS, read_trace
+
+COMPILE_TIMEOUT_SECONDS = 180
+compile_case = functools.partial(run.compile_case, timeout=COMPILE_TIMEOUT_SECONDS)
 
 ROOT = Path(__file__).resolve().parent.parent
 SEEDS = ROOT / "tests" / "differential_seeds.txt"
@@ -26,6 +31,10 @@ M9A_REJECTED = {
 M9A_MOVED = {
     "m9/clocks_not_inside_pairs.sig": "accepted",
     "m9/exclusive_cycle.sig": "accepted",
+    "m1/restructure_alone.sig": "accepted",
+    "m2/input_array.sig": "accepted",
+    "m2/submodel_array_input.sig": "accepted",
+    "m4/lower_array_definition.sig": "accepted",
 }
 DUMP_PASS_LINE = "constant integer DUMP_PASS = 0;"
 CLOCKS_DUMP_PASS_LINE = "constant integer DUMP_PASS = 5;"
@@ -628,6 +637,9 @@ class M10aProgram:
         self.axis = rng.randrange(1, self.rank + 1)
         self.low, self.high = rng.randrange(-5, 11), rng.randrange(-5, 11)
         self.spellings = [spelling(self.dims, rng), spelling(self.dims[1:], rng), spelling(self.dims[2:], rng)]
+        self.width = self.dims[0]
+        self.vector = self.values[:self.width]
+        self.scatter = rng.sample(range(self.width), rng.randrange(1, self.width + 1))
 
     @staticmethod
     def index_value(rng, size):
@@ -643,8 +655,15 @@ class M10aProgram:
             flat = flat * size + index
         return self.values[flat]
 
+    def properties(self, first):
+        restructured = [0] * self.width
+        for position, index in enumerate(self.scatter):
+            restructured[index] = self.vector[position]
+        reversed_element = self.vector[self.width - 1 - first] if 0 <= first < self.width else 0
+        return [*self.vector, *restructured, *self.vector[:len(self.scatter)], reversed_element]
+
     def expected(self):
-        lines = ["- - - - - -"]
+        lines = ["- - - - - - - - - -"]
         block = len(self.values) // self.dims[0]
         for tick in range(1, TICKS + 1):
             point = [column[tick % TICKS] for column in self.indices]
@@ -658,7 +677,7 @@ class M10aProgram:
             else:
                 whole = [0] * block
             lines.append(f"{value} {value} {value} {self.rank * 1000 + self.dims[self.axis - 1] * 10} {bounded} "
-                         + " ".join(map(str, whole)))
+                         + " ".join(map(str, whole + self.properties(first))))
         return lines
 
     def source(self, machine):
@@ -668,7 +687,7 @@ class M10aProgram:
         body.append(f"A := M[{', '.join(names)}]")
         declarations = [f"integer ZN, N, {', '.join(names)};"]
         if self.rank >= 2:
-            body += ["R := M[I1]", f"B := R[{', '.join(names[1:])}]"]
+            body += ["R := M[I1]", "B := R" + "".join(f"[{name}]" for name in names[1:])]
             declarations.append(f"{self.spellings[1]} {self.element} R;")
         else:
             body.append("B := M[I1]")
@@ -676,16 +695,34 @@ class M10aProgram:
             body += ["S := M[I1, I2]", f"C := S[{', '.join(names[2:])}]"]
             declarations.append(f"{self.spellings[2]} {self.element} S;")
         else:
-            body.append(f"C := M[{', '.join(names)}]")
+            body.append("C := M" + "".join(f"[{name}]" for name in names))
         body.append(f"D := dim(M) * 1000 + size(M, {self.axis}) * 10 + I1 - I1")
         body.append(f"E := bounds(I1, {self.low}, {self.high})")
         body.append("F := M next I1 : A" if self.rank == 1 else "F := M[I1]")
+        width, picked = self.width, len(self.scatter)
+        body += [
+            "V := VC",
+            f"H := V[0 .. {width - 1}]",
+            f"Q := [{', '.join(f'V[{position}]' for position in range(picked))}]",
+            "RS := QI : Q",
+            "G := RS[QI]",
+            f"L := [{', '.join(f'V[{width - 1 - position}]' for position in range(width))}]",
+            "LO := L[I1]",
+            "V ^= TICK",
+        ]
+        declarations += [
+            f"[{width}] {self.element} V, L;",
+            f"[{picked}] {self.element} Q;",
+            f"constant [{width}] {self.element} VC = [{', '.join(typed_literal(self.element, value) for value in self.vector)}];",
+            f"constant [{picked}] integer QI = [{', '.join(map(str, self.scatter))}];",
+        ]
         literals = [typed_literal(self.element, value) for value in self.values]
         declarations.append(f"constant {self.spellings[0]} {self.element} M = {nested_list(literals, self.dims)};")
         for level, column in enumerate(self.indices, 1):
             declarations.append(f"constant [{TICKS}] integer P{level} = [{', '.join(map(str, column))}];")
         lines = ["process M10A =", "  ( ? event START, TICK;",
-                 f"    ! {self.element} A, B, C; integer D, E; {self.spellings[0 if self.rank == 1 else 1]} {self.element} F; )"]
+                 f"    ! {self.element} A, B, C; integer D, E; {self.spellings[0 if self.rank == 1 else 1]} {self.element} F;",
+                 f"      [{self.width}] {self.element} H, RS; [{len(self.scatter)}] {self.element} G; {self.element} LO; )"]
         if machine:
             lines.append(MACHINE_PRAGMAS.rstrip("\n"))
         lines.append("  (| " + "\n   | ".join(body))
