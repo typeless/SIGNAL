@@ -140,6 +140,7 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
 - **Extension:** extension of operators to arrays and tuples (X–1).
 - Lifts: D10 "`$` is not supported on arrays", "`iterate` bodies hold monochronous definitions only"; D11 "Model calls … inside `iterate` are rejected", "`with` initializes an array only from…", "A top-level input signal is a scalar"; D13's `0 .. E` subset; D19 "Tuple partial definitions … wait for M10".
 - Exit program: S1's `byte_adder` and matrix product, and a driver whose register block is a `struct` and whose status is a `bundle`.
+- Phases (D20): M10a shapes, access, construction, interfaces and operators on arrays; M10b array delays and iteration; M10c tuples. Decided 2026-10-27: a driver loads and stores a `struct` register block's fields with scalar effects.
 
 ## M11 — Characters and strings
 

@@ -20,3 +20,12 @@ Surface-compare verdicts, keyed by date. Each entry records the candidates, the 
 - Pick: (a). (b) needs a hidden event input a model cannot declare and a `^=` across the instance boundary that the call lowering does not carry.
 - Finding: a hidden event with no definition is rejected at lowering (`signal … is never defined`); the hidden clock `clk_i'k` is therefore a hidden input row, which makes it a presence column of the input file.
 - Residual: `affine_sample` presence law, discharged by the `m9c` property (ticks `t ≡ phi + 1 (mod d)`).
+
+## 2026-10-27 — M10 encodings (D20)
+
+Surface-compare verdicts over the M10 design, read at c47d8c5.
+
+- Multidimensional arrays: flat block with a nested type chain and a derived stride, over a stored stride column (two constructors, sigc.sig 1966–1968 and 4170–4172, would have to agree), nested arrays with padding, and a shape table. Residual: both spellings of a multidimensional type intern to one id (property).
+- Nested `iterate`: one product loop with derived indices, over a loop-level stack, which would re-encode the single-loop-id rule at two schedule sites (6172, 6208) and the emitter. Residual: nested-loop traces against a reference, including inner restarts.
+- Construction: nested element stores inside one definition, over a chain of hidden signals (the schedule chains storage only through copies and delays, 6983, so the chain would allocate a block per element), a multi-row definition and per-element scalars. Residual: `(I:S)[I] = S`, `[E1..En][j] = Ej`; a write-after-read edge for element and store readers inside loops.
+- Tuples: split before lowering, over tuple-typed rows (a row has one clock, so bundles would be split anyway, and about 32 type dispatch sites would gain an arm). Residual: tuple roundtrip and hidden-name injectivity (properties).
