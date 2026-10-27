@@ -17,8 +17,9 @@ SEED_WORDS = [
     "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with", "if", "then", "else", "procedure",
     "node", "function", "automaton", "label", "on", "external", "indices", "pragmas", "Interrupt", "Boot", "Machine",
     "cell", "var", "after", "from", "count", "case", "in", "array", "to",
-    "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe", "assert", "min_clock", "spec",
-    "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "tick'", "rep'",
+    "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe", "defaultvalue", "shared", "statevar", "assert", "min_clock", "spec",
+    "affine_sample", "affine_clock_relation", "affine_unsample",
+    "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "tick'", "v'", "zv'", "vb'", "zvb'", "clk_x'", "clk_y'", "clk_i'", "rep'",
 ]
 FRESH_FIRST = "cell'"
 FRESH_LAST = "rep'"
@@ -27,7 +28,7 @@ KEYWORDS = {
     "xor", "not", "modulo", "short", "long", "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with",
     "if", "then", "else", "procedure", "node", "function", "automaton", "label", "on", "external",
     "cell", "var", "after", "from", "count", "case", "in", "array", "to",
-    "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe",
+    "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe", "defaultvalue", "shared", "statevar",
 }
 NAME_CONSTANTS = {
     "event": "N_EVENT", "boolean": "N_BOOLEAN", "ubyte": "N_UBYTE", "ulong": "N_ULONG", "load": "N_LOAD",
@@ -37,7 +38,8 @@ NAME_CONSTANTS = {
     "Automaton_SetCurrentStateId": "N_SET_CURRENT_STATE_ID",
     "Automaton_IsIn": "N_ISIN", "clock'": "N_CLOCK_MARK", "state'": "N_STATE_MARK", "cur'": "N_CURRENT_MARK",
     "on'": "N_ON_MARK", "indices": "N_INDICES", "pragmas": "N_PRAGMAS", "Interrupt": "N_INTERRUPT", "Boot": "N_BOOT",
-    "Machine": "N_MACHINE", "assert": "N_ASSERT", "min_clock": "N_MIN_CLOCK", "spec": "N_SPEC", "rep'": "N_REPEAT_MARK", "tick'": "N_TICK_MARK",
+    "Machine": "N_MACHINE", "assert": "N_ASSERT", "min_clock": "N_MIN_CLOCK", "spec": "N_SPEC", "affine_sample": "N_AFFINE_SAMPLE", "affine_clock_relation": "N_AFFINE_RELATION",
+    "affine_unsample": "N_AFFINE_UNSAMPLE", "clk_i'": "N_AFFINE_CLOCK", "rep'": "N_REPEAT_MARK", "tick'": "N_TICK_MARK",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -49,11 +51,11 @@ SYMBOLS = [
     ("^+", "CLOCK_PLUS"), ("^*", "CLOCK_TIMES"), ("^-", "CLOCK_MINUS"), ("==", "EQUAL_EQUAL"),
     ("<<=", "LESS_LESS_EQUAL"), ("[:", "OPEN_COLON"), ("[/:", "OPEN_SLASH_COLON"), ("\\\\", "BACKSLASHES"),
     ("|*", "BAR_STAR"), ("**", "STAR_STAR"), ("^<", "CLOCK_LT"), ("^>", "CLOCK_GT"), ("^#", "CLOCK_SHARP"),
-    (":=:", "IDENTITY"),
+    (":=:", "IDENTITY"), ("::=", "PARTIAL_DEFINE"),
 ]
 SYMBOL_BASE = 84
-OTHER_CODES = [("EOF", 0), ("NAME", 130), ("NUMBER", 131), ("STRING", 132)]
-CODE_LIMIT = 134
+OTHER_CODES = [("EOF", 0), ("NAME", 131), ("NUMBER", 132), ("STRING", 133)]
+CODE_LIMIT = 135
 ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34, "'": 39, "?": 63, "%": 37}
 
 OPS = [
@@ -64,7 +66,7 @@ OPS = [
     "CLOCK_PLUS", "CLOCK_TIMES", "OPEN_COLON", "OPEN_SLASH_COLON", "LEFT_TT", "CLOCK_MINUS", "ABS", "OPERAND", "ZERO",
     "RECOVER", "RECOVER_SQUARE", "INDEX_OPERAND", "SIZE", "SIZE_LESS", "CELL", "VAR", "AFTER", "FROM", "COUNT",
     "REPEAT", "ONE", "RIGHT_OPERAND", "TARGET_SIGNAL", "INDEX_SIGNAL", "REPEAT_RANGE", "ARRAY_RANGE", "REPEAT_BODY",
-    "SLOT", "POW",
+    "SLOT", "POW", "AFFINE_SAMPLE", "AFFINE_RELATION", "AFFINE_UNSAMPLE", "STATE",
 ]
 MONOCHRONOUS = {
     "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR",
@@ -85,11 +87,11 @@ COMPOSITES = {
     "REPEAT_BODY": ([], ["TARGET_SIGNAL", "PREV", "INDEX_SIGNAL", "OPERAND", "PAIR", "NEXT"]),
 }
 LEAVES = {"CONST", "SIGNAL", "ENUMCONST", "SLOT"}
-TEMPLATE_ROW_KINDS = ["EMIT", "LEFT", "RIGHT", "DEFINE", "GROUP", "END"]
-TEMPLATE_VALUE_REFS = ["LITERAL", "INIT", "INIT_DECL", "BOUND"]
-TEMPLATE_REFS = {"TARGET": -2, "OPERAND": -3, "BOUND": -4}
-TEMPLATE_KINDS = {"CELL": 1, "AFTER": 1, "FROM": 1, "COUNT": 1, "VAR": 2}
-TEMPLATE_SKIPS_LEFT = {"AFTER", "FROM", "COUNT"}
+TEMPLATE_ROW_KINDS = ["EMIT", "LEFT", "RIGHT", "DEFINE", "GROUP", "END", "INPUT"]
+TEMPLATE_VALUE_REFS = ["LITERAL", "INIT", "INIT_DECL", "BOUND", "PHASE_A", "PERIOD_A", "PHASE_B", "PERIOD_B"]
+TEMPLATE_REFS = {"TARGET": -2, "OPERAND": -3, "BOUND": -4, "FIRST_OPERAND": -5}
+TEMPLATE_KINDS = {"CELL": 1, "AFTER": 1, "FROM": 1, "COUNT": 1, "VAR": 2, "AFFINE_SAMPLE": 1, "AFFINE_RELATION": 1, "AFFINE_UNSAMPLE": 1}
+TEMPLATE_SKIPS_LEFT = {"AFTER", "FROM", "COUNT", "AFFINE_SAMPLE", "AFFINE_RELATION", "AFFINE_UNSAMPLE"}
 
 
 def template_emit(op, name=None, value=0, ref="LITERAL", type=None):
@@ -104,6 +106,10 @@ LEFT_ROW = ("LEFT", None, None, 0, "LITERAL", None)
 RIGHT_ROW = ("RIGHT", None, None, 0, "LITERAL", None)
 GROUP_ROW = ("GROUP", None, None, 0, "LITERAL", None)
 END_ROW = ("END", None, None, 0, "LITERAL", None)
+
+
+def hidden_input(name):
+    return ("INPUT", None, name, 0, "LITERAL", "event")
 
 
 def template_literal(value, type="short"):
@@ -132,7 +138,43 @@ COUNTER_INLINE = [
     template_emit("SIGNAL", "n'"), template_emit("SIGNAL", "h1'"), template_emit("WHEN"), template_literal(0), template_emit("SIGNAL", "h1'"), template_emit("WHEN"),
     template_emit("DEFAULT"),
 ]
+def affine_counter(clock, phase, period, count, next_count):
+    zero = [template_emit("SIGNAL", next_count), template_literal(0, "integer"), template_emit("EQ")]
+    return [
+        template_emit("CONST", ref=period, type="integer"), *zero, template_emit("WHEN"),
+        template_emit("SIGNAL", next_count), template_literal(1, "integer"), template_emit("SUB"), template_emit("DEFAULT"), define(count, "integer"),
+        template_emit("SIGNAL", count), template_emit("DELAY", ref=phase, type="integer"), define(next_count, "integer"),
+        template_emit("SIGNAL", count), template_emit("SIGNAL", clock), GROUP_ROW,
+    ]
+
+
+def affine_sampled(clock, next_count, name):
+    return [
+        template_emit("SIGNAL", clock), template_emit("SIGNAL", next_count), template_literal(0, "integer"), template_emit("EQ"),
+        template_emit("WHEN"), define(name, "event"),
+    ]
+
+
+def affine_relation(first, second):
+    return [
+        hidden_input("clk_i'"),
+        *affine_sampled("clk_i'", "zv'", "clk_x'"), *affine_counter("clk_i'", "PHASE_A", "PERIOD_A", "v'", "zv'"),
+        *affine_sampled("clk_i'", "zvb'", "clk_y'"), *affine_counter("clk_i'", "PHASE_B", "PERIOD_B", "vb'", "zvb'"),
+        template_emit("SIGNAL", "clk_x'"), template_emit("SIGNAL", first), GROUP_ROW,
+        template_emit("SIGNAL", "clk_y'"), template_emit("SIGNAL", second), GROUP_ROW,
+    ]
+
+
 TEMPLATE_PROGRAMS = {
+    "AFFINE_SAMPLE": ([
+        template_emit("SIGNAL", "OPERAND"), template_emit("SIGNAL", "zv'"), template_literal(0, "integer"), template_emit("EQ"),
+        template_emit("WHEN")], [*affine_counter("OPERAND", "PHASE_A", "PERIOD_A", "v'", "zv'"), END_ROW]),
+    "AFFINE_RELATION": ([], [*affine_relation("FIRST_OPERAND", "OPERAND"), END_ROW]),
+    "AFFINE_UNSAMPLE": ([
+        template_emit("SIGNAL", "FIRST_OPERAND"), template_emit("SIGNAL", "TARGET"), template_emit("CLOCK"), template_emit("WHEN"),
+        template_emit("SIGNAL", "OPERAND"), template_emit("DEFAULT")], [
+        *affine_relation("FIRST_OPERAND", "TARGET"),
+        template_emit("SIGNAL", "OPERAND"), template_emit("SIGNAL", "TARGET"), GROUP_ROW, END_ROW]),
     "CELL": ([template_emit("SIGNAL", "zcell'"), template_emit("DEFAULT")], [
         template_emit("SIGNAL", "TARGET"), template_emit("DELAY", ref="INIT_DECL"), define("zcell'", "TARGET"),
         LEFT_ROW, template_emit("CLOCK"), RIGHT_ROW, template_emit("UWHEN"), template_emit("DEFAULT"), define("cell'", "event"),
@@ -158,7 +200,7 @@ TEMPLATE_PROGRAMS = {
         template_emit("SIGNAL", "TARGET"), template_emit("SIGNAL", "h1'"), GROUP_ROW, END_ROW,
     ]),
 }
-UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV", "VAR"}
+UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV", "VAR", "STATE"}
 BINARY = [
     ("default", "DEFAULT", 3), ("when", "WHEN", 4), ("xor", "XOR", 11), ("or", "OR", 12), ("and", "AND", 13),
     ("=", "EQ", 16), ("/=", "NE", 16), ("<", "LT", 16), ("<=", "LE", 16), (">", "GT", 16), (">=", "GE", 16),
@@ -435,6 +477,23 @@ TEMPLATES = [
     ("CYCLE_INSIDE", "causality cycle between signals # cannot be split by a signal it defines", ["CLOCK"]),
     ("MIN_CLOCK_TWO", "min_clock of # has more than one clock relation", ["CLOCK"]),
     ("CONDITION_LIST", "{ } when takes one signal on each side of -->", []),
+    ("AFFINE_PHASE", "affine phase must be a non-negative integer", []),
+    ("AFFINE_PERIOD", "affine period must be a positive integer", []),
+    ("AFFINE_FORM", "# takes integer constant parameters and signal name operands", ["TOKEN"]),
+    ("AFFINE_TOP", "# can only be used in the top-level process", ["TOKEN"]),
+    ("PARTIAL_TUPLE", "tuple partial definitions are not supported", []),
+    ("PARTIAL_MIXED", "# has both := and ::= definitions", ["FLAT"]),
+    ("PARTIAL_TWO_DEFAULTS", "# has two defaultvalue definitions", ["FLAT"]),
+    ("PARTIAL_CONSTANT", "partial definition of # is a constant", ["FLAT"]),
+    ("PARTIAL_OVERLAP", "partial definitions of # may coincide", ["CLOCK"]),
+    ("PARTIAL_NO_CLOCK", "partial definitions of # need a clock for #; add a clock equation or min_clock(#)", ["CLOCK", "CLOCK", "CLOCK"]),
+    ("STATEVAR_DIRECT", "state variable # is read without ?", ["FLAT"]),
+    ("STATEVAR_ASSIGNED", "state variable # cannot be defined by :=", ["FLAT"]),
+    ("STATEVAR_CONTEXT", "#? needs a context clock", ["CLOCK"]),
+    ("STATEVAR_NOT", "# is not a state variable", ["FLAT"]),
+    ("STATEVAR_DEFAULT", "state variable # has no defaultvalue", ["FLAT"]),
+    ("PARTIAL_OUTPUT", "output # cannot have partial definitions", ["FLAT"]),
+    ("PARTIAL_INSIDE", "partial definition # cannot be shown inside the clock of #", ["CLOCK", "CLOCK"]),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
@@ -532,7 +591,7 @@ PARSE_STATES = [
     "USE_NAME", "USE_SEPARATOR", "MODEL_COPY", "PARAMETER_MODEL", "PARAMETER_MODEL_NAME", "STALL", "DONE", "FAILED",
 ]
 OPERAND_CASES = ["EMPTY_CALL", "LITERAL", "CALL", "PARAMETERS", "SIGNAL", "OPEN_PAREN", "IF", "PREFIX", "PLUS", "FAIL"]
-OPERATOR_CASES = ["REDUCE", "BINARY", "THEN", "ELSE", "DELAY", "PREVIOUS", "OPEN_SQUARE", "CLOSE", "COMMA", "RETURN", "INIT"]
+OPERATOR_CASES = ["REDUCE", "BINARY", "THEN", "ELSE", "DELAY", "PREVIOUS", "OPEN_SQUARE", "CLOSE", "COMMA", "RETURN", "INIT", "STATE"]
 FRAMES = ["COMPOSE", "LABEL", "GUARD", "ITERATE", "CASE"]
 DELAY_INITS = ["NONE", "CONST", "ENUMCONST", "NAME", "SIZE"]
 FINISH_PHASES = [
@@ -542,17 +601,17 @@ FINISH_PHASES = [
 ]
 TICK_STEPS = ["LABEL", "USE", "EQUATION", "SCAN", "PART", "COPY", "CLOCK", "DEFAULT", "END"]
 LOWER_STATES = [
-    "SIGNAL", "LABEL", "VALUE", "ARRAY", "TABLE", "LOOP", "EQUATION", "GROUP", "START", "SCAN", "ENTRY", "NEVER",
-    "MEMBERS", "DONE", "FAILED",
+    "SIGNAL", "LABEL", "VALUE", "ARRAY", "TABLE", "LOOP", "STATEVAR", "EQUATION", "GROUP", "START", "SCAN", "ENTRY", "NEVER",
+    "MEMBERS", "PARTIAL", "DONE", "FAILED",
 ]
 POST_STATES = ["DEPENDENCE", "ROWS", "PREFIX", "PLACE", "WALK", "LABELSUM", "SIZE", "DONE", "FAILED"]
 EXPAND_STATES = ["PLACE", "PAIRS", "PREV", "DONE", "FAILED"]
 CLOCK_STATES = [
-    "ROWS", "SAMPLES", "GROUPS", "REWRITE", "TARGETS", "GUARDS", "SCAN", "DEFS", "APPLY", "WAIT", "CHECKS", "DONE", "FAILED",
+    "ROWS", "SAMPLES", "GROUPS", "PAIRS", "REWRITE", "TARGETS", "GUARDS", "SCAN", "DEFS", "APPLY", "WAIT", "CHECKS", "DONE", "FAILED",
 ]
 BDD_JOBS = ["AND", "OR", "WALK", "ANDNOT", "XOR"]
 SPLIT_PHASES = ["START", "LIVE", "BLOCK", "PLACE", "PICK", "RECORD", "UNWIND", "DONE"]
-OBLIGATION_KINDS = ["INSIDE", "LT", "GT", "SHARP", "EQUAL", "BOOLEAN", "TICK", "IDENTITY"]
+OBLIGATION_KINDS = ["INSIDE", "LT", "GT", "SHARP", "EQUAL", "BOOLEAN", "TICK", "IDENTITY", "PARTIAL"]
 KEY_FAMILIES = ["SIGNAL", "LABEL", "CALL_LABEL", "VALUE", "PAIR", "ARRAY"]
 KEY_STRIDE = 8
 INSTANTIATE_PHASES = [
@@ -1060,6 +1119,7 @@ EMIT_TEMPLATES = [
     ], False)),
     ("ROW_CONST", gated([operand(9, "row")])),
     ("ROW_DELAY", gated([ld(9, ("MEM", "row"), "type_row")])),
+    ("ROW_STATE", gated([ld(9, ("MEM", "value_row"), "type_row")])),
     ("ROW_ONE", gated([emit("MOVZ_X", 9, 0, 1)])),
     ("ROW_IF", gated([
         operand(9, "left"), operand(10, "right_left"), operand(11, "right_right"), emit("SUBS_X_IMM", XZR, 9, 0),
@@ -1404,6 +1464,7 @@ EMIT_TEMPLATES += [
     ], False)),
     ("ROW_CONST_THUMB", gated_thumb([operand2(0, "row")])),
     ("ROW_DELAY_THUMB", gated_thumb([ld2(0, ("MEM", "row"), "type_row")])),
+    ("ROW_STATE_THUMB", gated_thumb([ld2(0, ("MEM", "value_row"), "type_row")])),
     ("ROW_ONE_THUMB", gated_thumb([movw(0, 1), movw(1, 0)])),
     ("ROW_IF_THUMB", gated_thumb([
         operand1(0, "left"), operand2(2, "right_left"), operand2(4, "right_right"), compare(0, 0), mov(0, 4), mov(1, 5),
@@ -1682,16 +1743,26 @@ def build():
     table("PAIR_COLUMN", "short", pair_column)
     integer("PAIR_WIDTH", pair_width)
     table("PAIR_CODE", "short", pair_code)
-    triple_second = [0] * 256
-    triple_third = [0] * 256
-    triple_code = [0] * 256
-    for index, (text, _) in enumerate(SYMBOLS):
-        if len(text) == 3:
-            assert triple_code[ord(text[0])] == 0
-            triple_second[ord(text[0])] = ord(text[1])
-            triple_third[ord(text[0])] = ord(text[2])
-            triple_code[ord(text[0])] = SYMBOL_BASE + index
-    table("TRIPLE_SECOND", "short", triple_second)
+    triples = [(text, SYMBOL_BASE + index) for index, (text, _) in enumerate(SYMBOLS) if len(text) == 3]
+    triple_firsts = sorted({text[0] for text, _ in triples})
+    triple_seconds = sorted({text[1] for text, _ in triples})
+    triple_row = [0] * 256
+    triple_column = [0] * 256
+    for row, character in enumerate(triple_firsts, 1):
+        triple_row[ord(character)] = row
+    for column, character in enumerate(triple_seconds, 1):
+        triple_column[ord(character)] = column
+    triple_width = len(triple_seconds) + 1
+    triple_third = [0] * ((len(triple_firsts) + 1) * triple_width)
+    triple_code = [0] * len(triple_third)
+    for text, code in triples:
+        slot = triple_row[ord(text[0])] * triple_width + triple_column[ord(text[1])]
+        assert triple_code[slot] == 0
+        triple_third[slot] = ord(text[2])
+        triple_code[slot] = code
+    table("TRIPLE_ROW", "short", triple_row)
+    table("TRIPLE_COLUMN", "short", triple_column)
+    integer("TRIPLE_WIDTH", triple_width)
     table("TRIPLE_THIRD", "short", triple_third)
     table("TRIPLE_CODE", "short", triple_code)
     escape_value = [0] * 256

@@ -1,4 +1,4 @@
-process SHARED =
+process SHAREDROOT =
   ( ? event A, B, S;
     ! integer N; )
   pragmas

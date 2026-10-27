@@ -1,0 +1,1 @@
+partial definitions of X need a clock for X; add a clock equation or min_clock(X)

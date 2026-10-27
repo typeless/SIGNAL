@@ -1,4 +1,4 @@
-process SHARED =
+process SHAREDBOOT =
   ( ? event START, TICK;
     ! integer N; )
   pragmas

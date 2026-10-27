@@ -495,6 +495,96 @@ def m9b(compiler, count):
     return 1 if failures else 0
 
 
+def affine_source(phase, period):
+    return f"""process AFFINE =
+  ( ! integer N, Y; )
+  (| N := ZN + 1
+   | ZN := N $ init 0
+   | Y := affine_sample{{{phase}, {period}}}(N)
+   |)
+  where
+    integer ZN;
+  end;
+"""
+
+
+def partial_source(modulus, branches, otherwise, initial):
+    arms = [f"{{{', '.join(map(str, residues))}}}: X ::= N * {factor}" for residues, factor in branches]
+    if otherwise is not None:
+        arms.append(f"else X ::= {otherwise}")
+    lines = ["process PARTIAL =", "  ( ! integer N, Y; )", "  (| N := ZN + 1", "   | ZN := N $ init 0",
+             f"   | K := N modulo {modulus}", "   | case K in"]
+    lines += [f"       {arm}" for arm in arms]
+    lines += ["     end", "   | X ^= N", "   | Y := X", "   |)", "  where", "    integer ZN, K; shared integer X" + ("" if initial is None else f" init {initial}") + ";", "  end;"]
+    return "\n".join(lines) + "\n"
+
+
+def run_m9c_program(compiler, directory, name, text):
+    source = directory / f"{name}.sig"
+    source.write_text(text)
+    executable = directory / name
+    compiled = compile_case(compiler, source, executable)
+    if compiled.returncode != 0:
+        return None, f"{source}: compile failed: {compiled.stderr.strip()}"
+    lines, timed_out, returncode = read_trace([str(executable)], TICKS, directory / f"{name}.in")
+    return lines, None
+
+
+def check_m9c(compiler, seed):
+    rng = random.Random(seed)
+    directory = BUILD / "m9c" / str(seed)
+    directory.mkdir(parents=True, exist_ok=True)
+    report = []
+    period = rng.randrange(1, 5)
+    phase = rng.randrange(3 * period)
+    lines, failure = run_m9c_program(compiler, directory, "affine", affine_source(phase, period))
+    if failure:
+        report.append(failure)
+    else:
+        expected = [f"{tick} {tick if tick > phase and (tick - phase - 1) % period == 0 else '-'}" for tick in range(1, TICKS + 1)]
+        if lines != expected:
+            report.append(f"{directory}/affine.sig phase {phase} period {period}: trace {lines!r}, expected {expected!r}")
+    modulus = rng.randrange(2, 6)
+    residues = list(range(modulus))
+    rng.shuffle(residues)
+    covered = residues[:rng.randrange(1, modulus + 1)]
+    branches = []
+    while covered:
+        size = rng.randrange(1, len(covered) + 1)
+        branches.append((sorted(covered[:size]), rng.randrange(1, 100)))
+        covered = covered[size:]
+    otherwise = rng.randrange(0, 1000) if rng.randrange(2) else None
+    initial = rng.randrange(-50, 50) if rng.randrange(2) else None
+    lines, failure = run_m9c_program(compiler, directory, "partial", partial_source(modulus, branches, otherwise, initial))
+    if failure:
+        report.append(failure)
+    else:
+        expected = []
+        held = 0 if initial is None else initial
+        for tick in range(1, TICKS + 1):
+            picked = [factor for group, factor in branches if tick % modulus in group]
+            held = tick * picked[0] if picked else held if otherwise is None else otherwise
+            expected.append(f"{tick} {held}")
+        if lines != expected:
+            report.append(f"{directory}/partial.sig: trace {lines!r}, expected {expected!r}")
+    return report
+
+
+def m9c(compiler, count):
+    seeds = [random.SystemRandom().randrange(2**32) for _ in range(count)]
+    print(f"m9c seeds: {' '.join(map(str, seeds))}")
+    failures = 0
+    for seed in seeds:
+        report = check_m9c([str(compiler)], seed)
+        if report:
+            failures += 1
+            print(f"FAIL seed {seed}")
+            for line in report:
+                print(f"  {line}")
+    print(f"{count - failures} seeds passed, {failures} failed")
+    return 1 if failures else 0
+
+
 def check(compiler, seed):
     program = Program(seed)
     directory = BUILD / str(seed)
@@ -634,6 +724,8 @@ def main():
         return m9a(compiler, against)
     if arguments and arguments[0] == "m9b":
         return m9b(compiler, int(arguments[1]) if len(arguments) > 1 else FRESH_SEEDS)
+    if arguments and arguments[0] == "m9c":
+        return m9c(compiler, int(arguments[1]) if len(arguments) > 1 else FRESH_SEEDS)
     fresh_count = int(arguments[0]) if arguments else FRESH_SEEDS
     kept = [int(line) for line in SEEDS.read_text().split()] if SEEDS.exists() else []
     fresh = [random.SystemRandom().randrange(2**32) for _ in range(fresh_count)]
