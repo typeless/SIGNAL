@@ -101,6 +101,7 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
 
 - **M9a Canonical form:** clock formulas as reduced ordered binary decision diagrams inside the clock pass (S1 IV–1.3 encodes clocks as polynomials over Z/3Z; the diagram is the canonical form of the same algebra), replacing D8's syntactic equalities, the pairwise obligation walk and the LCA tables; the clock tree and the `clocks` dump are kept. Constants: a signal defined only by a constant has no clock and is rejected (S1 IV–2, VI–1.1).
   - Exit program: every m0–m8 case keeps its trace or message under an old-against-new differential run, `many_roots` moves to the rejected cases, and the self-compile reproduces stage 3.
+  - Done 2026-10-27: `python3 tests/differential.py --against build/m9/stage2_head m9a` printed `566 cases, 0 differ, 0 expected rejections missing`; `python3 tests/selfhost.py` printed `stage2 matches stage1`, `stage3 matches stage2`, `run.py: 566 passed, 0 failed` and `diff.py: 277 cases, 0 differ`; `python3 tests/differential.py 200` printed `200 seeds passed, 0 failed`. The `(x when b) default (y when not b)` rewrite, an opaque `not` and tree-ancestry aliasing are kept so every case keeps its trace and dump; M9b revisits them.
 - **M9b Using it:**
   - clock relations `^<`, `^>`, `^#` (VI–5.3) and `^0`;
   - `assert` (VII–8) as a care set;

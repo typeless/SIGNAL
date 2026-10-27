@@ -1,4 +1,5 @@
 import random
+import subprocess
 import sys
 from pathlib import Path
 
@@ -8,6 +9,17 @@ ROOT = Path(__file__).resolve().parent.parent
 SEEDS = ROOT / "tests" / "differential_seeds.txt"
 BUILD = ROOT / "build" / "differential"
 COMPILER = ROOT / "build" / "m4" / "stage2"
+CASES = ROOT / "tests" / "cases"
+SOURCE = ROOT / "compiler" / "sigc.sig"
+M9A_BUILD = ROOT / "build" / "m9"
+M9A_SUITES = ("m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9")
+M9A_REJECTED = {
+    "m9/many_roots.sig": "clock of S0 is undefined: its definition is a constant",
+    "m9/const_reader_default.sig": "clock of X is undefined: its definition is a constant",
+    "m9/const_reader_when.sig": "clock of X is undefined: its definition is a constant",
+}
+DUMP_PASS_LINE = "constant integer DUMP_PASS = 0;"
+CLOCKS_DUMP_PASS_LINE = "constant integer DUMP_PASS = 5;"
 FRESH_SEEDS = 200
 TICKS = 8
 TABLE_SIZE = 8
@@ -334,6 +346,89 @@ def check(compiler, seed):
     return report, True
 
 
+def clocks_dump_compiler(compiler, source, name):
+    executable = M9A_BUILD / name
+    newest_input = max(compiler.stat().st_mtime, source.stat().st_mtime)
+    if executable.exists() and executable.stat().st_mtime >= newest_input:
+        return executable
+    text = source.read_text()
+    if DUMP_PASS_LINE not in text:
+        sys.exit(f"{source} has no line {DUMP_PASS_LINE!r}")
+    patched = M9A_BUILD / f"{name}.sig"
+    patched.write_text(text.replace(DUMP_PASS_LINE, CLOCKS_DUMP_PASS_LINE, 1))
+    executable.unlink(missing_ok=True)
+    finished = subprocess.run([str(compiler), str(patched), "-o", str(executable)], env={"PATH": ""})
+    if finished.returncode != 0:
+        sys.exit(f"{compiler} exit {finished.returncode} on {patched}")
+    return executable
+
+
+def dump_columns(dump):
+    columns = {}
+    lines = dump.decode(errors="replace").split("\n")
+    position = 0
+    while position < len(lines) and lines[position]:
+        name, _, count = lines[position].rpartition(" ")
+        if not count.isdigit():
+            columns["?"] = lines[position:]
+            break
+        columns[name] = lines[position + 1:position + 1 + int(count)]
+        position += 1 + int(count)
+    return columns
+
+
+def m9a_outcome(compiler, dumper, source, directory):
+    executable = directory / "image"
+    executable.unlink(missing_ok=True)
+    compiled = compile_case([str(compiler)], source, executable)
+    dump = directory / "clocks"
+    dump.unlink(missing_ok=True)
+    compile_case([str(dumper)], source, dump)
+    return compiled.returncode, compiled.stdout, compiled.stderr, dump.read_bytes() if dump.exists() else None
+
+
+def m9a(compiler, against):
+    M9A_BUILD.mkdir(parents=True, exist_ok=True)
+    against_source = against.with_name(against.name + ".sig")
+    if not against_source.exists():
+        sys.exit(f"--against {against} needs its source at {against_source}")
+    old_dumper = clocks_dump_compiler(against, against_source, "against_clocks")
+    new_dumper = clocks_dump_compiler(compiler, SOURCE, "compiler_clocks")
+    sources = sorted(s for s in CASES.rglob("*.sig") if s.relative_to(CASES).parts[0] in M9A_SUITES)
+    differing = 0
+    missing = 0
+    for source in sources:
+        name = source.relative_to(CASES).as_posix()
+        sides = []
+        for side, side_compiler, dumper in (("old", against, old_dumper), ("new", compiler, new_dumper)):
+            directory = M9A_BUILD / "cases" / side
+            directory.mkdir(parents=True, exist_ok=True)
+            sides.append(m9a_outcome(side_compiler, dumper, source, directory))
+        (old_status, old_stdout, old_stderr, old_dump), (new_status, new_stdout, new_stderr, new_dump) = sides
+        if name in M9A_REJECTED:
+            if new_status == 0 or M9A_REJECTED[name] not in new_stderr:
+                missing += 1
+                print(f"EXPECTED {name}: rejection containing {M9A_REJECTED[name]!r}, got exit {new_status}: {new_stderr.strip()!r}")
+            continue
+        report = []
+        if old_status != new_status:
+            report.append(f"exit {old_status} vs {new_status}")
+        if old_stdout != new_stdout:
+            report.append("stdout differs")
+        if old_stderr != new_stderr:
+            report.append(f"stderr {old_stderr.strip()!r} vs {new_stderr.strip()!r}")
+        if old_dump != new_dump:
+            old_columns = dump_columns(old_dump or b"")
+            new_columns = dump_columns(new_dump or b"")
+            names = sorted(c for c in old_columns.keys() | new_columns.keys() if old_columns.get(c) != new_columns.get(c))
+            report.append(f"clocks dump differs in {', '.join(names) or 'layout'}")
+        if report:
+            differing += 1
+            print(f"DIFF {name}: {'; '.join(report)}")
+    print(f"{len(sources)} cases, {differing} differ, {missing} expected rejections missing")
+    return 1 if differing or missing else 0
+
+
 def main():
     arguments = sys.argv[1:]
     compiler = COMPILER
@@ -341,6 +436,13 @@ def main():
         position = arguments.index("--compiler")
         compiler = Path(arguments[position + 1]).resolve()
         del arguments[position:position + 2]
+    if "--against" in arguments:
+        position = arguments.index("--against")
+        against = Path(arguments[position + 1]).resolve()
+        del arguments[position:position + 2]
+        if arguments != ["m9a"]:
+            sys.exit("--against requires the method m9a")
+        return m9a(compiler, against)
     fresh_count = int(arguments[0]) if arguments else FRESH_SEEDS
     kept = [int(line) for line in SEEDS.read_text().split()] if SEEDS.exists() else []
     fresh = [random.SystemRandom().randrange(2**32) for _ in range(fresh_count)]

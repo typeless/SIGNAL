@@ -377,6 +377,7 @@ TEMPLATES = [
     ("GUARD_CYCLE", "the clocks of guards # depend on each other", ["CLOCK"]),
     ("NOT_INSIDE", "clock of # cannot be shown inside the clock #", ["CLOCK", "CLOCK"]),
     ("INPUT_ROOT", "input signal # must have a root of its own", ["FLAT"]),
+    ("CLOCK_UNDEFINED", "clock of # is undefined: its definition is a constant", ["CLOCK"]),
     ("SIGNAL_CYCLE", "causality cycle between signals #", ["CLOCK"]),
     ("EFFECT_CYCLE", "causality cycle between effects at #", ["CLOCK"]),
     ("CLOCK_CAUSALITY", "causality cycle between clocks", []),
@@ -418,7 +419,7 @@ CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
     "GUARDS", "LABELS", "LOOPS", "GROUPS", "DEPENDENCES", "STACK", "PATHS", "LOCALS", "PARSE", "FINISH", "ITEMS",
     "OUTPUT", "INSTANCES", "INSTANTIATE", "LOOKUPS", "ROWS", "ROW_DEPENDENCES", "SEGMENTS", "LOWER",
-    "CLOCKS", "DEFINITIONS", "OBLIGATIONS", "PAIRS", "CLOCK_NAMES", "CLOCK_TEXT", "CLOCK_SORT",
+    "CLOCKS", "DEFINITIONS", "OBLIGATIONS", "BDD", "CLOCK_NAMES", "CLOCK_TEXT", "CLOCK_SORT",
     "EDGES", "SCHEDULE_NODES", "EFFECTS", "EFFECT_ORDER", "UNITS", "MICRO_OPS", "CODE", "CODE_LABELS", "DATA", "CODE_TEXT",
 ]
 NAMED_FRAGMENTS = [
@@ -525,8 +526,10 @@ LOWER_STATES = [
 ]
 POST_STATES = ["DEPENDENCE", "ROWS", "PREFIX", "PLACE", "WALK", "LABELSUM", "SIZE", "DONE", "FAILED"]
 EXPAND_STATES = ["PLACE", "PAIRS", "PREV", "DONE", "FAILED"]
-CLOCK_STATES = ["ROWS", "SAMPLES", "GROUPS", "REWRITE", "TARGETS", "GUARDS", "SCAN", "DEFS", "WAIT", "DONE", "FAILED"]
-OBLIGATION_STATES = ["START", "WALK", "DONE", "FAILED"]
+CLOCK_STATES = [
+    "ROWS", "SAMPLES", "GROUPS", "REWRITE", "TARGETS", "GUARDS", "SCAN", "DEFS", "APPLY", "WAIT", "CHECKS", "DONE", "FAILED",
+]
+BDD_JOBS = ["AND", "OR", "WALK"]
 KEY_FAMILIES = ["SIGNAL", "LABEL", "CALL_LABEL", "VALUE", "PAIR", "ARRAY"]
 KEY_STRIDE = 8
 INSTANTIATE_PHASES = [
@@ -1842,7 +1845,7 @@ def build():
     for prefix, names in (("P", PARSE_STATES), ("X", OPERAND_CASES + OPERATOR_CASES), ("FRAME", FRAMES),
                           ("INIT", DELAY_INITS), ("PHASE", FINISH_PHASES), ("TS", TICK_STEPS),
                           ("IP", INSTANTIATE_PHASES), ("LS", LOWER_STATES), ("PS", POST_STATES),
-                          ("XS", EXPAND_STATES), ("KS", CLOCK_STATES), ("OS", OBLIGATION_STATES), ("CLK", CLOCK_KINDS)):
+                          ("XS", EXPAND_STATES), ("KS", CLOCK_STATES), ("JOB", BDD_JOBS), ("CLK", CLOCK_KINDS)):
         for index, name in enumerate(names):
             integer(f"{prefix}_{name}", index)
     integer("CONDITION_PRECEDENCE", CONDITION_PRECEDENCE)
