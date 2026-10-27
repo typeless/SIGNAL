@@ -585,6 +585,163 @@ def m9c(compiler, count):
     return 1 if failures else 0
 
 
+def typed_literal(name, value):
+    bits, signed = TYPES[name]
+    if not signed and value > LONG_MAX:
+        value -= 2**bits
+    if value < -LONG_MAX:
+        return f"({name}(-{LONG_MAX}) - {name}(1))"
+    return f"{name}({value})"
+
+
+def nested_list(values, dims):
+    if not dims:
+        return values[0]
+    stride = len(values) // dims[0]
+    return "[" + ", ".join(nested_list(values[i * stride:(i + 1) * stride], dims[1:]) for i in range(dims[0])) + "]"
+
+
+def spelling(dims, rng):
+    groups = []
+    rest = list(dims)
+    while rest:
+        size = rng.randrange(1, len(rest) + 1)
+        groups.append("[" + ", ".join(map(str, rest[:size])) + "]")
+        rest = rest[size:]
+    return " ".join(groups)
+
+
+class M10aProgram:
+    def __init__(self, seed):
+        rng = random.Random(seed)
+        self.rank = rng.randrange(1, 5)
+        limit = 4 if self.rank <= 2 else 3
+        self.dims = [rng.randrange(1, limit + 1) for _ in range(self.rank)]
+        self.element = rng.choice(list(TYPES))
+        bits, signed = TYPES[self.element]
+        low, high = (max(-(2 ** (bits - 1)), -LONG_MAX), 2 ** (bits - 1) - 1) if signed else (0, 2**bits - 1)
+        total = 1
+        for size in self.dims:
+            total *= size
+        self.values = [rng.choice([low, high, 0, 1, -1 if signed else 2, rng.randrange(low, high + 1)]) for _ in range(total)]
+        self.indices = [[self.index_value(rng, size) for _ in range(TICKS)] for size in self.dims]
+        self.axis = rng.randrange(1, self.rank + 1)
+        self.low, self.high = rng.randrange(-5, 11), rng.randrange(-5, 11)
+        self.spellings = [spelling(self.dims, rng), spelling(self.dims[1:], rng), spelling(self.dims[2:], rng)]
+
+    @staticmethod
+    def index_value(rng, size):
+        if rng.random() < 0.8:
+            return rng.randrange(size)
+        return rng.choice([-1, size, size + 1, 2147483647, -2147483647])
+
+    def element_at(self, point):
+        if any(not 0 <= index < size for index, size in zip(point, self.dims)):
+            return 0
+        flat = 0
+        for index, size in zip(point, self.dims):
+            flat = flat * size + index
+        return self.values[flat]
+
+    def expected(self):
+        lines = ["- - - - - -"]
+        block = len(self.values) // self.dims[0]
+        for tick in range(1, TICKS + 1):
+            point = [column[tick % TICKS] for column in self.indices]
+            value = self.element_at(point)
+            first = point[0]
+            bounded = self.low if first < self.low else self.high if first > self.high else first
+            if self.rank == 1:
+                whole = self.values
+            elif 0 <= first < self.dims[0]:
+                whole = self.values[first * block:(first + 1) * block]
+            else:
+                whole = [0] * block
+            lines.append(f"{value} {value} {value} {self.rank * 1000 + self.dims[self.axis - 1] * 10} {bounded} "
+                         + " ".join(map(str, whole)))
+        return lines
+
+    def source(self, machine):
+        names = [f"I{level}" for level in range(1, self.rank + 1)]
+        body = ["N := ZN + 1", "ZN := N $ init 0", "N ^= TICK"]
+        body += [f"{name} := P{level}[N modulo {TICKS}]" for level, name in enumerate(names, 1)]
+        body.append(f"A := M[{', '.join(names)}]")
+        declarations = [f"integer ZN, N, {', '.join(names)};"]
+        if self.rank >= 2:
+            body += ["R := M[I1]", f"B := R[{', '.join(names[1:])}]"]
+            declarations.append(f"{self.spellings[1]} {self.element} R;")
+        else:
+            body.append("B := M[I1]")
+        if self.rank >= 3:
+            body += ["S := M[I1, I2]", f"C := S[{', '.join(names[2:])}]"]
+            declarations.append(f"{self.spellings[2]} {self.element} S;")
+        else:
+            body.append(f"C := M[{', '.join(names)}]")
+        body.append(f"D := dim(M) * 1000 + size(M, {self.axis}) * 10 + I1 - I1")
+        body.append(f"E := bounds(I1, {self.low}, {self.high})")
+        body.append("F := M next I1 : A" if self.rank == 1 else "F := M[I1]")
+        literals = [typed_literal(self.element, value) for value in self.values]
+        declarations.append(f"constant {self.spellings[0]} {self.element} M = {nested_list(literals, self.dims)};")
+        for level, column in enumerate(self.indices, 1):
+            declarations.append(f"constant [{TICKS}] integer P{level} = [{', '.join(map(str, column))}];")
+        lines = ["process M10A =", "  ( ? event START, TICK;",
+                 f"    ! {self.element} A, B, C; integer D, E; {self.spellings[0 if self.rank == 1 else 1]} {self.element} F; )"]
+        if machine:
+            lines.append(MACHINE_PRAGMAS.rstrip("\n"))
+        lines.append("  (| " + "\n   | ".join(body))
+        if machine:
+            lines.append(SYSTICK_BODY.rstrip("\n"))
+        lines.append("   |)")
+        lines.append("  where")
+        lines += [f"    {declaration}" for declaration in declarations]
+        if machine:
+            lines.append(SYSTICK_DECLARATIONS.rstrip("\n"))
+        lines.append("  end;")
+        return "\n".join(lines) + "\n"
+
+
+def check_m10a(compiler, seed):
+    program = M10aProgram(seed)
+    directory = BUILD / "m10a" / str(seed)
+    directory.mkdir(parents=True, exist_ok=True)
+    expected = program.expected()
+    report = []
+    for variant, machine in (("macos", False), ("mps2", True)):
+        source = directory / f"{variant}.sig"
+        source.write_text(program.source(machine))
+        executable = directory / variant
+        compiled = compile_case(compiler, source, executable)
+        if compiled.returncode != 0:
+            report.append(f"{source}: compile failed (exit {compiled.returncode}): {compiled.stderr.strip()}")
+            continue
+        input_path = directory / f"{variant}.in"
+        if machine:
+            input_path.unlink(missing_ok=True)
+            command = [*QEMU_COMMANDS["mps2-an385"], str(executable)]
+        else:
+            input_path.write_text("10\n" + "01\n" * TICKS)
+            command = [str(executable)]
+        lines, timed_out, returncode = read_trace(command, TICKS + 1, input_path)
+        if lines != expected:
+            report.append(f"{source}: trace {lines!r}, expected {expected!r}")
+    return report
+
+
+def m10a(compiler, count):
+    seeds = [random.SystemRandom().randrange(2**32) for _ in range(count)]
+    print(f"m10a seeds: {' '.join(map(str, seeds))}")
+    failures = 0
+    for seed in seeds:
+        report = check_m10a([str(compiler)], seed)
+        if report:
+            failures += 1
+            print(f"FAIL seed {seed}")
+            for line in report:
+                print(f"  {line}")
+    print(f"{count - failures} seeds passed, {failures} failed")
+    return 1 if failures else 0
+
+
 def check(compiler, seed):
     program = Program(seed)
     directory = BUILD / str(seed)
@@ -726,6 +883,8 @@ def main():
         return m9b(compiler, int(arguments[1]) if len(arguments) > 1 else FRESH_SEEDS)
     if arguments and arguments[0] == "m9c":
         return m9c(compiler, int(arguments[1]) if len(arguments) > 1 else FRESH_SEEDS)
+    if arguments and arguments[0] == "m10a":
+        return m10a(compiler, int(arguments[1]) if len(arguments) > 1 else FRESH_SEEDS)
     fresh_count = int(arguments[0]) if arguments else FRESH_SEEDS
     kept = [int(line) for line in SEEDS.read_text().split()] if SEEDS.exists() else []
     fresh = [random.SystemRandom().randrange(2**32) for _ in range(fresh_count)]

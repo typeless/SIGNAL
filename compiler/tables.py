@@ -20,6 +20,7 @@ SEED_WORDS = [
     "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe", "defaultvalue", "shared", "statevar", "assert", "min_clock", "spec",
     "affine_sample", "affine_clock_relation", "affine_unsample",
     "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "tick'", "v'", "zv'", "vb'", "zvb'", "clk_x'", "clk_y'", "clk_i'", "rep'",
+    "dim", "size", "bounds",
 ]
 FRESH_FIRST = "cell'"
 FRESH_LAST = "rep'"
@@ -40,6 +41,7 @@ NAME_CONSTANTS = {
     "on'": "N_ON_MARK", "indices": "N_INDICES", "pragmas": "N_PRAGMAS", "Interrupt": "N_INTERRUPT", "Boot": "N_BOOT",
     "Machine": "N_MACHINE", "assert": "N_ASSERT", "min_clock": "N_MIN_CLOCK", "spec": "N_SPEC", "affine_sample": "N_AFFINE_SAMPLE", "affine_clock_relation": "N_AFFINE_RELATION",
     "affine_unsample": "N_AFFINE_UNSAMPLE", "clk_i'": "N_AFFINE_CLOCK", "rep'": "N_REPEAT_MARK", "tick'": "N_TICK_MARK",
+    "dim": "N_DIM", "size": "N_SIZE", "bounds": "N_BOUNDS",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -66,11 +68,12 @@ OPS = [
     "CLOCK_PLUS", "CLOCK_TIMES", "OPEN_COLON", "OPEN_SLASH_COLON", "LEFT_TT", "CLOCK_MINUS", "ABS", "OPERAND", "ZERO",
     "RECOVER", "RECOVER_SQUARE", "INDEX_OPERAND", "SIZE", "SIZE_LESS", "CELL", "VAR", "AFTER", "FROM", "COUNT",
     "REPEAT", "ONE", "RIGHT_OPERAND", "TARGET_SIGNAL", "INDEX_SIGNAL", "REPEAT_RANGE", "ARRAY_RANGE", "REPEAT_BODY",
-    "SLOT", "POW", "AFFINE_SAMPLE", "AFFINE_RELATION", "AFFINE_UNSAMPLE", "STATE",
+    "SLOT", "POW", "AFFINE_SAMPLE", "AFFINE_RELATION", "AFFINE_UNSAMPLE", "STATE", "FLAT", "SQUARE_FLAT", "SLICE",
+    "DIM_CALL", "SIZE_CALL", "SIZE_ONE_CALL", "BOUNDS_CALL", "DIM", "DIM_SIZE", "BOUNDS", "BOUNDS_PAIR",
 ]
 MONOCHRONOUS = {
     "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR",
-    "CONVERT", "ELEMENT", "GATHER", "PAIR", "NEXT", "PREV", "ITER", "IF", "BRANCH", "ARG", "RANGE",
+    "CONVERT", "ELEMENT", "GATHER", "PAIR", "NEXT", "PREV", "ITER", "IF", "BRANCH", "ARG", "RANGE", "FLAT", "SLICE", "BOUNDS", "BOUNDS_PAIR", "DIM", "DIM_SIZE",
 }
 OPENERS = {"CALL", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK", "OPEN_COLON", "OPEN_SLASH_COLON"}
 BRACKETED = {"OPEN_SQUARE", "OPEN_COLON", "OPEN_SLASH_COLON"}
@@ -82,6 +85,11 @@ COMPOSITES = {
     "POW": ([], ["OPERAND", "MUL"]),
     "RECOVER": (["INDEX_OPERAND", "ZERO", "GE", "INDEX_OPERAND", "SIZE_LESS", "LE", "AND", "WHEN"], ["RIGHT_OPERAND", "EQ", "INDEX_OPERAND", "ZERO", "GE", "AND", "RIGHT_OPERAND", "RIGHT_OPERAND", "BRANCH", "IF", "DEFAULT"]),
     "RECOVER_SQUARE": ([], ["SIZE", "MOD", "SIZE", "ADD", "SIZE", "MOD", "INDEX"]),
+    "SQUARE_FLAT": ([], ["FLAT", "INDEX"]),
+    "DIM_CALL": ([], ["DIM"]),
+    "SIZE_CALL": ([], ["DIM_SIZE"]),
+    "SIZE_ONE_CALL": ([], ["ONE", "DIM_SIZE"]),
+    "BOUNDS_CALL": ([], ["BOUNDS_PAIR", "BOUNDS"]),
     "REPEAT_RANGE": ([], ["ZERO", "RIGHT_OPERAND", "ONE", "SUB", "RANGE"]),
     "ARRAY_RANGE": ([], ["ZERO", "RIGHT_OPERAND", "RANGE"]),
     "REPEAT_BODY": ([], ["TARGET_SIGNAL", "PREV", "INDEX_SIGNAL", "OPERAND", "PAIR", "NEXT"]),
@@ -200,7 +208,7 @@ TEMPLATE_PROGRAMS = {
         template_emit("SIGNAL", "TARGET"), template_emit("SIGNAL", "h1'"), GROUP_ROW, END_ROW,
     ]),
 }
-UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV", "VAR", "STATE"}
+UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV", "VAR", "STATE", "DIM"}
 BINARY = [
     ("default", "DEFAULT", 3), ("when", "WHEN", 4), ("xor", "XOR", 11), ("or", "OR", 12), ("and", "AND", 13),
     ("=", "EQ", 16), ("/=", "NE", 16), ("<", "LT", 16), ("<=", "LE", 16), (">", "GT", 16), (">=", "GE", 16),
@@ -494,6 +502,18 @@ TEMPLATES = [
     ("STATEVAR_DEFAULT", "state variable # has no defaultvalue", ["FLAT"]),
     ("PARTIAL_OUTPUT", "output # cannot have partial definitions", ["FLAT"]),
     ("PARTIAL_INSIDE", "partial definition # cannot be shown inside the clock of #", ["CLOCK", "CLOCK"]),
+    ("RANK", "an array type has more than 4 dimensions", []),
+    ("RECOVERY_INDICES", "the recovery operator needs an access with one index", []),
+    ("INDEX_COUNT", "the access has more indices than the array has dimensions", []),
+    ("SUBARRAY_TARGET", "a sub-array cannot be defined; define its elements", []),
+    ("EXTRACT_SUBARRAY", "an extraction with fewer index arrays than the array has dimensions is not supported", []),
+    ("ARRAY_TOTAL", "an array type has 2^31 or more elements", []),
+    ("CONSTANT_SHAPE", "the definition of constant # is not nested as its type", ["NAME"]),
+    ("SIZE_AXIS", "the dimension of size must be a constant between 1 and the number of dimensions", []),
+    ("BOUNDS_TYPES", "the operands of bounds have no common scalar type", []),
+    ("ELEMENT_ENDPOINT", "signal # is not an array and has no elements", ["FLAT"]),
+    ("ELEMENT_LABEL", "label # has no elements", ["FLAT"]),
+    ("ELEMENT_RANGE", "a dependence endpoint cannot be a range of elements", []),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
@@ -897,7 +917,7 @@ EMIT_SOURCES = [
     "loop_start", "loop_end", "local0", "local1", "local2", "local3", "local4", "put_output", "root_irq",
     "binary_lo", "binary_hi", "pair_form_thumb", "signed_condition_thumb", "unsigned_condition_thumb", "element_row",
     "index_element",
-] + GLOBAL_LABELS + ["copy_next", "copy_end"]
+] + GLOBAL_LABELS + ["copy_next", "copy_end", "key_row"]
 EMIT_PREDICATES = [
     "always", "flag", "has_arg1", "has_arg2", "has_arg3", "has_arg4", "has_arg5", "has_arg6", "right_loads",
     "counted", "uncounted", "bounded", "keys_differ", "mul", "not_mul", "compare_equal", "compare_direct", "compare_swapped",
@@ -1157,6 +1177,15 @@ EMIT_TEMPLATES = [
         ld(9, ("CLK", "clock_row"), UINTEGER_TYPE), emit("CBZ_W", 9, to=label("local0")), ld(0, ("SIG", "row"), "type_row"),
         emit("BL", to=label("put_output")), emit("B", to=label("local1")), place("local0"), emit("MOVZ_W", 10, 0, 45),
         emit("STRB_W_POST", 10, 20, 1), place("local1"),
+    ]),
+    ("OUTPUT_ARRAY", [
+        emit("MOVZ_W", 10, 0, 32, when="flag"), emit("STRB_W_POST", 10, 20, 1, when="flag"),
+        ld(9, ("CLK", "clock_row"), UINTEGER_TYPE), emit("CBZ_W", 9, to=label("local0")), address(27, "key_row"),
+        emit("MOVZ_X", 23), place("local2"), emit("CBZ_X", 23, to=label("local3")), emit("MOVZ_W", 10, 0, 32),
+        emit("STRB_W_POST", 10, 20, 1), place("local3"), emit("load_indexed_element", 0, 27, 23),
+        emit("BL", to=label("put_output")), emit("ADD_X_IMM", 23, 23, 1), li(11, "size_row"), emit("SUBS_X", XZR, 23, 11),
+        emit("B_COND", a3=CC["LO"], to=label("local2")), emit("B", to=label("local1")), place("local0"),
+        emit("MOVZ_W", 10, 0, 45), emit("STRB_W_POST", 10, 20, 1), place("local1"),
     ]),
     ("OUTPUT_TAIL", [
         emit("MOVZ_W", 10, 0, 10), emit("STRB_W_POST", 10, 20, 1), emit("ADRP", 1, to=("OUT", 0)),
@@ -1515,6 +1544,15 @@ EMIT_TEMPLATES += [
         compare(0, 0), *branch_if("EQ", "local0"), ld2(0, ("SIG", "row"), "type_row"), emit("BL_T", to=label("put_output")),
         branch("local1"), place("local0"), movw(2, 45), put_byte(2), place("local1"),
     ]),
+    ("OUTPUT_ARRAY_THUMB", [
+        movw(2, 32, "flag"), emit("STRB_POST_T", 2, 10, 1, when="flag"), ld1(0, ("CLK", "clock_row"), UINTEGER_TYPE),
+        compare(0, 0), *branch_if("EQ", "local0"), movw(2, 0), emit("STR_PRE_DEC_T", 2, SP_T, 8), place("local2"),
+        emit("LDR_T", 9, SP_T, 0), compare(9, 0), *branch_if("EQ", "local3"), movw(2, 32), put_byte(2), place("local3"),
+        address(6, "key_row"), load_at(0, "element_row", 6, 9), emit("BL_T", to=label("put_output")),
+        emit("LDR_T", 9, SP_T, 0), emit("ADDW_T", 9, 9, 1), emit("STR_T", 9, SP_T, 0), li1(LR, "size_row"),
+        compare_registers(9, LR), *branch_if("LO", "local2"), emit("ADDW_T", SP_T, SP_T, 8), branch("local1"),
+        place("local0"), movw(2, 45), put_byte(2), place("local1"),
+    ]),
     ("OUTPUT_TAIL_THUMB", [
         movw(2, 10), put_byte(2), *absolute(6, ("OUT", 0)), *literal(7, UART0), place("local0"), emit("LDRB_POST_T", 2, 6, 1),
         emit("STR_T", 2, 7, 0), compare_registers(6, 10), *branch_if("NE", "local0"),
@@ -1528,6 +1566,57 @@ EMIT_TEMPLATES += [
     ("CYCLE_JUMP_FALSE_THUMB", [compare(0, 0), *branch_if("NE", "copy_next")]),
     ("CYCLE_CLOSE_THUMB", [branch("copy_end"), place("copy_next")]),
     ("CYCLE_DONE_THUMB", [place("copy_end")]),
+]
+EMIT_TEMPLATES += [
+    ("ROW_FLAT", gated([
+        operand(9, "left"), operand(10, "right"), li(11, "value_row"), emit("MOVZ_X", 12, 0, 0x8000, 1),
+        emit("SUBS_X", XZR, 9, 12), emit("B_COND", a3=CC["HS"], to=label("local1")), emit("SUBS_X", XZR, 10, 11),
+        emit("B_COND", a3=CC["HS"], to=label("local1")), emit("MUL_X", 9, 9, 11), emit("ADD_X", 9, 9, 10),
+        emit("B", to=label("local2")), place("local1"), emit("ORN_X", 9, XZR, XZR), place("local2"),
+    ])),
+    ("ROW_FLAT_THUMB", gated_thumb([
+        operand2(0, "left"), operand2(2, "right"), li2(4, "value_row"), compare(1, 0), *branch_if("NE", "local1"),
+        compare(0, 0), *branch_if("LT", "local1"), *compare_pairs(2, 4), *branch_if("HS", "local1"),
+        emit("UMULL_T", 6, 0, 4, 7), emit("ADDS_T", 0, 6, 2), emit("ADC_T", 1, 7, 3), branch("local2"),
+        place("local1"), movw(0, 0), emit("MVN_T", 0, 0), mov(1, 0), place("local2"),
+    ])),
+    ("ROW_FOLD", gated([li(9, "value_row")])),
+    ("ROW_FOLD_THUMB", gated_thumb([li2(0, "value_row")])),
+    ("ROW_BOUNDS", gated([
+        operand(9, "left"), operand(10, "right_left"), operand(11, "right_right"), emit("SUBS_X", XZR, 9, 10),
+        emit("CSEL_X", 9, 10, 9, CC["LO"]), emit("B_COND", a3=CC["LO"], to=label("local1")), emit("SUBS_X", XZR, 9, 11),
+        emit("CSEL_X", 9, 11, 9, CC["HI"]), place("local1"),
+    ])),
+    ("ROW_BOUNDS_SIGNED", gated([
+        operand(9, "left"), operand(10, "right_left"), operand(11, "right_right"), emit("SUBS_X", XZR, 9, 10),
+        emit("CSEL_X", 9, 10, 9, CC["LT"]), emit("B_COND", a3=CC["LT"], to=label("local1")), emit("SUBS_X", XZR, 9, 11),
+        emit("CSEL_X", 9, 11, 9, CC["GT"]), place("local1"),
+    ])),
+    ("ROW_BOUNDS_THUMB", gated_thumb([
+        operand2(0, "left"), operand2(2, "right_left"), operand2(4, "right_right"), *compare_pairs(0, 2),
+        *branch_if("LO", "local1"), *compare_pairs(4, 0), *branch_if("LO", "local2"), branch("local3"),
+        place("local1"), mov(0, 2), mov(1, 3), branch("local3"), place("local2"), mov(0, 4), mov(1, 5), place("local3"),
+    ])),
+    ("ROW_BOUNDS_SIGNED_THUMB", gated_thumb([
+        operand2(0, "left"), operand2(2, "right_left"), operand2(4, "right_right"), *compare_pairs(0, 2),
+        *branch_if("LT", "local1"), *compare_pairs(4, 0), *branch_if("LT", "local2"), branch("local3"),
+        place("local1"), mov(0, 2), mov(1, 3), branch("local3"), place("local2"), mov(0, 4), mov(1, 5), place("local3"),
+    ])),
+    ("ROW_SLICE", gated([
+        address(12, "key_left"), address(14, "key_owner"), operand(10, "right"), li(11, "value_row"),
+        emit("SUBS_X", XZR, 10, 11), emit("CSEL_X", 10, 10, 11, CC["LO"]), li(17, "size_row"), emit("MUL_X", 10, 10, 17),
+        li(13, "size_left"), emit("MOVZ_X", 15), place("local1"), emit("ADD_X", 16, 10, 15), emit("MOVZ_X", 9),
+        emit("SUBS_X", XZR, 16, 13), emit("B_COND", a3=CC["HS"], to=label("local2")), emit("load_indexed_element", 9, 12, 16),
+        place("local2"), emit("store_indexed_element", 9, 14, 15), emit("ADD_X_IMM", 15, 15, 1), emit("SUBS_X", XZR, 15, 17),
+        emit("B_COND", a3=CC["LO"], to=label("local1")),
+    ], False)),
+    ("ROW_SLICE_THUMB", gated_thumb([
+        address(6, "key_left"), address(8, "key_owner"), operand2(2, "right"), li2(4, "value_row"), *compare_pairs(2, 4),
+        only_if("HS"), mov(2, 4), li1(7, "size_row"), emit("UMULL_T", 4, 2, 7, 1), li1(5, "size_left"), movw(9, 0),
+        place("local1"), emit("ADDS_T", 3, 4, 9), movw(0, 0), movw(1, 0), compare_registers(3, 5), *branch_if("HS", "local2"),
+        load_at(0, "element_row", 6, 3), place("local2"), store_at(0, "element_row", 8, 9), emit("ADDW_T", 9, 9, 1),
+        compare_registers(9, 7), *branch_if("LO", "local1"),
+    ], False)),
 ]
 
 

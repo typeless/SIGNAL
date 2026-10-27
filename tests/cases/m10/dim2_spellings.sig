@@ -1,0 +1,11 @@
+process DIM2SPELLINGS =
+  ( ? integer I, J;
+    ! integer A, B; )
+  (| I ^= J
+   | A := M[I, J]
+   | B := N[I, J]
+   |)
+  where
+    constant [2, 3] integer M = [[1, 2, 3], [4, 5, 6]];
+    constant [2] [3] integer N = [[1, 2, 3], [4, 5, 6]];
+  end;

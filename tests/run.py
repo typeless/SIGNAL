@@ -16,7 +16,7 @@ QEMU_COMMANDS = {
     "virt": ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-no-reboot", "-kernel"],
     "mps2-an385": ["qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic", "-no-reboot", "-kernel"],
 }
-STAGE2_ONLY = {"m5", "m6", "m7", "m8", "m9"}
+STAGE2_ONLY = {"m5", "m6", "m7", "m8", "m9", "m10"}
 
 
 def target_command(source):
