@@ -1,0 +1,1 @@
+signal B has type boolean but its definition has type integer

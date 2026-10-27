@@ -112,6 +112,7 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
   - `min_clock` (XIII–1);
   - the tick-equality check in guarded processes (VII–5, VII–6).
   - Exit program: a program using each relation prints its expected trace; `exclusive_cycle` moves to the accepted cases.
+  - Done 2026-10-27: `python3 tests/selfhost.py` printed `stage3 matches stage2`, `run.py: 623 passed, 0 failed` and `diff.py: 275 cases, 0 differ`; `python3 tests/differential.py --against build/m9/stage2_head m9a` printed `566 cases, 11 differ, 0 expected rejections missing`, the 11 differing only by one added tick obligation row each, with `exclusive_cycle` and `clocks_not_inside_pairs` moved to accepted; `python3 tests/differential.py m9b 200` printed `200 seeds passed (36 accepted, 17 with an exclusive cycle), 0 failed`; `python3 tests/differential.py 200` printed `200 seeds passed, 0 failed`. The narrowings are listed in D19.
 - **M9c Intrinsics, shared and state variables:**
   - the affine intrinsics (XIII–2), using M8's static parameters;
   - partial definitions `::=` and `shared` with the agreement check (V–10, VI–1.1 1-c, 1-d);

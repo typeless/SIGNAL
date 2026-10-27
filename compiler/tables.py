@@ -17,7 +17,7 @@ SEED_WORDS = [
     "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with", "if", "then", "else", "procedure",
     "node", "function", "automaton", "label", "on", "external", "indices", "pragmas", "Interrupt", "Boot", "Machine",
     "cell", "var", "after", "from", "count", "case", "in", "array", "to",
-    "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe",
+    "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe", "assert", "min_clock", "spec",
     "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "tick'", "rep'",
 ]
 FRESH_FIRST = "cell'"
@@ -37,7 +37,7 @@ NAME_CONSTANTS = {
     "Automaton_SetCurrentStateId": "N_SET_CURRENT_STATE_ID",
     "Automaton_IsIn": "N_ISIN", "clock'": "N_CLOCK_MARK", "state'": "N_STATE_MARK", "cur'": "N_CURRENT_MARK",
     "on'": "N_ON_MARK", "indices": "N_INDICES", "pragmas": "N_PRAGMAS", "Interrupt": "N_INTERRUPT", "Boot": "N_BOOT",
-    "Machine": "N_MACHINE", "rep'": "N_REPEAT_MARK", "tick'": "N_TICK_MARK",
+    "Machine": "N_MACHINE", "assert": "N_ASSERT", "min_clock": "N_MIN_CLOCK", "spec": "N_SPEC", "rep'": "N_REPEAT_MARK", "tick'": "N_TICK_MARK",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -48,11 +48,12 @@ SYMBOLS = [
     (":", "COLON"), ("{", "OPEN_BRACE"), ("}", "CLOSE_BRACE"),
     ("^+", "CLOCK_PLUS"), ("^*", "CLOCK_TIMES"), ("^-", "CLOCK_MINUS"), ("==", "EQUAL_EQUAL"),
     ("<<=", "LESS_LESS_EQUAL"), ("[:", "OPEN_COLON"), ("[/:", "OPEN_SLASH_COLON"), ("\\\\", "BACKSLASHES"),
-    ("|*", "BAR_STAR"), ("**", "STAR_STAR"),
+    ("|*", "BAR_STAR"), ("**", "STAR_STAR"), ("^<", "CLOCK_LT"), ("^>", "CLOCK_GT"), ("^#", "CLOCK_SHARP"),
+    (":=:", "IDENTITY"),
 ]
 SYMBOL_BASE = 84
-OTHER_CODES = [("EOF", 0), ("NAME", 128), ("NUMBER", 129), ("STRING", 130)]
-CODE_LIMIT = 132
+OTHER_CODES = [("EOF", 0), ("NAME", 130), ("NUMBER", 131), ("STRING", 132)]
+CODE_LIMIT = 134
 ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34, "'": 39, "?": 63, "%": 37}
 
 OPS = [
@@ -212,11 +213,16 @@ DUMP_ORDERS = [
     ("PROGRAM", COLUMNS), ("ROWS", ROW_COLUMNS + TYPE_COLUMNS + ["table_types", "table_values"]), ("CLOCKS", CLOCK_COLUMNS),
     ("SCHEDULE", SCHEDULE_COLUMNS),
 ]
-CLOCK_KINDS = ["NONE", "ROOT", "SAMPLE", "PRODUCT", "SUM"]
+CLOCK_KINDS = ["NONE", "ROOT", "SAMPLE", "PRODUCT", "SUM", "NULL"]
 
 ARGUMENT_KINDS = [
     "NONE", "TOKEN", "LITERAL", "NAME", "TYPE", "NUMBER", "CODE", "FRAGMENT", "CHARACTER", "FLAT", "TEXT", "LONG", "CLOCK", "MODEL",
 ]
+SPLIT_CAP = 4
+CORE_CAP = 256
+CORE_EDGE_CAP = 1024
+SAT_CAP = 256
+WALK_CAP = 64
 TEMPLATES = [
     ("UNEXPECTED_CHARACTER", "unexpected character '#'", ["CHARACTER"]),
     ("CAPACITY", "program exceeds compiler capacity: #", ["FRAGMENT"]),
@@ -377,6 +383,17 @@ TEMPLATES = [
     ("GUARD_CYCLE", "the clocks of guards # depend on each other", ["CLOCK"]),
     ("NOT_INSIDE", "clock of # cannot be shown inside the clock #", ["CLOCK", "CLOCK"]),
     ("INPUT_ROOT", "input signal # must have a root of its own", ["FLAT"]),
+    ("RELATION_LT", "clock relation # ^< # cannot be shown", ["CLOCK", "CLOCK"]),
+    ("RELATION_GT", "clock relation # ^> # cannot be shown", ["CLOCK", "CLOCK"]),
+    ("RELATION_SHARP", "clock relation # ^# # cannot be shown", ["CLOCK", "CLOCK"]),
+    ("ASSERT_TYPE", "assertion on # is not boolean", ["CLOCK"]),
+    ("MIN_CLOCK_EMPTY", "min_clock finds no instant for #", ["CLOCK"]),
+    ("MIN_CLOCK_NAME", "min_clock expects a signal name", []),
+    ("IDENTITY_CLOCKS", ":=: joins signals whose clocks cannot be shown equal", []),
+    ("CONDITION_TYPE", "dependence condition is not boolean", []),
+    ("SPEC_BODY", "spec must be followed by the model's body", []),
+    ("GUARD_TICK", "members of guard # do not tick at every #", ["CLOCK", "CLOCK"]),
+    ("ASSERT_MEMBER", "assert accepts only clock relations and :=:", []),
     ("CLOCK_UNDEFINED", "clock of # is undefined: its definition is a constant", ["CLOCK"]),
     ("SIGNAL_CYCLE", "causality cycle between signals #", ["CLOCK"]),
     ("EFFECT_CYCLE", "causality cycle between effects at #", ["CLOCK"]),
@@ -414,13 +431,17 @@ TEMPLATES = [
     ("CONSTANT_EXPRESSION", "the definition of constant # is not a constant expression", ["NAME"]),
     ("INIT_EXPRESSION", "the initial value of a delay is not a constant expression", []),
     ("CONSTANT_DIVIDE", "a constant expression divides by zero", []),
+    ("CYCLE_SPLIT", f"causality cycle between signals # needs more than {SPLIT_CAP} splits", ["CLOCK"]),
+    ("CYCLE_INSIDE", "causality cycle between signals # cannot be split by a signal it defines", ["CLOCK"]),
+    ("MIN_CLOCK_TWO", "min_clock of # has more than one clock relation", ["CLOCK"]),
+    ("CONDITION_LIST", "{ } when takes one signal on each side of -->", []),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
     "GUARDS", "LABELS", "LOOPS", "GROUPS", "DEPENDENCES", "STACK", "PATHS", "LOCALS", "PARSE", "FINISH", "ITEMS",
     "OUTPUT", "INSTANCES", "INSTANTIATE", "LOOKUPS", "ROWS", "ROW_DEPENDENCES", "SEGMENTS", "LOWER",
     "CLOCKS", "DEFINITIONS", "OBLIGATIONS", "BDD", "CLOCK_NAMES", "CLOCK_TEXT", "CLOCK_SORT",
-    "EDGES", "SCHEDULE_NODES", "EFFECTS", "EFFECT_ORDER", "UNITS", "MICRO_OPS", "CODE", "CODE_LABELS", "DATA", "CODE_TEXT",
+    "EDGES", "SCHEDULE_NODES", "EFFECTS", "EFFECT_ORDER", "SPLIT", "UNITS", "MICRO_OPS", "CODE", "CODE_LABELS", "DATA", "CODE_TEXT",
 ]
 NAMED_FRAGMENTS = [
     ("COLON", ":"), ("ERROR_SEPARATOR", ": error: "), ("ERROR_WORD", "error "), ("SPACE", " "),
@@ -517,7 +538,7 @@ DELAY_INITS = ["NONE", "CONST", "ENUMCONST", "NAME", "SIZE"]
 FINISH_PHASES = [
     "START", "LABEL", "USE", "SIGNAL", "HIDE", "INITS", "STATEMENT", "REWRITE_EQ", "REWRITE_MEMBER", "REWRITE_GUARD",
     "REWRITE_TRIGGER", "CLOCK", "STATE", "PICK", "CUR", "CUR_TAIL", "GROUP", "TICK", "GUARD_START", "DEFINE_PARSE", "DEFINE_FINISH",
-    "READ_PARSE", "READ_FINISH", "READ_MEMBERS", "READ_DEPS", "ON", "FILTER", "DONE", "FAILED",
+    "READ_PARSE", "READ_FINISH", "READ_MEMBERS", "READ_DEPS", "ON", "FILTER", "DONE", "FAILED", "DEFINE_GROUP",
 ]
 TICK_STEPS = ["LABEL", "USE", "EQUATION", "SCAN", "PART", "COPY", "CLOCK", "DEFAULT", "END"]
 LOWER_STATES = [
@@ -529,7 +550,9 @@ EXPAND_STATES = ["PLACE", "PAIRS", "PREV", "DONE", "FAILED"]
 CLOCK_STATES = [
     "ROWS", "SAMPLES", "GROUPS", "REWRITE", "TARGETS", "GUARDS", "SCAN", "DEFS", "APPLY", "WAIT", "CHECKS", "DONE", "FAILED",
 ]
-BDD_JOBS = ["AND", "OR", "WALK"]
+BDD_JOBS = ["AND", "OR", "WALK", "ANDNOT", "XOR"]
+SPLIT_PHASES = ["START", "LIVE", "BLOCK", "PLACE", "PICK", "RECORD", "UNWIND", "DONE"]
+OBLIGATION_KINDS = ["INSIDE", "LT", "GT", "SHARP", "EQUAL", "BOOLEAN", "TICK", "IDENTITY"]
 KEY_FAMILIES = ["SIGNAL", "LABEL", "CALL_LABEL", "VALUE", "PAIR", "ARRAY"]
 KEY_STRIDE = 8
 INSTANTIATE_PHASES = [
@@ -815,7 +838,7 @@ EMIT_SOURCES = [
     "loop_start", "loop_end", "local0", "local1", "local2", "local3", "local4", "put_output", "root_irq",
     "binary_lo", "binary_hi", "pair_form_thumb", "signed_condition_thumb", "unsigned_condition_thumb", "element_row",
     "index_element",
-] + GLOBAL_LABELS
+] + GLOBAL_LABELS + ["copy_next", "copy_end"]
 EMIT_PREDICATES = [
     "always", "flag", "has_arg1", "has_arg2", "has_arg3", "has_arg4", "has_arg5", "has_arg6", "right_loads",
     "counted", "uncounted", "bounded", "keys_differ", "mul", "not_mul", "compare_equal", "compare_direct", "compare_swapped",
@@ -1086,6 +1109,11 @@ EMIT_TEMPLATES = [
         emit("MOVK_W", 9, 0, 0x736C, 1), emit("STR_W_POST", 9, 20, 4), emit("MOVZ_W", 9, 0, 101),
         emit("STRB_W_POST", 9, 20, 1), emit("RET"),
     ]),
+    ("CYCLE_VALUE", [ld(9, ("CLK", "clock_row"), UINTEGER_TYPE), operand(10, "row"), emit("AND_W", 9, 9, 10)]),
+    ("CYCLE_JUMP_TRUE", [emit("CBZ_W", 9, to=label("copy_next"))]),
+    ("CYCLE_JUMP_FALSE", [emit("CBNZ_X", 9, to=label("copy_next"))]),
+    ("CYCLE_CLOSE", [emit("B", to=label("copy_end")), place("copy_next")]),
+    ("CYCLE_DONE", [place("copy_end")]),
 ]
 
 
@@ -1434,6 +1462,11 @@ EMIT_TEMPLATES += [
         branch("complete"), *PUT_NUMBER_THUMB, place("put_bool"), compare(0, 0), *branch_if("EQ", "local2"),
         *put_bytes_thumb("true"), emit("BX_LR_T"), place("local2"), *put_bytes_thumb("false"), emit("BX_LR_T"), *DIVIDE_THUMB,
     ]),
+    ("CYCLE_VALUE_THUMB", [ld1(0, ("CLK", "clock_row"), UINTEGER_TYPE), operand1(2, "row"), emit("AND_T", 0, 0, 2)]),
+    ("CYCLE_JUMP_TRUE_THUMB", [compare(0, 0), *branch_if("EQ", "copy_next")]),
+    ("CYCLE_JUMP_FALSE_THUMB", [compare(0, 0), *branch_if("NE", "copy_next")]),
+    ("CYCLE_CLOSE_THUMB", [branch("copy_end"), place("copy_next")]),
+    ("CYCLE_DONE_THUMB", [place("copy_end")]),
 ]
 
 
@@ -1482,7 +1515,7 @@ class Fragments:
 
 
 def template_pieces(text):
-    pieces = text.split("#")
+    pieces = re.split(r"(?<!\^)#", text)
     return pieces + [""] * (4 - len(pieces))
 
 
@@ -1615,6 +1648,9 @@ def build():
     for name, value in OTHER_CODES:
         integer(f"C_{name}", value)
     integer("C_SYMBOL_BASE", SYMBOL_BASE)
+    integer("RELATION_ASSERT", CODE_LIMIT)
+    integer("RELATION_MIN", CODE_LIMIT + 1)
+    integer("RELATION_CONDITION", CODE_LIMIT + 2)
 
     name_char = [0] * 256
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'"
@@ -1845,9 +1881,19 @@ def build():
     for prefix, names in (("P", PARSE_STATES), ("X", OPERAND_CASES + OPERATOR_CASES), ("FRAME", FRAMES),
                           ("INIT", DELAY_INITS), ("PHASE", FINISH_PHASES), ("TS", TICK_STEPS),
                           ("IP", INSTANTIATE_PHASES), ("LS", LOWER_STATES), ("PS", POST_STATES),
-                          ("XS", EXPAND_STATES), ("KS", CLOCK_STATES), ("JOB", BDD_JOBS), ("CLK", CLOCK_KINDS)):
+                          ("XS", EXPAND_STATES), ("KS", CLOCK_STATES), ("JOB", BDD_JOBS), ("SPH", SPLIT_PHASES), ("CLK", CLOCK_KINDS),
+                          ("OB", OBLIGATION_KINDS)):
         for index, name in enumerate(names):
             integer(f"{prefix}_{name}", index)
+    integer("SPLIT_CAP", SPLIT_CAP)
+    integer("COPY_CAP", 1 << SPLIT_CAP)
+    integer("SPLIT_FRAMES", 2 << SPLIT_CAP)
+    integer("CORE_CAP", CORE_CAP)
+    integer("CORE_EDGE_CAP", CORE_EDGE_CAP)
+    integer("SAT_CAP", SAT_CAP)
+    integer("WALK_CAP", WALK_CAP)
+    integer("COPY_NODE_CAP", (1 << SPLIT_CAP) * CORE_CAP)
+    integer("COPY_LITERAL_CAP", (1 << SPLIT_CAP) * SPLIT_CAP)
     integer("CONDITION_PRECEDENCE", CONDITION_PRECEDENCE)
     assert len(KEY_FAMILIES) <= KEY_STRIDE
     integer("KEY_STRIDE", KEY_STRIDE)

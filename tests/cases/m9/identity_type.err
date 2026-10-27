@@ -1,0 +1,1 @@
+signal X has type integer but its definition has type boolean

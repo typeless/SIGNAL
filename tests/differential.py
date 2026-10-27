@@ -1,4 +1,5 @@
 import random
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -12,11 +13,19 @@ COMPILER = ROOT / "build" / "m4" / "stage2"
 CASES = ROOT / "tests" / "cases"
 SOURCE = ROOT / "compiler" / "sigc.sig"
 M9A_BUILD = ROOT / "build" / "m9"
-M9A_SUITES = ("m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9")
+M9A_SUITES = ("m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8")
+M9A_CASES = {
+    "m9/clocks_default_chain1100.sig", "m9/clocks_when_chain1100.sig", "m9/const_reader_default.sig",
+    "m9/const_reader_when.sig", "m9/many_roots.sig",
+}
 M9A_REJECTED = {
     "m9/many_roots.sig": "clock of S0 is undefined: its definition is a constant",
     "m9/const_reader_default.sig": "clock of X is undefined: its definition is a constant",
     "m9/const_reader_when.sig": "clock of X is undefined: its definition is a constant",
+}
+M9A_MOVED = {
+    "m9/clocks_not_inside_pairs.sig": "accepted",
+    "m9/exclusive_cycle.sig": "accepted",
 }
 DUMP_PASS_LINE = "constant integer DUMP_PASS = 0;"
 CLOCKS_DUMP_PASS_LINE = "constant integer DUMP_PASS = 5;"
@@ -40,6 +49,11 @@ COMPARISONS = ["=", "/=", "<", "<=", ">", ">=", "==", "<<="]
 EVENT_OPERATORS = ["^+", "^*", "^-"]
 CONNECTIVES = ["and", "or", "xor"]
 LONG_MAX = 2**63 - 1
+M9B_RELATIONS = {
+    "^<": lambda left, right: not left or right,
+    "^>": lambda left, right: not right or left,
+    "^#": lambda left, right: not (left and right),
+}
 
 MACHINE_PRAGMAS = """  pragmas
     Machine "mps2-an385"
@@ -315,6 +329,172 @@ class Program:
         return "\n".join(lines) + "\n"
 
 
+class M9bProgram:
+    def __init__(self, seed):
+        rng = random.Random(seed)
+        self.conditions = []
+        for index in range(rng.randrange(2, 4)):
+            modulus = rng.randrange(2, 5)
+            self.conditions.append((f"C{index}", modulus, rng.randrange(modulus)))
+        self.signals = [f"S{index}" for index in range(rng.randrange(3, 7))]
+        self.definitions = []
+        for index, signal in enumerate(self.signals):
+            earlier = self.signals[:index]
+            kind = rng.choice(["sample", "when", "default", "sync"]) if earlier else "sample"
+            if kind == "sample":
+                self.definitions.append(f"{signal} := (N * {rng.randrange(1, 9)} + {rng.randrange(0, 9)}) when {self.condition(rng)}")
+            elif kind == "when":
+                self.definitions.append(f"{signal} := {rng.choice(earlier)} when {self.condition(rng)}")
+            elif kind == "default":
+                self.definitions.append(f"{signal} := {rng.choice(earlier)} default {rng.choice(earlier + ['N'])}")
+            else:
+                self.definitions.append(f"{signal} := (N + {rng.randrange(0, 9)}) when {self.condition(rng)}")
+                self.definitions.append(f"{signal} ^= {rng.choice(earlier)}")
+        left, right = rng.sample(range(len(self.signals)), 2)
+        self.relation = (left, rng.choice(list(M9B_RELATIONS)), right)
+        exclusive = [(a[0], b[0]) for a in self.conditions for b in self.conditions
+                     if a[0] < b[0] and not any(t % a[1] == a[2] and t % b[1] == b[2] for t in range(1, 13))]
+        if exclusive:
+            first, second = rng.choice(exclusive)
+            self.assertion = f"assert(not ({first} and {second}))"
+        else:
+            name = rng.choice(self.conditions)[0]
+            self.assertion = f"assert({name} or not {name})"
+        self.cycle = None
+        if rng.randrange(2):
+            offsets = (rng.randrange(1, 9) * 10, rng.randrange(1, 9) * 100)
+            by_name = {condition[0]: condition for condition in self.conditions}
+            if exclusive and rng.randrange(2):
+                self.cycle = (by_name[first], False, by_name[second], *offsets)
+            else:
+                condition = rng.choice(self.conditions)
+                self.cycle = (condition, True, condition, *offsets)
+
+    def cycle_lines(self):
+        if self.cycle is None:
+            return []
+        (first, _, _), negated, (second, _, _), left_offset, right_offset = self.cycle
+        right_condition = f"not {first}" if negated else second
+        return [
+            f"X := ((Y + {left_offset}) when {first}) default N",
+            f"Y := ((X + {right_offset}) when {right_condition}) default N",
+            "X ^= Y ^= N",
+        ]
+
+    def cycle_expected(self, n):
+        (_, first_modulus, first_residue), negated, (_, second_modulus, second_residue), left_offset, right_offset = self.cycle
+        first_holds = n % first_modulus == first_residue
+        second_holds = not first_holds if negated else n % second_modulus == second_residue
+        if first_holds:
+            return [n + left_offset, n]
+        if second_holds:
+            return [n, n + right_offset]
+        return [n, n]
+
+    def condition(self, rng):
+        name = rng.choice(self.conditions)[0]
+        return name if rng.randrange(2) else f"(not {name})"
+
+    def source(self, machine):
+        left, relation, right = self.relation
+        body = [
+            "N := ZN + 1",
+            "ZN := N $ init 0",
+            "N ^= TICK",
+            *[f"{name} := (N modulo {modulus}) = {residue}" for name, modulus, residue in self.conditions],
+            *self.definitions,
+            f"{self.signals[left]} {relation} {self.signals[right]}",
+            self.assertion,
+            *self.cycle_lines(),
+        ]
+        outputs = self.signals + (["X", "Y"] if self.cycle else [])
+        lines = ["process RANDOM =", "  ( ? event START, TICK;", f"    ! integer {', '.join(outputs)}; )"]
+        if machine:
+            lines.append(MACHINE_PRAGMAS.rstrip("\n"))
+        lines.append(f"  (| {body[0]}")
+        lines += [f"   | {line}" for line in body[1:]]
+        if machine:
+            lines.append(SYSTICK_BODY.rstrip("\n"))
+        lines.append("   |)")
+        lines.append("  where")
+        lines.append("    integer N, ZN;")
+        lines.append(f"    boolean {', '.join(name for name, _, _ in self.conditions)};")
+        if machine:
+            lines.append(SYSTICK_DECLARATIONS.rstrip("\n"))
+        lines.append("  end;")
+        return "\n".join(lines) + "\n"
+
+
+def check_m9b(compiler, seed):
+    program = M9bProgram(seed)
+    directory = BUILD / "m9b" / str(seed)
+    directory.mkdir(parents=True, exist_ok=True)
+    outcomes = []
+    for variant, machine in (("macos", False), ("mps2", True)):
+        source = directory / f"{variant}.sig"
+        source.write_text(program.source(machine))
+        executable = directory / variant
+        compiled = compile_case(compiler, source, executable)
+        if compiled.returncode != 0:
+            message = compiled.stderr.strip().partition(": error: ")[2]
+            source_lines = source.read_text().splitlines()
+            located = re.sub(r"at (\d+):(\d+)",
+                             lambda found: f"at '{source_lines[int(found[1]) - 1].strip()}':{found[2]}", message)
+            outcomes.append(("rejected", located))
+            continue
+        input_path = directory / f"{variant}.in"
+        if machine:
+            input_path.unlink(missing_ok=True)
+            command = [*QEMU_COMMANDS["mps2-an385"], str(executable)]
+        else:
+            input_path.write_text("10\n" + "01\n" * TICKS)
+            command = [str(executable)]
+        lines, timed_out, returncode = read_trace(command, TICKS + 1, input_path)
+        outcomes.append(("trace", lines))
+    (macos_kind, macos), (mps2_kind, mps2) = outcomes
+    if macos_kind != mps2_kind or macos != mps2:
+        return [f"{directory}: macos {macos_kind} {macos!r}, mps2 {mps2_kind} {mps2!r}"], macos_kind
+    if macos_kind == "rejected" and program.cycle and macos.startswith("causality cycle"):
+        return [f"{directory}: exclusive cycle rejected: {macos}"], macos_kind
+    if macos_kind == "rejected":
+        return [], macos_kind
+    left, relation, right = program.relation
+    holds = M9B_RELATIONS[relation]
+    width = len(program.signals) + (2 if program.cycle else 0)
+    ticks = 0
+    for step, line in enumerate(macos):
+        values = line.split()
+        if len(values) != width:
+            return [f"{directory}: step {step} has {len(values)} values, expected {width}: {line!r}"], macos_kind
+        if not holds(values[left] != "-", values[right] != "-"):
+            return [f"{directory}: step {step} breaks {program.signals[left]} {relation} {program.signals[right]}: {line!r}"], macos_kind
+        if program.cycle and values[-2:] != ["-", "-"]:
+            ticks += 1
+            expected = [str(value) for value in program.cycle_expected(ticks)]
+            if values[-2:] != expected:
+                return [f"{directory}: step {step} has X, Y {values[-2:]}, expected {expected}: {line!r}"], macos_kind
+    return [], "cycle" if program.cycle and macos_kind == "trace" else macos_kind
+
+
+def m9b(compiler, count):
+    seeds = [random.SystemRandom().randrange(2**32) for _ in range(count)]
+    print(f"m9b seeds: {' '.join(map(str, seeds))}")
+    failures = 0
+    accepted = 0
+    cycles = 0
+    for seed in seeds:
+        report, kind = check_m9b([str(compiler)], seed)
+        accepted += kind in ("trace", "cycle")
+        cycles += kind == "cycle"
+        if report:
+            failures += 1
+            print(f"FAIL seed {seed}")
+            for line in report:
+                print(f"  {line}")
+    print(f"{count - failures} seeds passed ({accepted} accepted, {cycles} with an exclusive cycle), {failures} failed")
+    return 1 if failures else 0
+
+
 def check(compiler, seed):
     program = Program(seed)
     directory = BUILD / str(seed)
@@ -394,7 +574,8 @@ def m9a(compiler, against):
         sys.exit(f"--against {against} needs its source at {against_source}")
     old_dumper = clocks_dump_compiler(against, against_source, "against_clocks")
     new_dumper = clocks_dump_compiler(compiler, SOURCE, "compiler_clocks")
-    sources = sorted(s for s in CASES.rglob("*.sig") if s.relative_to(CASES).parts[0] in M9A_SUITES)
+    sources = sorted(s for s in CASES.rglob("*.sig")
+                     if s.relative_to(CASES).parts[0] in M9A_SUITES or s.relative_to(CASES).as_posix() in M9A_CASES | M9A_MOVED.keys())
     differing = 0
     missing = 0
     for source in sources:
@@ -409,6 +590,14 @@ def m9a(compiler, against):
             if new_status == 0 or M9A_REJECTED[name] not in new_stderr:
                 missing += 1
                 print(f"EXPECTED {name}: rejection containing {M9A_REJECTED[name]!r}, got exit {new_status}: {new_stderr.strip()!r}")
+            continue
+        if name in M9A_MOVED:
+            outcome = new_stderr.strip() if new_status else "accepted"
+            if M9A_MOVED[name] not in outcome:
+                missing += 1
+                print(f"EXPECTED {name}: moved to {M9A_MOVED[name]!r}, got exit {new_status}: {outcome!r}")
+            else:
+                print(f"MOVED {name}: {outcome!r}")
             continue
         report = []
         if old_status != new_status:
@@ -443,6 +632,8 @@ def main():
         if arguments != ["m9a"]:
             sys.exit("--against requires the method m9a")
         return m9a(compiler, against)
+    if arguments and arguments[0] == "m9b":
+        return m9b(compiler, int(arguments[1]) if len(arguments) > 1 else FRESH_SEEDS)
     fresh_count = int(arguments[0]) if arguments else FRESH_SEEDS
     kept = [int(line) for line in SEEDS.read_text().split()] if SEEDS.exists() else []
     fresh = [random.SystemRandom().randrange(2**32) for _ in range(fresh_count)]
