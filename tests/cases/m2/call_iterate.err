@@ -1,1 +1,1 @@
-model calls are not allowed inside iterate
+COPY is called inside iterate but is not a function without iterate

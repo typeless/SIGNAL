@@ -1,0 +1,1 @@
+declaration_init_nesting.sig:9:27: error: the initial value of signal A is not nested as its type

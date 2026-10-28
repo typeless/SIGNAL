@@ -1,0 +1,1 @@
+declaration_init_count.sig:10:24: error: signal A has type [3] integer but its initial value has 2 elements

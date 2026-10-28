@@ -1,5 +1,7 @@
 import concurrent.futures
 import functools
+import itertools
+import math
 import random
 import re
 import subprocess
@@ -38,6 +40,10 @@ M9A_MOVED = {
     "m4/lower_array_definition.sig": "accepted",
     "m1/array_operator.sig": "accepted", "m6/diff_arrays.sig": "accepted",
     "m2/guard_array.sig": "clock of T is undefined: its definition is a constant",
+    "m1/array_delay.sig": "accepted",
+    "m1/iterate_nested.sig": "I is already the index of an enclosing iterate",
+    "m4/range_start.sig": "accepted",
+    "m2/call_iterate.sig": "COPY is called inside iterate but is not a function without iterate",
 }
 DUMP_PASS_LINE = "constant integer DUMP_PASS = 0;"
 CLOCKS_DUMP_PASS_LINE = "constant integer DUMP_PASS = 5;"
@@ -825,6 +831,534 @@ def m10a(compiler, seeds, jobs):
     return 1 if failures else 0
 
 
+
+def wrapped(name, value):
+    bits, signed = TYPES[name]
+    value %= 2**bits
+    return value - 2**bits if signed and value >= 2 ** (bits - 1) else value
+
+
+def wrap32(value):
+    return wrapped("integer", value)
+
+
+class M10bLoops:
+    def __init__(self, rng):
+        self.depth = rng.randrange(1, 4)
+        self.sizes = [rng.randrange(1, 4) for _ in range(self.depth)]
+        self.form = rng.choice(["array", "iterate", "angle"])
+        if self.form == "array":
+            self.sizes = [max(2, size) for size in self.sizes]
+        self.kinds = ["array"] * self.depth if self.form == "array" else [rng.choice(["range", "indices"]) for _ in range(self.depth)]
+        self.starts = [0] + [rng.randrange(-3, 4) if kind == "range" else 0 for kind in self.kinds[1:]]
+        self.dynamic = self.form == "iterate" and self.kinds[0] == "range" and rng.random() < 0.5
+        self.zero = all(start == 0 for start in self.starts)
+        self.multiplier = rng.randrange(-3, 4)
+        self.coefficients = [rng.randrange(-50, 51) for _ in range(5)]
+        self.target = rng.choice(["next", "element"]) if self.zero and not self.dynamic else "next" if self.zero else None
+        self.target_coefficients = [rng.randrange(-9, 10) for _ in range(self.depth)]
+        self.target_seed = [rng.randrange(-99, 100) for _ in range(self.total())]
+        self.seeded = self.depth >= 2 and rng.random() < 0.7
+        self.scalar_seed = rng.randrange(-99, 100)
+        self.free_seed = [rng.randrange(-99, 100) for _ in range(self.sizes[0])]
+        self.free_factors = [(rng.randrange(-20, 21), rng.randrange(-20, 21)) for _ in range(self.sizes[0])]
+        self.with_level = rng.randrange(self.depth) if self.form != "angle" else 0
+        self.axes = [rng.randrange(1, 4) for _ in range(rng.randrange(2, 4))]
+        self.axis_angle = rng.random() < 0.5
+        self.axis_starts = [rng.randrange(-3, 4) if self.axis_angle else 0 for _ in self.axes]
+        modes = ["none", "scalar"] + ([] if self.dynamic else ["tuple"]) + (["element"] if self.target == "element" else [])
+        self.call = rng.choice(modes)
+        self.call_multiplier = rng.randrange(-3, 4)
+        self.call_factor = rng.randrange(-9, 10)
+        self.call_seed = rng.randrange(-99, 100)
+
+    def total(self):
+        total = 1
+        for size in self.sizes:
+            total *= size
+        return total
+
+    def outputs(self):
+        shape = ", ".join(map(str, self.sizes))
+        axes = ", ".join(map(str, self.axes))
+        names = ["integer LS, LC;"]
+        if self.call != "none":
+            names.append("integer LK;")
+        if self.call == "tuple":
+            names.append("integer LW;")
+        if self.target:
+            names.append(f"[{shape}] integer LT;")
+        if self.seeded:
+            names.append(f"[{self.sizes[0]}] integer LX;")
+        names.append(f"[{axes}] integer {', '.join(f'LQ{k}' for k in range(1, len(self.axes) + 1))};")
+        return names
+
+    def names(self):
+        return [f"J{level}" for level in range(1, self.depth + 1)]
+
+    def statements(self):
+        names = self.names()
+        c = self.coefficients
+        terms = " + ".join(f"{c[level]} * {name}" for level, name in enumerate(names))
+        lines = [f"LS := LS[?] * {self.multiplier} + {terms} + {c[3]} * N + {c[4]} * (LFA $ init LFZ)[J1]", "LC := LC[?] + 1"]
+        value = " + ".join(f"{k} * {name}" for k, name in zip(self.target_coefficients, names)) + " + N"
+        pair = names[0] if self.depth == 1 else f"({', '.join(names)})"
+        if self.target == "next":
+            lines.append(f"LT := LT[?] next {pair} : {value}")
+        elif self.target == "element" and self.call == "element":
+            lines.append(f"(LK, LT[{', '.join(names)}]) := lpair(LK[?], {value})")
+        elif self.target == "element":
+            lines.append(f"LT[{', '.join(names)}] := {value}")
+        argument = f"{self.call_factor} * J1 + N"
+        if self.call == "scalar":
+            lines.append(f"LK := lone(LK[?], {argument})")
+        elif self.call == "tuple":
+            lines.append(f"(LK, LW) := lpair(LK[?], {argument})")
+        if self.seeded:
+            lines.append(f"LX[J1] := LX[?][J1] + {names[1]} + 1")
+        seeds = [f"LS := {self.scalar_seed}", "LC := 0"] + ([f"LK := {self.call_seed}"] if self.call != "none" else [])
+        if self.target == "next":
+            seeds.append("LT := LTZ")
+        if self.seeded:
+            seeds.append("LX[J1] := 0")
+        return lines, seeds
+
+    def body(self):
+        names = self.names()
+        lines, seeds = self.statements()
+        statement = "(| " + " | ".join(lines) + " |)"
+        seed = "with (| " + " | ".join(seeds) + " |)"
+        text = []
+        if self.form == "angle":
+            text = [f"iterate << {', '.join(names)} >> of", f"  {statement}", seed, "end"]
+        else:
+            opens = [f"array {name} to {size - 1} of" if self.form == "array" else f"iterate {name} of"
+                     for name, size in zip(names, self.sizes)]
+            text = [("  " * level) + line for level, line in enumerate(opens)]
+            text.append("  " * self.depth + statement)
+            for level in reversed(range(self.depth)):
+                if level == self.with_level:
+                    text.append("  " * level + seed)
+                text.append("  " * level + "end")
+        joined = "\n     ".join(text)
+        result = [joined]
+        if self.form != "array":
+            for name, kind, start, size in zip(names, self.kinds, self.starts, self.sizes):
+                if name == "J1" and self.dynamic:
+                    result.append("J1 := 0 .. LNB")
+                elif kind == "range":
+                    result.append(f"{name} := {start} .. {start + size - 1}")
+                else:
+                    result.append(f"{name} := indices({size})")
+        result.append(f"LNB := N modulo {self.sizes[0] + 1} - 1")
+        free = ", ".join(f"N * {factor} + {offset}" for factor, offset in self.free_factors)
+        result.append(f"LFA := [{free}]")
+        targets = ", ".join(f"LQ{k}" for k in range(1, len(self.axes) + 1))
+        if self.axis_angle:
+            ranges = ", ".join(f"{start} .. {start + size - 1}" for start, size in zip(self.axis_starts, self.axes))
+            result.append(f"({targets}) := << {ranges} >>")
+        else:
+            result.append(f"({targets}) := indices({', '.join(map(str, self.axes))})")
+        result.append(" ^= ".join([*targets.split(", "), "TICK"]))
+        return result
+
+    def declarations(self):
+        declarations = ["integer LNB;", f"[{self.sizes[0]}] integer LFA;",
+                        f"constant [{self.sizes[0]}] integer LFZ = [{', '.join(map(str, self.free_seed))}];"]
+        if self.form != "array":
+            declarations += [f"[{size}] integer {name};" for name, size in zip(self.names(), self.sizes)]
+        m = self.call_multiplier
+        if self.call == "scalar":
+            declarations.append(f"function lone = ( ? integer a, b; ! integer k; ) (| k := a * {m} + b |);")
+        elif self.call != "none":
+            declarations.append(f"function lpair = ( ? integer a, b; ! integer k, t; ) (| k := a * {m} + b | t := b - a |);")
+        if self.target == "next":
+            declarations.append(f"constant [{', '.join(map(str, self.sizes))}] integer LTZ = {nested_list(list(map(str, self.target_seed)), self.sizes)};")
+        return declarations
+
+    def levels(self, tick):
+        values = [list(range(start, start + size)) for start, size in zip(self.starts, self.sizes)]
+        if self.dynamic:
+            values[0] = values[0][:max(0, min(tick % (self.sizes[0] + 1), self.sizes[0]))]
+        return values
+
+    def expected(self, tick):
+        free = ([wrap32((tick - 1) * factor + offset) for factor, offset in self.free_factors] if tick >= 2 else self.free_seed)
+        s, count = self.scalar_seed, 0
+        target = list(self.target_seed) if self.target == "next" else [0] * self.total()
+        seeded = [0] * self.sizes[0]
+        k, w = self.call_seed, 0
+        c = self.coefficients
+        for point in itertools.product(*self.levels(tick)):
+            padded = list(point) + [0] * (3 - len(point))
+            s = wrap32(s * self.multiplier + sum(c[level] * padded[level] for level in range(3)) + c[3] * tick + c[4] * free[point[0]])
+            count += 1
+            flat = 0
+            for index, size in zip(point, self.sizes):
+                flat = flat * size + index
+            value = wrap32(sum(factor * index for factor, index in zip(self.target_coefficients, point)) + tick)
+            if self.target:
+                target[flat] = value
+            argument = value if self.call == "element" else wrap32(self.call_factor * point[0] + tick)
+            if self.call == "element":
+                target[flat] = wrap32(argument - k)
+            w = wrap32(argument - k)
+            k = wrap32(k * self.call_multiplier + argument)
+            if self.seeded:
+                seeded[point[0]] = wrap32(seeded[point[0]] + point[1] + 1)
+        values = [s, count] + ([k] if self.call != "none" else []) + ([w] if self.call == "tuple" else [])
+        if self.target:
+            values += target
+        if self.seeded:
+            values += seeded
+        total = 1
+        for size in self.axes:
+            total *= size
+        stride = total
+        for start, size in zip(self.axis_starts, self.axes):
+            stride //= size
+            values += [start + (element // stride) % size for element in range(total)]
+        return values
+
+    def absent(self):
+        return 2 + int(self.call != "none") + int(self.call == "tuple") + int(bool(self.target)) + int(self.seeded) + len(self.axes)
+
+
+class M10bSequential:
+    def __init__(self, rng):
+        self.dims = [rng.randrange(1, 4) for _ in range(rng.randrange(1, 4))]
+        self.constants = []
+        self.parts = [self.iteration(rng, complete=True)]
+        for _ in range(rng.randrange(0, 4)):
+            self.parts.append(self.iteration(rng, complete=False) if rng.random() < 0.6 else self.element(rng))
+
+    def bound(self, rng, value):
+        if rng.random() < 0.3:
+            name = f"LB{len(self.constants)}"
+            self.constants.append((name, value))
+            return name
+        return str(value)
+
+    def coefficients(self, rng, count):
+        return [rng.randrange(-9, 10) for _ in range(count)], rng.randrange(-9, 10), rng.randrange(-50, 51)
+
+    def iteration(self, rng, complete):
+        rank = len(self.dims)
+        if complete:
+            count = rank
+            targets = [("index", level, 0) for level in range(rank)]
+            ranges = [(0, size - 1, 1) for size in self.dims]
+            form = rng.choice(["default", "explicit"])
+        else:
+            count = rng.randrange(1, 4)
+            free = list(range(count))
+            rng.shuffle(free)
+            targets = []
+            ranges = [None] * count
+            for size in self.dims:
+                if free and rng.random() < 0.7:
+                    level = free.pop()
+                    low = rng.randrange(size)
+                    high = rng.randrange(low, size)
+                    offset = rng.randrange(-2, 3)
+                    ranges[level] = (low - offset, high - offset, rng.randrange(1, 3))
+                    targets.append(("index", level, offset))
+                else:
+                    targets.append(("constant", rng.randrange(size), 0))
+            for level in range(count):
+                if ranges[level] is None:
+                    start = rng.randrange(-2, 2)
+                    ranges[level] = (start, start + rng.randrange(0, 3), rng.randrange(1, 3))
+            form = "explicit"
+        used = {target[1] for target in targets if target[0] == "index"}
+        named = [complete or level in used or rng.random() < 0.5 for level in range(count)]
+        factors, scale, offset = self.coefficients(rng, count)
+        header = []
+        for level, (start, stop, step) in enumerate(ranges):
+            words = [f"K{level + 1}"] if named[level] else []
+            if start != 0 or rng.random() < 0.5:
+                words.append(f"in {self.bound(rng, start)}")
+            words.append(f"to {self.bound(rng, stop)}")
+            if step != 1 or rng.random() < 0.3:
+                words.append(f"step {self.bound(rng, step)}")
+            header.append(" ".join(words))
+        factors = [factor if named[level] else 0 for level, factor in enumerate(factors)]
+        return {"kind": "iteration", "header": header, "ranges": ranges, "targets": targets, "form": form,
+                "factors": factors, "scale": scale, "offset": offset}
+
+    def element(self, rng):
+        factors, scale, offset = self.coefficients(rng, 0)
+        return {"kind": "element", "point": [rng.randrange(size) for size in self.dims], "scale": scale, "offset": offset}
+
+    def value(self, part, point):
+        terms = [f"{factor} * K{level + 1}" for level, factor in enumerate(part["factors"]) if factor] if part["kind"] == "iteration" else []
+        return " + ".join([*terms, f"{part['scale']} * N", str(part["offset"])])
+
+    def index_text(self, target):
+        kind, value, offset = target
+        if kind == "constant":
+            return str(value)
+        name = f"K{value + 1}"
+        return name if offset == 0 else f"{name} + {offset}" if offset > 0 else f"{name} - {-offset}"
+
+    def text(self):
+        parts = []
+        for part in self.parts:
+            if part["kind"] == "element":
+                parts.append(f"[{', '.join(map(str, part['point']))}] : {self.value(part, None)}")
+                continue
+            head = "{" + ", ".join(part["header"]) + "}"
+            if part["form"] == "default":
+                parts.append(f"{head} : {self.value(part, None)}")
+            else:
+                parts.append(f"{head} : [{', '.join(self.index_text(target) for target in part['targets'])}] : {self.value(part, None)}")
+        return f"LE := [{', '.join(parts)}]"
+
+    def declarations(self):
+        return [f"constant integer {name} = {value};" for name, value in self.constants]
+
+    def output(self):
+        return f"[{', '.join(map(str, self.dims))}] integer LE;"
+
+    def expected(self, tick):
+        total = 1
+        for size in self.dims:
+            total *= size
+        values = [0] * total
+        for part in self.parts:
+            if part["kind"] == "element":
+                points = [(part["point"], 0)]
+            else:
+                points = []
+                for indices in itertools.product(*(range(start, stop + 1, step) for start, stop, step in part["ranges"])):
+                    point = [value if kind == "constant" else indices[value] + offset for kind, value, offset in part["targets"]]
+                    points.append((point, sum(factor * index for factor, index in zip(part["factors"], indices))))
+            for point, weighted in points:
+                flat = 0
+                for index, size in zip(point, self.dims):
+                    flat = flat * size + index
+                values[flat] = wrap32(weighted + part["scale"] * tick + part["offset"])
+        return values
+
+
+class M10bMatrix:
+    def __init__(self, rng, element):
+        self.element = element
+        bits, signed = TYPES[element]
+        low, high = (-(2 ** (bits - 1)), 2 ** (bits - 1) - 1) if signed else (0, 2**bits - 1)
+        self.l, self.m, self.n = (rng.randrange(2, 5) for _ in range(3))
+        self.shapes = {"MA": [self.l, self.m], "MB": [self.m, self.n], "MV": [self.m], "MW": [self.l]}
+        self.terms = {name: [(rng.randrange(low, high + 1), rng.randrange(low, high + 1)) for _ in range(math.prod(shape))]
+                      for name, shape in self.shapes.items()}
+
+    def values(self, name, tick):
+        return [wrapped(self.element, tick * factor + offset) for factor, offset in self.terms[name]]
+
+    def body(self):
+        lines = []
+        for name, shape in self.shapes.items():
+            literals = [f"{self.element}(N) * {typed_literal(self.element, factor)} + {typed_literal(self.element, offset)}"
+                        for factor, offset in self.terms[name]]
+            lines.append(f"{name} := {nested_list(literals, shape)}")
+        return lines + ["MT := tr MA", "MTT := tr MT", "MX := MA *. MB", "MY := MA *. MV", "MZ := MW *. MA", "MD := MV *. MV"]
+
+    def declarations(self):
+        return [f"[{', '.join(map(str, shape))}] {self.element} {name};" for name, shape in self.shapes.items()]
+
+    def output(self):
+        e, l, m, n = self.element, self.l, self.m, self.n
+        return f"[{m}, {l}] {e} MT; [{l}, {m}] {e} MTT; [{l}, {n}] {e} MX; [{l}] {e} MY; [{m}] {e} MZ; {e} MD;"
+
+    def expected(self, tick):
+        l, m, n = self.l, self.m, self.n
+        a, b, v, w = (self.values(name, tick) for name in ("MA", "MB", "MV", "MW"))
+        product = [wrapped(self.element, sum(a[i * m + k] * b[k * n + j] for k in range(m))) for i in range(l) for j in range(n)]
+        transposed = [a[j * m + i] for i in range(m) for j in range(l)]
+        return [*transposed, *a, *product,
+                *(wrapped(self.element, sum(a[i * m + k] * v[k] for k in range(m))) for i in range(l)),
+                *(wrapped(self.element, sum(w[k] * a[k * m + j] for k in range(l))) for j in range(m)),
+                wrapped(self.element, sum(x * x for x in v))]
+
+
+class M10bProgram:
+    def __init__(self, seed):
+        rng = random.Random(seed)
+        self.element = rng.choice(list(TYPES))
+        bits, signed = TYPES[self.element]
+        self.low, self.high = (max(-(2 ** (bits - 1)), -LONG_MAX), 2 ** (bits - 1) - 1) if signed else (0, 2**bits - 1)
+        self.dims = [rng.randrange(1, 4) for _ in range(rng.randrange(1, 3))]
+        self.span = 1
+        for size in self.dims:
+            self.span *= size
+        self.factors = [(rng.randrange(-100, 101), rng.randrange(-100, 101)) for _ in range(self.span)]
+        self.count = rng.randrange(1, 4)
+        self.size = rng.randrange(1, 5)
+        self.scalar_count = rng.randrange(1, 4)
+        self.delay_init = self.literals(rng, (self.count + rng.randrange(2)) * self.span) if rng.random() < 0.6 else None
+        self.window_init = (self.literals(rng, (self.size - 1 + rng.randrange(2)) * self.span)
+                            if self.size >= 2 and rng.random() < 0.6 else None)
+        self.scalar_init = self.literals(rng, self.scalar_count) if rng.random() < 0.6 else None
+        self.points = [[rng.randrange(size) for size in self.dims] for _ in range(TICKS)]
+        self.loops = M10bLoops(rng)
+        self.sequential = M10bSequential(rng)
+        self.matrix = M10bMatrix(rng, self.element)
+
+    def literals(self, rng, count):
+        return [rng.choice([self.low, self.high, 0, 1, rng.randrange(self.low, self.high + 1)]) for _ in range(count)]
+
+    def block(self, tick):
+        return [wrapped(self.element, tick * factor + offset) for factor, offset in self.factors]
+
+    def delayed(self, tick, count, initial, span):
+        if tick - count >= 1:
+            return self.block(tick - count)[:span]
+        if initial is None:
+            return [0] * span
+        return initial[(tick - 1) * span:tick * span]
+
+    def windowed(self, tick, size, initial):
+        values = []
+        for position in range(size):
+            source = tick - size + 1 + position
+            if source >= 1:
+                values += self.block(source)
+            elif initial is None:
+                values += [0] * self.span
+            else:
+                start = (source + size - 2) * self.span
+                values += initial[start:start + self.span]
+        return values
+
+    def expected(self):
+        lines = [" ".join(["-"] * (15 + self.loops.absent()))]
+        for tick in range(1, TICKS + 1):
+            delayed = self.delayed(tick, self.count, self.delay_init, self.span)
+            flat = 0
+            for index, size in zip(self.points[tick % TICKS], self.dims):
+                flat = flat * size + index
+            values = [*self.block(tick), *delayed, *self.windowed(tick, self.size, self.window_init), delayed[flat],
+                      *self.windowed(tick, 3, None), *self.delayed(tick, 2, None, self.span), *self.delayed(tick, 1, None, self.span),
+                      *self.scalar_delayed(tick), *self.loops.expected(tick), *self.sequential.expected(tick),
+                      *self.matrix.expected(tick)]
+            lines.append(" ".join(map(str, values)))
+        return lines
+
+    def scalar_delayed(self, tick):
+        if tick - self.scalar_count >= 1:
+            return [self.block(tick - self.scalar_count)[0]]
+        return [0 if self.scalar_init is None else self.scalar_init[tick - 1]]
+
+    def table(self, name, values, dims):
+        literals = [typed_literal(self.element, value) for value in values]
+        return f"constant [{', '.join(map(str, dims))}] {self.element} {name} = {nested_list(literals, dims)};"
+
+    def source(self, machine):
+        shape = ", ".join(map(str, self.dims))
+        names = [f"I{level}" for level in range(1, len(self.dims) + 1)]
+        elements = [f"{self.element}(N * {factor} + {offset})" for factor, offset in self.factors]
+        delay_init = " init DI" if self.delay_init is not None else ""
+        window_init = " init WI" if self.window_init is not None else ""
+        scalar_init = ""
+        declarations = [f"integer ZN, N, {', '.join(names)};", f"[{shape}] {self.element} A;", f"{self.element} X;"]
+        if self.scalar_init is not None:
+            scalar_init = " init SI"
+            if self.scalar_count == 1:
+                declarations.append(f"constant {self.element} SI = {typed_literal(self.element, self.scalar_init[0])};")
+            else:
+                declarations.append(self.table("SI", self.scalar_init, [self.scalar_count]))
+        if self.delay_init is not None:
+            declarations.append(self.table("DI", self.delay_init, [len(self.delay_init) // self.span, *self.dims]))
+        if self.window_init is not None:
+            declarations.append(self.table("WI", self.window_init, [len(self.window_init) // self.span, *self.dims]))
+        body = ["N := ZN + 1", "ZN := N $ init 0", "N ^= TICK"]
+        body += [f"{name} := P{level}[N modulo {TICKS}]" for level, name in enumerate(names, 1)]
+        body += [
+            f"A := {nested_list(elements, self.dims)}",
+            f"D := A $ {self.count}{delay_init}",
+            f"W := A window {self.size}{window_init}",
+            f"E := (A $ {self.count}{delay_init})[{', '.join(names)}]",
+            "WP := A window 3",
+            "C2 := (A $) $",
+            "C1 := A $",
+            f"X := A[{', '.join(['0'] * len(self.dims))}]",
+            f"S := X $ {self.scalar_count}{scalar_init}",
+            *self.loops.body(),
+            self.sequential.text(),
+            *self.matrix.body(),
+        ]
+        declarations += self.loops.declarations() + self.sequential.declarations() + self.matrix.declarations()
+        for level, size in enumerate(self.dims, 1):
+            declarations.append(f"constant [{TICKS}] integer P{level} = [{', '.join(str(point[level - 1]) for point in self.points)}];")
+        lines = ["process M10B =", "  ( ? event START, TICK;",
+                 f"    ! [{shape}] {self.element} AO, D; [{self.size}, {shape}] {self.element} W; {self.element} E;",
+                 f"      [3, {shape}] {self.element} WP; [{shape}] {self.element} C2, C1; {self.element} S;",
+                 f"      {' '.join(self.loops.outputs())} {self.sequential.output()}",
+                 f"      {self.matrix.output()} )"]
+        if machine:
+            lines.append(MACHINE_PRAGMAS.rstrip("\n"))
+        lines.append("  (| " + "\n   | ".join(["AO := A", *body]))
+        if machine:
+            lines.append(SYSTICK_BODY.rstrip("\n"))
+        lines.append("   |)")
+        lines.append("  where")
+        lines += [f"    {declaration}" for declaration in declarations]
+        if machine:
+            lines.append(SYSTICK_DECLARATIONS.rstrip("\n"))
+        lines.append("  end;")
+        return "\n".join(lines) + "\n"
+
+
+def m10b_window_matches_chain(line, program):
+    tokens = line.split()
+    span = program.span
+    start = span + span + program.size * span + 1
+    window = tokens[start:start + 3 * span]
+    chain = tokens[start + 3 * span:start + 5 * span] + tokens[:span]
+    return window == chain
+
+
+def check_m10b(compiler, seed):
+    program = M10bProgram(seed)
+    directory = BUILD / "m10b" / str(seed)
+    directory.mkdir(parents=True, exist_ok=True)
+    expected = program.expected()
+    report = []
+    for variant, machine in (("macos", False), ("mps2", True)):
+        source = directory / f"{variant}.sig"
+        source.write_text(program.source(machine))
+        executable = directory / variant
+        compiled = compile_case(compiler, source, executable)
+        if compiled.returncode != 0:
+            report.append(f"{source}: compile failed (exit {compiled.returncode}): {compiled.stderr.strip()}")
+            continue
+        input_path = directory / f"{variant}.in"
+        if machine:
+            input_path.unlink(missing_ok=True)
+            command = [*QEMU_COMMANDS["mps2-an385"], str(executable)]
+        else:
+            input_path.write_text("10\n" + "01\n" * TICKS)
+            command = [str(executable)]
+        lines, timed_out, returncode = read_trace(command, TICKS + 1, input_path)
+        if lines != expected:
+            report.append(f"{source}: trace {lines!r}, expected {expected!r}")
+        if not all(m10b_window_matches_chain(line, program) for line in lines[1:]):
+            report.append(f"{source}: window 3 differs from chained $ in {lines!r}")
+    return report
+
+
+def m10b(compiler, seeds, jobs):
+    print(f"m10b seeds: {' '.join(map(str, seeds))}")
+    failures = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for seed, report in zip(seeds, pool.map(lambda seed: check_m10b([str(compiler)], seed), seeds)):
+            if report:
+                failures += 1
+                print(f"FAIL seed {seed}")
+                for line in report:
+                    print(f"  {line}")
+    print(f"{len(seeds) - failures} seeds passed, {failures} failed")
+    return 1 if failures else 0
+
 def check(compiler, seed):
     program = Program(seed)
     directory = BUILD / str(seed)
@@ -982,7 +1516,7 @@ def main():
         if arguments != ["m9a"]:
             sys.exit("--against requires the method m9a")
         return m9a(compiler, against, jobs)
-    methods = {"m9b": m9b, "m9c": m9c, "m10a": m10a}
+    methods = {"m9b": m9b, "m9c": m9c, "m10a": m10a, "m10b": m10b}
     method = methods.get(arguments[0]) if arguments else None
     if method:
         del arguments[0]

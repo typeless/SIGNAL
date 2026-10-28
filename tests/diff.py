@@ -3,6 +3,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from differential import M9A_MOVED
 from run import STAGE2_ONLY
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -103,13 +104,18 @@ def main():
             return 2
     sources = [s for s in sorted(CASES.rglob("*.sig")) if s.relative_to(CASES).parts[0] not in STAGE2_ONLY]
     differing = 0
+    moved = 0
     with tempfile.TemporaryDirectory() as scratch:
         for source in sources:
             report = MODES[mode](first, second, source, Path(scratch))
-            if report:
+            name = source.relative_to(CASES).as_posix()
+            if report and mode == "image" and name in M9A_MOVED:
+                moved += 1
+                print(f"MOVED {name} ({M9A_MOVED[name]}): {'; '.join(report)}")
+            elif report:
                 differing += 1
-                print(f"DIFF {source.relative_to(CASES)}: {'; '.join(report)}")
-    print(f"{len(sources)} cases, {differing} differ")
+                print(f"DIFF {name}: {'; '.join(report)}")
+    print(f"{len(sources)} cases, {differing} differ, {moved} declared moves")
     return 1 if differing else 0
 
 

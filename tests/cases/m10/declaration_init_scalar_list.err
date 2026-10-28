@@ -1,0 +1,1 @@
+declaration_init_scalar_list.sig:9:20: error: signal S has type integer but its initial value is a list

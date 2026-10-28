@@ -1,0 +1,1 @@
+signal C has type [2, 3] integer but its definition has type [3, 2] integer
