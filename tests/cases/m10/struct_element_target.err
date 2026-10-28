@@ -1,0 +1,1 @@
+struct_element_target.sig:5:8: error: an element of M is a tuple and cannot be a target; define its fields, as in M.F[I] := E

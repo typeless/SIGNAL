@@ -1,0 +1,1 @@
+struct_identity_kind.sig:5:6: error: T and S are not the same kind of tuple

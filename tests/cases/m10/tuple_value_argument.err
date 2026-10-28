@@ -1,0 +1,1 @@
+tuple_value_argument.sig:4:15: error: a tuple value cannot be an argument of SUM

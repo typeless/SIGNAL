@@ -1,0 +1,1 @@
+struct_scalar_twice.sig:9:13: error: signal S is declared twice

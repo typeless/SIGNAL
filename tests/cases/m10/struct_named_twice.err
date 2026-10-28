@@ -1,0 +1,1 @@
+struct_named_twice.sig:10:11: error: signal P is declared twice

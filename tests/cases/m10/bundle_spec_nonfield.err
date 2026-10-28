@@ -1,0 +1,1 @@
+bundle_spec_nonfield.sig:13:57: error: FOO in a spec is not a field of the bundle

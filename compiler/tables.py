@@ -20,7 +20,7 @@ SEED_WORDS = [
     "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe", "defaultvalue", "shared", "statevar", "tr", "assert", "min_clock", "spec",
     "affine_sample", "affine_clock_relation", "affine_unsample",
     "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "tick'", "v'", "zv'", "vb'", "zvb'", "clk_x'", "clk_y'", "clk_i'", "rep'", "seq'", "tup'",
-    "dim", "size", "bounds", "step", "window",
+    "dim", "size", "bounds", "step", "window", "struct", "bundle",
 ]
 FRESH_FIRST = "cell'"
 FRESH_LAST = "tup'"
@@ -44,6 +44,7 @@ NAME_CONSTANTS = {
     "affine_unsample": "N_AFFINE_UNSAMPLE", "clk_i'": "N_AFFINE_CLOCK", "rep'": "N_REPEAT_MARK", "tick'": "N_TICK_MARK",
     "dim": "N_DIM", "size": "N_SIZE", "bounds": "N_BOUNDS", "step": "N_STEP",
     "window": "N_WINDOW", "seq'": "N_SEQ_MARK", "tup'": "N_TUPLE_MARK",
+    "struct": "N_STRUCT", "bundle": "N_BUNDLE",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -55,11 +56,11 @@ SYMBOLS = [
     ("^+", "CLOCK_PLUS"), ("^*", "CLOCK_TIMES"), ("^-", "CLOCK_MINUS"), ("==", "EQUAL_EQUAL"),
     ("<<=", "LESS_LESS_EQUAL"), ("[:", "OPEN_COLON"), ("[/:", "OPEN_SLASH_COLON"), ("\\\\", "BACKSLASHES"),
     ("|*", "BAR_STAR"), ("**", "STAR_STAR"), ("^<", "CLOCK_LT"), ("^>", "CLOCK_GT"), ("^#", "CLOCK_SHARP"),
-    (":=:", "IDENTITY"), ("::=", "PARTIAL_DEFINE"), ("|+", "BAR_PLUS"), ("*.", "STAR_DOT"),
+    (":=:", "IDENTITY"), ("::=", "PARTIAL_DEFINE"), ("|+", "BAR_PLUS"), ("*.", "STAR_DOT"), (".", "DOT"),
 ]
 SYMBOL_BASE = 85
-OTHER_CODES = [("EOF", 0), ("NAME", 134), ("NUMBER", 135), ("STRING", 136)]
-CODE_LIMIT = 137
+OTHER_CODES = [("EOF", 0), ("NAME", 135), ("NUMBER", 136), ("STRING", 137)]
+CODE_LIMIT = 138
 ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34, "'": 39, "?": 63, "%": 37}
 
 OPS = [
@@ -515,6 +516,32 @@ TEMPLATES = [
     ("AFFINE_FORM", "# takes integer constant parameters and signal name operands", ["TOKEN"]),
     ("AFFINE_TOP", "# can only be used in the top-level process", ["TOKEN"]),
     ("PARTIAL_TUPLE", "tuple partial definitions are not supported", []),
+    ("FIELD_UNKNOWN", "# has no field #", ["NAME", "NAME"]),
+    ("NOT_TUPLE", "# is not a tuple and has no field #", ["NAME", "NAME"]),
+    ("BUNDLE_ELEMENT", "an array element cannot be a bundle", []),
+    ("TUPLE_EXPRESSION", "tuple # is used where a scalar is expected", ["NAME"]),
+    ("TUPLE_SHAPE", "the tuple has # components but # has #", ["NUMBER", "NAME", "NUMBER"]),
+    ("TUPLE_CALL", "# returns a tuple and must be the whole definition", ["NAME"]),
+    ("TUPLE_EFFECT", "tuple # cannot be an operand of #", ["NAME", "NAME"]),
+    ("TUPLE_DEPTH", "a tuple type is nested more than 4 levels", []),
+    ("BUNDLE_CLOCK", "bundle # has no clock", ["NAME"]),
+    ("TUPLE_INIT", "a tuple signal cannot have an initial value", []),
+    ("STRUCT_ORDER", "operator <<= is not defined on struct #", ["NAME"]),
+    ("TUPLE_PLACE", "a tuple type cannot be used here", []),
+    ("BUNDLE_FIELD", "a bundle cannot be the type of a field", []),
+    ("TUPLE_VALUE", "a tuple value is used where a scalar is expected", []),
+    ("TUPLE_SPREAD", "# cannot be called inside a tuple expression", ["NAME"]),
+    ("FIELD_TWICE", "field # is declared twice", ["NAME"]),
+    ("TUPLE_FIELD_ARRAY", "a field of tuple type cannot be an array", []),
+    ("TUPLE_EMPTY", "a tuple type needs at least one field", []),
+    ("FIELD_ACCESS", "a field can only be selected from a signal name", []),
+    ("TUPLE_FORWARD", "tuple type # is used before its declaration", ["NAME"]),
+    ("TUPLE_KIND_MIX", "# and # are not the same kind of tuple", ["NAME", "NAME"]),
+    ("SPEC_FIELD", "# in a spec is not a field of the bundle", ["NAME"]),
+    ("STRUCT_ELEMENT_EQUAL", "== on elements of an array of structs is not supported", []),
+    ("TUPLE_DELAY_INIT", "init on a delay of a tuple is accepted only for $ 1", []),
+    ("STRUCT_ELEMENT_TARGET", "an element of # is a tuple and cannot be a target; define its fields, as in #.F[I] := E", ["NAME", "NAME"]),
+    ("TUPLE_ARGUMENT", "a tuple value cannot be an argument of #", ["NAME"]),
     ("PARTIAL_MIXED", "# has both := and ::= definitions", ["FLAT"]),
     ("PARTIAL_TWO_DEFAULTS", "# has two defaultvalue definitions", ["FLAT"]),
     ("PARTIAL_CONSTANT", "partial definition of # is a constant", ["FLAT"]),
@@ -586,6 +613,7 @@ CAPACITY_TABLES = [
     "OUTPUT", "INSTANCES", "INSTANTIATE", "LOOKUPS", "ROWS", "ROW_DEPENDENCES", "SEGMENTS", "LOWER",
     "CLOCKS", "DEFINITIONS", "OBLIGATIONS", "BDD", "CLOCK_NAMES", "CLOCK_TEXT", "CLOCK_SORT",
     "EDGES", "SCHEDULE_NODES", "EFFECTS", "EFFECT_ORDER", "SPLIT", "UNITS", "MICRO_OPS", "CODE", "CODE_LABELS", "DATA", "CODE_TEXT",
+    "TUPLES",
 ]
 NAMED_FRAGMENTS = [
     ("COLON", ":"), ("ERROR_SEPARATOR", ": error: "), ("ERROR_WORD", "error "), ("SPACE", " "),

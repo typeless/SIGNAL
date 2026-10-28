@@ -1,0 +1,1 @@
+struct_partial_disagree.sig:10:16: error: partial definitions of S.A may coincide

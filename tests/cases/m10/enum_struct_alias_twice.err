@@ -1,0 +1,1 @@
+enum_struct_alias_twice.sig:9:10: error: type POINT is declared twice

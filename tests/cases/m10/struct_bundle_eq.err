@@ -1,0 +1,1 @@
+struct_bundle_eq.sig:6:11: error: S and B are not the same kind of tuple

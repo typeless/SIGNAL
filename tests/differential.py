@@ -1359,6 +1359,233 @@ def m10b(compiler, seeds, jobs):
     print(f"{len(seeds) - failures} seeds passed, {failures} failed")
     return 1 if failures else 0
 
+def show(value):
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+class M10cField:
+    def __init__(self, rng, name, kind):
+        self.name = name
+        self.kind = kind
+        if kind == "integer":
+            self.factor, self.offset = rng.randrange(-5, 6), rng.randrange(-20, 21)
+            self.text = f"N * {self.factor} + {self.offset}"
+        else:
+            self.modulus = rng.randrange(2, 5)
+            self.residue = rng.randrange(self.modulus)
+            self.text = f"N modulo {self.modulus} = {self.residue}"
+
+    def value(self, n):
+        if self.kind == "integer":
+            return n * self.factor + self.offset
+        return n % self.modulus == self.residue
+
+
+class M10cNested:
+    def __init__(self, rng, depth):
+        self.types = []
+        self.leaves = []
+        self.texts = self.build(rng, 1, depth, [])
+
+    def build(self, rng, level, depth, path):
+        names = rng.sample(["A", "B", "AB", "BA", "C"], rng.randrange(1, 4) if level < depth else rng.randrange(1, 3))
+        nested = rng.randrange(len(names)) if level < depth else -1
+        fields = []
+        for position, name in enumerate(names):
+            if position == nested:
+                inner = self.build(rng, level + 1, depth, path + [name])
+                if rng.randrange(2):
+                    fields.append(f"{inner} {name};")
+                else:
+                    type_name = f"NT{level + 1}"
+                    self.types.append(f"type {type_name} = {inner};")
+                    fields.append(f"{type_name} {name};")
+            else:
+                self.leaves.append((".".join(path + [name]), rng.randrange(-9, 10), rng.randrange(-30, 31)))
+                fields.append(f"integer {name};")
+        return f"struct ({' '.join(fields)})"
+
+
+class M10cProgram:
+    def __init__(self, seed):
+        rng = random.Random(seed)
+        names = rng.sample(["A", "B", "C", "AB", "BC", "D"], rng.randrange(1, 5))
+        self.fields = [M10cField(rng, name, rng.choice(["integer", "boolean"])) for name in names]
+        self.made = [M10cField(rng, field.name, field.kind) for field in self.fields]
+        self.changed = rng.randrange(len(self.fields))
+        self.offset = rng.randrange(-9, 10)
+        self.partial_modulus = rng.randrange(2, 6)
+        residues = list(range(self.partial_modulus))
+        rng.shuffle(residues)
+        covered = residues[:rng.randrange(1, self.partial_modulus + 1)]
+        self.branches = []
+        while covered:
+            size = rng.randrange(1, len(covered) + 1)
+            values = [rng.randrange(1, 50) if field.kind == "integer" else rng.randrange(2) for field in self.fields]
+            self.branches.append((sorted(covered[:size]), values, rng.randrange(2)))
+            covered = covered[size:]
+        self.otherwise = ([rng.randrange(-99, 100) if field.kind == "integer" else bool(rng.randrange(2)) for field in self.fields]
+                          if rng.randrange(2) else None)
+        self.otherwise_listed = rng.randrange(2)
+        self.bundle = [(f"P{position}", rng.choice(["", " when E", " when not E"]), rng.randrange(-5, 6), rng.randrange(-20, 21))
+                       for position in range(1, rng.randrange(2, 4))]
+        self.exclusive = (len(self.bundle) >= 2 and {self.bundle[0][1], self.bundle[1][1]} == {" when E", " when not E"}
+                          and rng.randrange(2))
+        self.arith = [(f"G{position}", rng.randrange(-9, 10)) for position in range(1, rng.randrange(2, 5))]
+        self.broadcast = rng.randrange(-9, 10)
+        self.nested = M10cNested(rng, rng.randrange(1, 5))
+        self.elements = rng.randrange(2, 4)
+        self.array = [[M10cField(rng, field.name, field.kind) for _ in range(self.elements)] for field in self.fields]
+        self.picked = rng.randrange(self.elements)
+        self.initial = [rng.randrange(0, 21) if field.kind == "integer" else bool(rng.randrange(2)) for field in self.fields]
+
+    def tuple_text(self, parts):
+        return f"({', '.join(parts)})"
+
+    def branch_text(self, values, listed):
+        parts = [f"N * {value}" if field.kind == "integer" else ("true" if value else "false")
+                 for field, value in zip(self.fields, values)]
+        target = self.tuple_text([f"T.{field.name}" for field in self.fields]) if listed else "T"
+        return target, self.tuple_text(parts)
+
+    def held(self):
+        held = [0 if field.kind == "integer" else False for field in self.fields]
+        rows = []
+        for tick in range(1, TICKS + 1):
+            picked = [(values, listed) for group, values, listed in self.branches if tick % self.partial_modulus in group]
+            if picked:
+                held = [tick * value if field.kind == "integer" else bool(value) for field, value in zip(self.fields, picked[0][0])]
+            elif self.otherwise is not None:
+                held = list(self.otherwise)
+            rows.append(list(held))
+        return rows
+
+    def expected(self):
+        rows = self.held()
+        lines = []
+        for tick in range(1, TICKS + 1):
+            even = tick % 2 == 0
+            x = [field.value(tick) for field in self.fields]
+            z = [field.value(tick) for field in self.made]
+            bundle_present = [condition == "" or (condition == " when E") == even for _, condition, _, _ in self.bundle]
+            left = [tick * factor for _, _, factor, _ in self.bundle]
+            right = [offset for _, _, _, offset in self.bundle]
+            values = [*x, True, even, sum(int(value) for value in z), *z, *rows[tick - 1], tick + self.offset, 2 * tick,
+                      *[a <= b if present else None for a, b, present in zip(left, right, bundle_present)],
+                      *[a == b if present else None for a, b, present in zip(left, right, bundle_present)],
+                      *[(tick + shift) * (tick + shift) - self.broadcast for _, shift in self.arith],
+                      *[tick * factor + offset for _, factor, offset in self.nested.leaves]]
+            element = [column[self.picked].value(tick) for column in self.array]
+            delayed = self.initial if tick == 1 else [field.value(tick - 1) for field in self.fields]
+            values += [*[cell.value(tick) for column in self.array for cell in column], *element, *delayed,
+                       *[value if even else None for value in x], *(x if even else element)]
+            lines.append(" ".join(map(show, values)))
+        width = len(lines[0].split()) - (self.elements - 1) * len(self.fields)
+        return [" ".join(["-"] * width)] + lines
+
+    def source(self, machine):
+        declared = "; ".join(f"{field.kind} {field.name}" for field in self.fields)
+        spec = " spec (| P1 ^# P2 |)" if self.exclusive else ""
+        bundle_fields = "; ".join(f"integer {name}" for name, _, _, _ in self.bundle)
+        flags = "; ".join(f"boolean {name}" for name, _, _, _ in self.bundle)
+        arith = "; ".join(f"integer {name}" for name, _ in self.arith)
+        types = [f"type ST = struct ({declared};);", f"type BT = bundle ({bundle_fields};){spec};", f"type BB = bundle ({flags};);",
+                 f"type ST2 = struct ({arith};);", *self.nested.types, f"type NT1 = {self.nested.texts};"]
+        changed = self.fields[self.changed]
+        other = f"S.{changed.name} + 1" if changed.kind == "integer" else f"not S.{changed.name}"
+        y_parts = [f"(if N modulo 2 = 0 then S.{field.name} else {other})" if position == self.changed else f"S.{field.name}"
+                   for position, field in enumerate(self.fields)]
+        made = [field.text.replace("N", "I") for field in self.made]
+        summed = " + ".join(f"U.{field.name}" if field.kind == "integer" else f"(if U.{field.name} then 1 else 0)"
+                            for field in self.made)
+        arms = []
+        for group, values, listed in self.branches:
+            target, value = self.branch_text(values, listed)
+            arms.append(f"{{{', '.join(map(str, group))}}}: {target} ::= {value}")
+        if self.otherwise is not None:
+            parts = [str(value) if field.kind == "integer" else show(value) for field, value in zip(self.fields, self.otherwise)]
+            target = self.tuple_text([f"T.{field.name}" for field in self.fields]) if self.otherwise_listed else "T"
+            arms.append(f"else {target} ::= {self.tuple_text(parts)} when ^N")
+        body = ["N := ZN + 1", "ZN := N $ init 0", "N ^= TICK", "E := N modulo 2 = 0"]
+        body += [f"S.{field.name} := {field.text}" for field in self.fields]
+        body += [f"X := {self.tuple_text([f'S.{field.name}' for field in self.fields])}", "EQ := X == S",
+                 f"Y := {self.tuple_text(y_parts)}", "NE := Y == S", "Z := MK(N)", "W := SUM(Z)",
+                 f"K := N modulo {self.partial_modulus}", "\n       ".join(["case K in", *arms]) + "\n     end",
+                 f"T.{self.fields[0].name} ^= N", "TT := T", f"(P, Q) := (N + {self.offset}, TWICE(N))",
+                 f"BU := {self.tuple_text([f'N * {factor}{condition}' for _, condition, factor, _ in self.bundle])}",
+                 f"BV := {self.tuple_text([f'{offset} when ^N{condition}' for _, condition, _, offset in self.bundle])}",
+                 "L := BU <<= BV", "M := BU == BV",
+                 f"GA := {self.tuple_text([f'N + {shift}' for _, shift in self.arith])}", f"H := GA * GA - {self.broadcast}",
+                 *[f"NX.{path} := N * {factor} + {offset}" for path, factor, offset in self.nested.leaves],
+                 *[f"AR.{column[0].name} := [{', '.join(cell.text for cell in column)}]" for column in self.array],
+                 f"AE := AR[{self.picked}]",
+                 f"DL := S $ 1 init {self.tuple_text([show(value) for value in self.initial]) if len(self.fields) > 1 else show(self.initial[0])}",
+                 "WS := S when E", "WD := (S when E) default AE"]
+        declarations = [*types, "integer ZN, N, K;", "boolean E;", "ST S, Y;", "shared ST T;", "BT BU, BV;", "ST2 GA;",
+                        f"function MK = ( ? integer I; ! ST V; ) (| V := {self.tuple_text(made)} |);",
+                        f"function SUM = ( ? ST U; ! integer R; ) (| R := {summed} |);",
+                        "function TWICE = ( ? integer I; ! integer O; ) (| O := I * 2 |);"]
+        lines = ["process M10C =", "  ( ? event START, TICK;",
+                 f"    ! ST X; boolean EQ, NE; integer W; ST Z, TT; integer P, Q; BB L, M; ST2 H; NT1 NX; [{self.elements}] ST AR;",
+                 "      ST AE, DL, WS, WD; )"]
+        if machine:
+            lines.append(MACHINE_PRAGMAS.rstrip("\n"))
+        lines.append("  (| " + "\n   | ".join(body))
+        if machine:
+            lines.append(SYSTICK_BODY.rstrip("\n"))
+        lines.append("   |)")
+        lines.append("  where")
+        lines += [f"    {declaration}" for declaration in declarations]
+        if machine:
+            lines.append(SYSTICK_DECLARATIONS.rstrip("\n"))
+        lines.append("  end;")
+        return "\n".join(lines) + "\n"
+
+
+def check_m10c(compiler, seed):
+    program = M10cProgram(seed)
+    directory = BUILD / "m10c" / str(seed)
+    directory.mkdir(parents=True, exist_ok=True)
+    expected = program.expected()
+    report = []
+    for variant, machine in (("macos", False), ("mps2", True)):
+        source = directory / f"{variant}.sig"
+        source.write_text(program.source(machine))
+        executable = directory / variant
+        compiled = compile_case(compiler, source, executable)
+        if compiled.returncode != 0:
+            report.append(f"{source}: compile failed (exit {compiled.returncode}): {compiled.stderr.strip()}")
+            continue
+        input_path = directory / f"{variant}.in"
+        if machine:
+            input_path.unlink(missing_ok=True)
+            command = [*QEMU_COMMANDS["mps2-an385"], str(executable)]
+        else:
+            input_path.write_text("10\n" + "01\n" * TICKS)
+            command = [str(executable)]
+        lines, timed_out, returncode = read_trace(command, TICKS + 1, input_path)
+        if lines != expected:
+            report.append(f"{source}: trace {lines!r}, expected {expected!r}")
+    return report
+
+
+def m10c(compiler, seeds, jobs):
+    print(f"m10c seeds: {' '.join(map(str, seeds))}")
+    failures = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for seed, report in zip(seeds, pool.map(lambda seed: check_m10c([str(compiler)], seed), seeds)):
+            if report:
+                failures += 1
+                print(f"FAIL seed {seed}")
+                for line in report:
+                    print(f"  {line}")
+    print(f"{len(seeds) - failures} seeds passed, {failures} failed")
+    return 1 if failures else 0
+
 def check(compiler, seed):
     program = Program(seed)
     directory = BUILD / str(seed)
@@ -1516,7 +1743,7 @@ def main():
         if arguments != ["m9a"]:
             sys.exit("--against requires the method m9a")
         return m9a(compiler, against, jobs)
-    methods = {"m9b": m9b, "m9c": m9c, "m10a": m10a, "m10b": m10b}
+    methods = {"m9b": m9b, "m9c": m9c, "m10a": m10a, "m10b": m10b, "m10c": m10c}
     method = methods.get(arguments[0]) if arguments else None
     if method:
         del arguments[0]

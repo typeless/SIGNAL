@@ -1,0 +1,1 @@
+struct_element_eq.sig:8:11: error: == on elements of an array of structs is not supported

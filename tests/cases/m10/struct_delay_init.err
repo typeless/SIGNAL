@@ -1,0 +1,1 @@
+struct_delay_init.sig:5:13: error: init on a delay of a tuple is accepted only for $ 1

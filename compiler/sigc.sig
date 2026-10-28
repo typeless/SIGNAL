@@ -169,7 +169,7 @@ process SIGC =
         | TRIPLE_SLOT := TRIPLE_ROW[BYTE] * TRIPLE_WIDTH + TRIPLE_COLUMN[NEXT_BYTE]
         | SYMBOL_LENGTH := if TRIPLE_CODE[TRIPLE_SLOT] /= 0 and TRIPLE_THIRD[TRIPLE_SLOT] = integer(SRC[LEX_INDEX + 2]) then 3
                            else if PAIR_CODE[PAIR_ROW[BYTE] * PAIR_WIDTH + PAIR_COLUMN[NEXT_BYTE]] /= 0 then 2
-                           else if CLASS = CLASS_SYMBOL then 1 else 0
+                           else if CLASS = CLASS_SYMBOL or CLASS = CLASS_DOT then 1 else 0
         | OPENED_KIND := if AT_EOF then KIND_EOF else if AT_END then KIND_NONE else OPENED_KIND_OF_CLASS[CLASS]
         | OPENS_TOKEN := STARTS and OPENED_KIND /= KIND_NONE
         | REMAINING := if STARTS then SYMBOL_LENGTH - 1 else REMAINING[?] - 1
@@ -222,7 +222,7 @@ process SIGC =
         | OPEN_LINE := if STARTS then LINE[?] else OPEN_LINE[?]
         | OPEN_COLUMN := if STARTS then COLUMN else OPEN_COLUMN[?]
         | OPEN_KIND := if STARTS then OPENED_KIND else OPEN_KIND[?]
-        | PENDING := if STARTS then (if OPENS_TOKEN then TOKEN_COUNT[?] else -1) else PENDING[?]
+        | PENDING := if STARTS then (if OPENS_TOKEN then RAW_TOKEN_COUNT[?] else -1) else PENDING[?]
         | LETTER := LETTER_VALUE[BYTE]
         | KEY := if STARTS then ulong(LETTER) else KEY[?] * ulong(32) + ulong(LETTER)
         | NOT_ALL_LETTERS := not STARTS and NOT_ALL_LETTERS[?] or LETTER = 0
@@ -233,19 +233,23 @@ process SIGC =
                         and KEYWORD_KEYS[integer(KEY[?] modulo ulong(KEYWORD_MODULUS))] = KEY[?]
                         and not (HAS_LOWER[?] and HAS_UPPER[?])
         | FINISHED_SLOT := if STARTS then PENDING[?] else -1
-        | TOKEN_KIND := TOKEN_KIND[?] next FINISHED_SLOT : ubyte(if IS_KEYWORD then KIND_KEYWORD else OPEN_KIND[?])
-        | TOKEN_LENGTH := TOKEN_LENGTH[?] next FINISHED_SLOT : FINISHED_LENGTH
-        | OPENED_SLOT := if OPENS_TOKEN then TOKEN_COUNT[?] else -1
-        | TOKEN_START := TOKEN_START[?] next OPENED_SLOT : LEX_INDEX
-        | TOKEN_LINE := TOKEN_LINE[?] next OPENED_SLOT : LINE[?]
-        | TOKEN_COLUMN := TOKEN_COLUMN[?] next OPENED_SLOT : COLUMN
-        | TOKEN_COUNT := TOKEN_COUNT[?] + integer(OPENS_TOKEN)
+        | RAW_TOKEN_KIND := RAW_TOKEN_KIND[?] next FINISHED_SLOT : ubyte(if IS_KEYWORD then KIND_KEYWORD else OPEN_KIND[?])
+        | RAW_TOKEN_LENGTH := RAW_TOKEN_LENGTH[?] next FINISHED_SLOT : FINISHED_LENGTH
+        | OPENED_SLOT := if OPENS_TOKEN then RAW_TOKEN_COUNT[?] else -1
+        | RAW_TOKEN_START := RAW_TOKEN_START[?] next OPENED_SLOT : LEX_INDEX
+        | RAW_TOKEN_LINE := RAW_TOKEN_LINE[?] next OPENED_SLOT : LINE[?]
+        | RAW_TOKEN_COLUMN := RAW_TOKEN_COLUMN[?] next OPENED_SLOT : COLUMN
+        | RAW_TOKEN_COUNT := RAW_TOKEN_COUNT[?] + integer(OPENS_TOKEN)
         | UNCLOSED := AT_EOF and (PREVIOUS_MODE = MODE_COMMENT or PREVIOUS_MODE = MODE_STRING)
                       or CONTINUES and PREVIOUS_MODE = MODE_STRING and (BYTE = ubyte(10) or BYTE = ubyte(13))
-        | UNEXPECTED := STARTS and not AT_END and (CLASS = CLASS_INVALID or CLASS = CLASS_DOT and SYMBOL_LENGTH < 2)
+        | UNEXPECTED := STARTS and not AT_END
+                        and (CLASS = CLASS_INVALID
+                             or CLASS = CLASS_DOT and SYMBOL_LENGTH < 2
+                                and not ((PREVIOUS_MODE = MODE_NAME or LEX_INDEX > 0 and SRC[LEX_INDEX - 1] = ubyte(93))
+                                         and CHARACTER_CLASS[NEXT_BYTE] = CLASS_LETTER))
         | FOUND := if UNEXPECTED or UNCLOSED then ERROR_UNEXPECTED
                    else if ESCAPE_UNKNOWN then ERROR_ESCAPE else if ESCAPE_TOO_BIG then ERROR_ESCAPE_RANGE
-                   else if OPENS_TOKEN and TOKEN_COUNT[?] >= TOKEN_CAP then ERROR_TOKENS else ERROR_NONE
+                   else if OPENS_TOKEN and RAW_TOKEN_COUNT[?] >= TOKEN_CAP then ERROR_TOKENS else ERROR_NONE
         | FIRST_FOUND := LEX_ERROR[?] = ERROR_NONE and FOUND /= ERROR_NONE
         | LEX_ERROR := if FIRST_FOUND then FOUND else LEX_ERROR[?]
         | IN_ESCAPE := FOUND = ERROR_ESCAPE or FOUND = ERROR_ESCAPE_RANGE
@@ -256,11 +260,11 @@ process SIGC =
         | LEX_ERROR_AT := if not FIRST_FOUND then LEX_ERROR_AT[?] else if UNCLOSED then OPEN_AT[?]
                           else if IN_ESCAPE then ESCAPE_AT + 1 else LEX_INDEX
         | LEX_ERROR_VALUE := if FIRST_FOUND then SEQUENCE_VALUE else LEX_ERROR_VALUE[?]
-        | TOKEN_TEXT := TOKEN_TEXT[?] next OPENED_SLOT : STRING_FILL[?]
+        | RAW_TOKEN_TEXT := RAW_TOKEN_TEXT[?] next OPENED_SLOT : STRING_FILL[?]
         |)
      with (| MODE := MODE_IDLE | REMAINING := 0 | CODE_POINTS := 0 | LINE_START := 0 | LINE := 1
            | OPEN_AT := 0 | OPEN_LINE := 1 | OPEN_COLUMN := 1 | OPEN_KIND := KIND_NONE | PENDING := -1
-           | KEY := ulong(0) | NOT_ALL_LETTERS := false | HAS_LOWER := false | HAS_UPPER := false | TOKEN_COUNT := 0
+           | KEY := ulong(0) | NOT_ALL_LETTERS := false | HAS_LOWER := false | HAS_UPPER := false | RAW_TOKEN_COUNT := 0
            | LEX_ERROR := ERROR_NONE | LEX_ERROR_LINE := 0 | LEX_ERROR_COLUMN := 0 | LEX_ERROR_AT := 0
            | ESCAPED := false | SEQUENCE := SEQUENCE_NONE | SEQUENCE_DIGITS := 0 | SEQUENCE_VALUE := 0 | STRING_FILL := 0
            | ESCAPE_AT := 0 | ESCAPE_LINE := 0 | ESCAPE_COLUMN := 0 | LEX_ERROR_VALUE := 0 |)
@@ -270,11 +274,11 @@ process SIGC =
    | iterate INTERN_INDEX of
        (| IN_SEED := INTERN_INDEX < SEED_LENGTH
         | SOURCE_AT := INTERN_INDEX - SEED_LENGTH
-        | CURSOR_ENDED := not IN_SEED and SOURCE_AT >= TOKEN_START[CURSOR[?]] + TOKEN_LENGTH[CURSOR[?]] and CURSOR[?] < TOKEN_COUNT - 1
+        | CURSOR_ENDED := not IN_SEED and SOURCE_AT >= RAW_TOKEN_START[CURSOR[?]] + RAW_TOKEN_LENGTH[CURSOR[?]] and CURSOR[?] < RAW_TOKEN_COUNT - 1
         | CURSOR := if CURSOR_ENDED then CURSOR[?] + 1 else CURSOR[?]
-        | CURSOR_START := TOKEN_START[CURSOR]
-        | CURSOR_LENGTH := TOKEN_LENGTH[CURSOR]
-        | CURSOR_KIND := integer(TOKEN_KIND[CURSOR])
+        | CURSOR_START := RAW_TOKEN_START[CURSOR]
+        | CURSOR_LENGTH := RAW_TOKEN_LENGTH[CURSOR]
+        | CURSOR_KIND := integer(RAW_TOKEN_KIND[CURSOR])
         | IN_TOKEN := not IN_SEED and SOURCE_AT >= CURSOR_START and SOURCE_AT < CURSOR_START + CURSOR_LENGTH
         | TOKEN_BEGINS := IN_TOKEN and SOURCE_AT = CURSOR_START
         | TOKEN_ENDS := IN_TOKEN and SOURCE_AT = CURSOR_START + CURSOR_LENGTH - 1
@@ -301,7 +305,7 @@ process SIGC =
         | NAME_COUNT := NAME_COUNT[?] + integer(NEW_NAME)
         | NAME_AT := NAME_AT[?] next (if NEW_NAME then NAME_COUNT[?] else -1) : NAME_BEGIN
         | NAME_LENGTH := NAME_LENGTH[?] next (if NEW_NAME then NAME_COUNT[?] else -1) : INTERN_INDEX - NAME_BEGIN + 1
-        | TOKEN_NAME := TOKEN_NAME[?] next (if NAME_ENDS and IN_TOKEN then CURSOR else -1) : NAME_ID + 1
+        | RAW_TOKEN_NAME := RAW_TOKEN_NAME[?] next (if NAME_ENDS and IN_TOKEN then CURSOR else -1) : NAME_ID + 1
         | SYMBOL_CODE := if CURSOR_LENGTH = 3 then TRIPLE_CODE[TRIPLE_ROW[NAME_BYTE] * TRIPLE_WIDTH + TRIPLE_COLUMN[SRC[SOURCE_AT + 1]]]
                          else if CURSOR_LENGTH = 2 then PAIR_CODE[PAIR_ROW[NAME_BYTE] * PAIR_WIDTH + PAIR_COLUMN[SRC[SOURCE_AT + 1]]]
                          else SINGLE_SYMBOL[NAME_BYTE]
@@ -309,22 +313,1328 @@ process SIGC =
                         else if CURSOR_KIND = KIND_SYMBOL then SYMBOL_CODE else if CURSOR_KIND = KIND_NUMBER then C_NUMBER
                         else C_STRING
         | CODE_SLOT := if NAMEISH and TOKEN_ENDS or not NAMEISH and TOKEN_BEGINS then CURSOR else -1
-        | TOKEN_CODE := TOKEN_CODE[?] next CODE_SLOT : ubyte(CODE_VALUE)
+        | RAW_TOKEN_CODE := RAW_TOKEN_CODE[?] next CODE_SLOT : ubyte(CODE_VALUE)
         | DIGIT_VALUE := ulong(NAME_BYTE) - ulong(48)
         | ACCUMULATED := if TOKEN_BEGINS then DIGIT_VALUE else ACCUMULATED[?] * ulong(10) + DIGIT_VALUE
         | TOO_BIG := not TOKEN_BEGINS and (TOO_BIG[?] or ACCUMULATED[?] > ulong(922337203685477580))
                      or ACCUMULATED > ulong(9223372036854775807)
         | VALUE_SLOT := if TOKEN_ENDS and CURSOR_KIND = KIND_NUMBER then CURSOR else -1
-        | TOKEN_VALUE := TOKEN_VALUE[?] next VALUE_SLOT : long(ACCUMULATED)
-        | TOKEN_BIG := TOKEN_BIG[?] next VALUE_SLOT : TOO_BIG or CURSOR_LENGTH > 20
+        | RAW_TOKEN_VALUE := RAW_TOKEN_VALUE[?] next VALUE_SLOT : long(ACCUMULATED)
+        | RAW_TOKEN_BIG := RAW_TOKEN_BIG[?] next VALUE_SLOT : TOO_BIG or CURSOR_LENGTH > 20
         | INTERN_OVERFLOWS := TRIE_CREATES and TRIE_NODE_COUNT[?] >= TRIE_NODE_CAP or NEW_NAME and NAME_COUNT[?] >= NAME_CAP
         | INTERN_ERROR_TOKEN := if INTERN_ERROR_TOKEN[?] < 0 and INTERN_OVERFLOWS then CURSOR else INTERN_ERROR_TOKEN[?]
+        | TUPLE_SEEN := TUPLE_SEEN[?] or CODE_SLOT >= 0 and (CODE_VALUE = C_DOT or CURSOR_KIND = KIND_NAME and (NAME_ID = N_STRUCT or NAME_ID = N_BUNDLE)
+                                                    or CODE_VALUE = C_PARTIAL_DEFINE and integer(RAW_TOKEN_CODE[?][CURSOR - 1]) = C_CLOSE)
         |)
      with (| CURSOR := 0 | TRIE_NODE := 0 | TRIE_NODE_COUNT := 1 | NAME_BEGIN := 0 | NAME_COUNT := 0
-           | ACCUMULATED := ulong(0) | TOO_BIG := false | INTERN_ERROR_TOKEN := -1 |)
+           | ACCUMULATED := ulong(0) | TOO_BIG := false | INTERN_ERROR_TOKEN := -1 | TUPLE_SEEN := false |)
      end
    | INTERNED := LEXED and INTERN_ERROR_TOKEN < 0
-   | PRESCAN_INDEX := 0 .. (if INTERNED then TOKEN_COUNT - 1 else -1)
+   | U_SEEN := INTERNED and TUPLE_SEEN
+   | UB_INDEX := 0 .. (if U_SEEN then RAW_TOKEN_COUNT - 1 else -1)
+   | iterate UB_INDEX of
+       (| UB_CODE := integer(RAW_TOKEN_CODE[UB_INDEX])
+        | UB_OPENS := UB_CODE = C_OPEN or UB_CODE = C_OPEN_BAR or UB_CODE = C_OPEN_BRACKET or UB_CODE = C_OPEN_BRACE
+                      or UB_CODE = C_OPEN_COLON or UB_CODE = C_OPEN_SLASH_COLON
+        | UB_CLOSES := (UB_CODE = C_CLOSE or UB_CODE = C_BAR_CLOSE or UB_CODE = C_CLOSE_BRACKET or UB_CODE = C_CLOSE_BRACE)
+                       and UB_DEPTH[?] > 0
+        | UB_DEPTH := UB_DEPTH[?] + integer(UB_OPENS) - integer(UB_CLOSES)
+        | UB_STACK := UB_STACK[?] next (if UB_OPENS then UB_DEPTH[?] else -1) : UB_INDEX
+        | U_LEVEL := U_LEVEL[?] next UB_INDEX : UB_DEPTH[?] - integer(UB_CLOSES)
+        | UB_OPENER := if UB_CLOSES then UB_STACK[?][UB_DEPTH] else -1
+        | U_CLOSE_OF := U_CLOSE_OF[?] next UB_OPENER : UB_INDEX + 1
+        | U_OPEN_OF := U_OPEN_OF[?] next (if UB_CLOSES then UB_INDEX else -1) : UB_OPENER + 1
+        | U_ENCLOSING := U_ENCLOSING[?] next UB_INDEX : (if UB_DEPTH[?] > 0 then UB_STACK[?][(if UB_DEPTH[?] - 1 >= 0 then UB_DEPTH[?] - 1 else 0)] + 1 else 0)
+        |)
+     with UB_DEPTH := 0
+     end
+   | UP_INDEX := 0 .. (if U_SEEN then RAW_TOKEN_COUNT - 1 else -1)
+   | iterate UP_INDEX of
+       (| UP_C := integer(RAW_TOKEN_CODE[(if (UP_INDEX) >= 0 then (UP_INDEX) else 0)])
+        | UP_N := RAW_TOKEN_NAME[(if (UP_INDEX) >= 0 then (UP_INDEX) else 0)] - 1
+        | UP_L := U_LEVEL[UP_INDEX]
+        | UP_PC := if UP_INDEX > 0 then integer(RAW_TOKEN_CODE[(if (UP_INDEX - 1) >= 0 then (UP_INDEX - 1) else 0)]) else 0
+        | UP_PN := if UP_INDEX > 0 then RAW_TOKEN_NAME[(if (UP_INDEX - 1) >= 0 then (UP_INDEX - 1) else 0)] - 1 else -1
+        | UP_NC := integer(RAW_TOKEN_CODE[(if (UP_INDEX + 1) >= 0 then (UP_INDEX + 1) else 0)])
+        | UP_NN := RAW_TOKEN_NAME[(if (UP_INDEX + 1) >= 0 then (UP_INDEX + 1) else 0)] - 1
+        | UP_NNC := integer(RAW_TOKEN_CODE[(if (UP_INDEX + 2) >= 0 then (UP_INDEX + 2) else 0)])
+        | UP_CLOSE := U_CLOSE_OF[UP_INDEX] - 1
+        | UP_IS_NAME := UP_C = C_NAME
+        | UP_OPENS := UP_C = C_OPEN or UP_C = C_OPEN_BAR or UP_C = C_OPEN_BRACKET or UP_C = C_OPEN_BRACE or UP_C = C_OPEN_COLON
+                    or UP_C = C_OPEN_SLASH_COLON
+        | UP_CLOSES := U_OPEN_OF[UP_INDEX] > 0
+        | UP_F := UP_MF_TOP[?] - 1
+        | UP_FS := if UP_F >= 0 then UP_F else 0
+        | UP_CUR_MODEL := if UP_F >= 0 then UP_MF_MODEL[?][UP_FS] else 0
+        | UP_CUR_LEVEL := if UP_F >= 0 then UP_MF_LEVEL[?][UP_FS] else -2
+        | UP_CUR_WHERE := UP_F >= 0 and UP_MF_WHERE[?][UP_FS]
+        | UP_CUR_BODY := UP_F >= 0 and UP_MF_BODY[?][UP_FS]
+        | UP_CUR_DIR := if UP_F >= 0 then UP_MF_DIR[?][UP_FS] else 0
+        | UP_MODEL_OPENS := MODEL_CLASS[UP_C] = 1 and UP_NC = C_NAME and UP_MF_TOP[?] < U_NEST_CAP and UM_COUNT[?] < MODEL_CAP - 1
+        | UP_AT_MODEL := UP_F >= 0 and UP_L = UP_CUR_LEVEL
+        | UP_WHERE_OPENS := UP_AT_MODEL and UP_C = C_WHERE
+        | UP_WHERE_CLOSES := UP_AT_MODEL and UP_CUR_WHERE and UP_C = C_END and not (UP_NC = C_NAME and UP_NN = N_PRAGMAS)
+        | UP_MODEL_CLOSES := UP_AT_MODEL and not UP_CUR_WHERE and UP_C = C_SEMICOLON
+        | UP_BODY_OPENS := UP_AT_MODEL and not UP_CUR_WHERE and not UP_CUR_BODY and UP_C = C_OPEN_BAR
+                         and not (UP_PC = C_NAME and UP_PN = N_SPEC)
+        | UP_DIR_SETS := UP_F >= 0 and UP_L = UP_CUR_LEVEL + 1 and not UP_CUR_BODY and (UP_C = C_QUESTION or UP_C = C_BANG)
+        | UP_MF_TOP := UP_MF_TOP[?] + integer(UP_MODEL_OPENS) - integer(UP_MODEL_CLOSES)
+        | UP_MODEL_NEW := UM_COUNT[?] + 1
+        | UM_COUNT := UM_COUNT[?] + integer(UP_MODEL_OPENS)
+        | UP_PUSH_SLOT := if UP_MODEL_OPENS then UP_MF_TOP[?] else -1
+        | UP_MF_MODEL := UP_MF_MODEL[?] next UP_PUSH_SLOT : UP_MODEL_NEW
+        | UP_MF_LEVEL := UP_MF_LEVEL[?] next UP_PUSH_SLOT : UP_L
+        | UP_MF_WHERE := UP_MF_WHERE[?] next (if UP_MODEL_OPENS then UP_PUSH_SLOT else if UP_WHERE_OPENS or UP_WHERE_CLOSES then UP_F else -1)
+                       : UP_WHERE_OPENS
+        | UP_MF_BODY := UP_MF_BODY[?] next (if UP_MODEL_OPENS then UP_PUSH_SLOT else if UP_BODY_OPENS then UP_F else -1) : UP_BODY_OPENS
+        | UP_MF_DIR := UP_MF_DIR[?] next (if UP_MODEL_OPENS then UP_PUSH_SLOT else if UP_DIR_SETS then UP_F else -1)
+                     : (if UP_C = C_QUESTION then 1 else if UP_C = C_BANG then 2 else 0)
+        | UM_NAME := UM_NAME[?] next (if UP_MODEL_OPENS then UP_MODEL_NEW else -1) : UP_NN
+        | U_MODEL_OF_NAME := U_MODEL_OF_NAME[?] next (if UP_MODEL_OPENS then UP_NN else -1) : UP_MODEL_NEW
+        | UM_BODY_CLOSE := UM_BODY_CLOSE[?] next (if UP_BODY_OPENS then UP_CUR_MODEL else -1) : UP_CLOSE + 1
+        | U_BODY_CLOSE_MODEL := U_BODY_CLOSE_MODEL[?] next (if UP_BODY_OPENS and UP_CLOSE >= 0 then UP_CLOSE else -1) : UP_CUR_MODEL
+        | U_TOKEN_MODEL := U_TOKEN_MODEL[?] next UP_INDEX : (if UP_MODEL_OPENS then UP_MODEL_NEW else UP_CUR_MODEL)
+        | UP_BOUNDARY_TOKEN := UP_C = C_SEMICOLON or UP_C = C_QUESTION or UP_C = C_BANG or UP_C = C_WHERE
+        | UP_BOUNDARY := UP_BOUNDARY[?] next (if UP_OPENS then UP_L + 1 else if UP_BOUNDARY_TOKEN then UP_L else -1) : UP_INDEX + 1
+        | UP_PREFIX_TOKEN := UP_C = C_SHARED or UP_C = C_OPEN_BRACKET or UP_C = C_CLOSE_BRACKET
+        | UP_LAST_OTHER := UP_LAST_OTHER[?] next (if UP_PREFIX_TOKEN then -1 else UP_L) : UP_INDEX
+        | UP_LAST_BRACKET := UP_LAST_BRACKET[?] next (if UP_C = C_OPEN_BRACKET then UP_L else -1) : UP_INDEX
+        | UP_DECL_START := UP_BOUNDARY[?][UP_L]
+        | UP_PREFIX_OK := UP_LAST_OTHER[?][UP_L] < UP_DECL_START
+        | UP_PREFIX_ARRAY := UP_LAST_BRACKET[?][UP_L] >= UP_DECL_START
+        | UP_DECL_PLACE_OK := UP_F >= 0 and (UP_CUR_WHERE and UP_L = UP_CUR_LEVEL
+                                            or not UP_CUR_BODY and UP_CUR_DIR > 0 and UP_L = UP_CUR_LEVEL + 1)
+        | UP_STRUCT_OPENS := UP_IS_NAME and (UP_N = N_STRUCT or UP_N = N_BUNDLE) and UP_NC = C_OPEN
+        | UP_T := UP_TS_TOP[?] - 1
+        | UP_TS := if UP_T >= 0 then UP_T else 0
+        | UP_TL := if UP_T >= 0 then UP_TS_LEVEL[?][UP_TS] else -2
+        | UP_TYPE_NOW := UP_TS_TYPE[?][UP_TS]
+        | UP_IN_FIELDS := UP_T >= 0 and UP_L = UP_TL + 1
+        | UP_TYPE_CLOSES := UP_T >= 0 and UP_CLOSES and UP_L = UP_TL
+        | UP_FSTATE := UP_TS_STATE[?][UP_TS]
+        | UP_FSTART := UP_TS_FSTART[?][UP_TS] - 1
+        | UP_FNESTED := UP_TS_FNESTED[?][UP_TS] - 1
+        | UP_ALIAS_HERE := if UP_IS_NAME then U_ALIAS[?][(if UP_N >= 0 then UP_N else 0)] - 1 else -1
+        | UP_ALIAS_TYPE_USE := UP_ALIAS_HERE >= 0 and UP_NC = C_NAME
+        | UP_TYPE_FULL := UY_COUNT[?] >= U_TYPE_CAP or UP_TS_TOP[?] >= U_NEST_CAP
+        | UP_PUSHES := UP_STRUCT_OPENS and not UP_TYPE_FULL and (UP_T < 0 or UP_IN_FIELDS and UP_FSTATE = 0)
+        | UP_NEW_TYPE := UY_COUNT[?]
+        | UY_COUNT := UY_COUNT[?] + integer(UP_PUSHES)
+        | UY_KIND := UY_KIND[?] next (if UP_PUSHES then UP_NEW_TYPE else -1) : UP_N = N_BUNDLE
+        | UP_EXPECT_ARRAY := UP_IN_FIELDS and UP_FSTATE = 0 and UP_C = C_OPEN_BRACKET
+        | UP_EXPECT_ALIAS := UP_IN_FIELDS and UP_FSTATE = 0 and UP_ALIAS_TYPE_USE
+        | UP_EXPECT_SCALAR := UP_IN_FIELDS and UP_FSTATE = 0 and not UP_STRUCT_OPENS and not UP_ALIAS_TYPE_USE
+                            and UP_C /= C_OPEN_BRACKET and UP_C /= C_CLOSE_BRACKET and UP_C /= C_SEMICOLON
+        | UP_NAMES_FIELD := UP_IN_FIELDS and UP_FSTATE = 1 and UP_IS_NAME and UP_NC /= C_OPEN_BAR
+        | UP_NAMES_END := UP_IN_FIELDS and UP_FSTATE = 1 and UP_C = C_SEMICOLON
+        | UP_NAMES_BAD := UP_IN_FIELDS and UP_FSTATE = 1 and not UP_IS_NAME and UP_C /= C_COMMA and UP_C /= C_SEMICOLON
+                        and UP_C /= C_OPEN_BAR and UP_C /= C_BAR_CLOSE
+        | UP_FIELD_FULL := UD_COUNT[?] >= U_FIELD_CAP
+        | UP_FIELD_NEW := UD_COUNT[?]
+        | UP_FIELD_ADDS := UP_NAMES_FIELD and not UP_FIELD_FULL
+        | UD_COUNT := UD_COUNT[?] + integer(UP_FIELD_ADDS)
+        | UP_FIELD_LEAVES := if UP_FNESTED >= 0 then UY_LEAF_COUNT[?][(if UP_FNESTED >= 0 then UP_FNESTED else 0)] else 1
+        | UP_FIELD_DEPTH := if UP_FNESTED >= 0 then UY_DEPTH[?][(if UP_FNESTED >= 0 then UP_FNESTED else 0)] else 0
+        | UP_FIELD_TYPELEN := if UP_FNESTED >= 0 then UY_TYPELEN[?][(if UP_FNESTED >= 0 then UP_FNESTED else 0)] else UP_TS_FEND[?][UP_TS] - UP_TS_FSTART[?][UP_TS] + 1
+        | UP_FIELD_SLOT := if UP_FIELD_ADDS then UP_FIELD_NEW else -1
+        | UD_TYPE_OF := UD_TYPE_OF[?] next UP_FIELD_SLOT : UP_TYPE_NOW
+        | UD_NAME := UD_NAME[?] next UP_FIELD_SLOT : UP_N
+        | UD_ORD := UD_ORD[?] next UP_FIELD_SLOT : UP_TS_NFIELDS[?][UP_TS]
+        | UD_NESTED := UD_NESTED[?] next UP_FIELD_SLOT : UP_FNESTED
+        | UD_FSTART := UD_FSTART[?] next UP_FIELD_SLOT : UP_FSTART
+        | UD_FEND := UD_FEND[?] next UP_FIELD_SLOT : UP_TS_FEND[?][UP_TS] - 1
+        | UD_LEAF_OFFSET := UD_LEAF_OFFSET[?] next UP_FIELD_SLOT : UP_TS_LEAVES[?][UP_TS]
+        | UP_FP_H := (if ((UP_TYPE_NOW) * 1031 + (UP_N)) >= 0 then ((UP_TYPE_NOW) * 1031 + (UP_N)) else 0) modulo U_HASH_CAP
+        | UP_FP_E0 := U_FIELD_HASH[?][UP_FP_H + 0] - 1
+        | UP_FP_HIT0 := UP_FP_E0 >= 0 and UD_TYPE_OF[?][(if UP_FP_E0 >= 0 then UP_FP_E0 else 0)] = (UP_TYPE_NOW) and UD_NAME[?][(if UP_FP_E0 >= 0 then UP_FP_E0 else 0)] = (UP_N)
+        | UP_FP_E1 := U_FIELD_HASH[?][UP_FP_H + 1] - 1
+        | UP_FP_HIT1 := UP_FP_E1 >= 0 and UD_TYPE_OF[?][(if UP_FP_E1 >= 0 then UP_FP_E1 else 0)] = (UP_TYPE_NOW) and UD_NAME[?][(if UP_FP_E1 >= 0 then UP_FP_E1 else 0)] = (UP_N)
+        | UP_FP_E2 := U_FIELD_HASH[?][UP_FP_H + 2] - 1
+        | UP_FP_HIT2 := UP_FP_E2 >= 0 and UD_TYPE_OF[?][(if UP_FP_E2 >= 0 then UP_FP_E2 else 0)] = (UP_TYPE_NOW) and UD_NAME[?][(if UP_FP_E2 >= 0 then UP_FP_E2 else 0)] = (UP_N)
+        | UP_FP_E3 := U_FIELD_HASH[?][UP_FP_H + 3] - 1
+        | UP_FP_HIT3 := UP_FP_E3 >= 0 and UD_TYPE_OF[?][(if UP_FP_E3 >= 0 then UP_FP_E3 else 0)] = (UP_TYPE_NOW) and UD_NAME[?][(if UP_FP_E3 >= 0 then UP_FP_E3 else 0)] = (UP_N)
+        | UP_FP_E4 := U_FIELD_HASH[?][UP_FP_H + 4] - 1
+        | UP_FP_HIT4 := UP_FP_E4 >= 0 and UD_TYPE_OF[?][(if UP_FP_E4 >= 0 then UP_FP_E4 else 0)] = (UP_TYPE_NOW) and UD_NAME[?][(if UP_FP_E4 >= 0 then UP_FP_E4 else 0)] = (UP_N)
+        | UP_FP_E5 := U_FIELD_HASH[?][UP_FP_H + 5] - 1
+        | UP_FP_HIT5 := UP_FP_E5 >= 0 and UD_TYPE_OF[?][(if UP_FP_E5 >= 0 then UP_FP_E5 else 0)] = (UP_TYPE_NOW) and UD_NAME[?][(if UP_FP_E5 >= 0 then UP_FP_E5 else 0)] = (UP_N)
+        | UP_FP_E6 := U_FIELD_HASH[?][UP_FP_H + 6] - 1
+        | UP_FP_HIT6 := UP_FP_E6 >= 0 and UD_TYPE_OF[?][(if UP_FP_E6 >= 0 then UP_FP_E6 else 0)] = (UP_TYPE_NOW) and UD_NAME[?][(if UP_FP_E6 >= 0 then UP_FP_E6 else 0)] = (UP_N)
+        | UP_FP_E7 := U_FIELD_HASH[?][UP_FP_H + 7] - 1
+        | UP_FP_HIT7 := UP_FP_E7 >= 0 and UD_TYPE_OF[?][(if UP_FP_E7 >= 0 then UP_FP_E7 else 0)] = (UP_TYPE_NOW) and UD_NAME[?][(if UP_FP_E7 >= 0 then UP_FP_E7 else 0)] = (UP_N)
+        | UP_FP_FOUND := if UP_FP_HIT0 then UP_FP_E0 else if UP_FP_HIT1 then UP_FP_E1 else if UP_FP_HIT2 then UP_FP_E2 else if UP_FP_HIT3 then UP_FP_E3 else if UP_FP_HIT4 then UP_FP_E4 else if UP_FP_HIT5 then UP_FP_E5 else if UP_FP_HIT6 then UP_FP_E6 else if UP_FP_HIT7 then UP_FP_E7 else -1
+        | UP_FP_FREE := if UP_FP_E0 < 0 then UP_FP_H + 0 else if UP_FP_E1 < 0 then UP_FP_H + 1 else if UP_FP_E2 < 0 then UP_FP_H + 2 else if UP_FP_E3 < 0 then UP_FP_H + 3 else if UP_FP_E4 < 0 then UP_FP_H + 4 else if UP_FP_E5 < 0 then UP_FP_H + 5 else if UP_FP_E6 < 0 then UP_FP_H + 6 else if UP_FP_E7 < 0 then UP_FP_H + 7 else -1
+        | UP_FIELD_TWICE := UP_FIELD_ADDS and UP_FP_FOUND >= 0
+        | UP_FIELD_HASH_FULL := UP_FIELD_ADDS and UP_FP_FOUND < 0 and UP_FP_FREE < 0
+        | U_FIELD_HASH := U_FIELD_HASH[?] next (if UP_FIELD_ADDS and UP_FP_FOUND < 0 then UP_FP_FREE else -1) : UP_FIELD_NEW + 1
+        | UP_NESTED_BUNDLE := UP_FIELD_ADDS and UP_FNESTED >= 0 and UY_KIND[?][if UP_FNESTED >= 0 then UP_FNESTED else 0]
+        | UP_NESTED_ARRAY := (UP_PUSHES and UP_T >= 0 or UP_EXPECT_ALIAS) and UP_FSTART >= 0
+        | UP_TC_TYPE := UP_TYPE_NOW
+        | UP_TC_FIELDS := UP_TS_NFIELDS[?][UP_TS]
+        | UP_TC_LEAVES := UP_TS_LEAVES[?][UP_TS]
+        | UP_TC_DEPTH := UP_TS_DEPTH[?][UP_TS] + 1
+        | UP_TC_SLOT := if UP_TYPE_CLOSES then UP_TC_TYPE else -1
+        | UY_FIELD_COUNT := UY_FIELD_COUNT[?] next UP_TC_SLOT : UP_TC_FIELDS
+        | UY_LEAF_COUNT := UY_LEAF_COUNT[?] next UP_TC_SLOT : UP_TC_LEAVES
+        | UY_DEPTH := UY_DEPTH[?] next UP_TC_SLOT : UP_TC_DEPTH
+        | UY_TYPELEN := UY_TYPELEN[?] next UP_TC_SLOT : UP_TS_TYPELEN[?][UP_TS]
+        | UY_FIELD_BASE := UY_FIELD_BASE[?] next UP_TC_SLOT : UP_FIELD_SLOTS[?]
+        | UY_LEAF_BASE := UY_LEAF_BASE[?] next UP_TC_SLOT : UP_LEAF_SLOTS[?]
+        | UP_FIELD_SLOTS := UP_FIELD_SLOTS[?] + (if UP_TYPE_CLOSES then UP_TC_FIELDS else 0)
+        | UP_LEAF_SLOTS := UP_LEAF_SLOTS[?] + (if UP_TYPE_CLOSES then UP_TC_LEAVES else 0)
+        | UY_CLOSE_ORDER := UY_CLOSE_ORDER[?] next (if UP_TYPE_CLOSES then UP_CLOSED[?] else -1) : UP_TC_TYPE
+        | UP_CLOSED := UP_CLOSED[?] + integer(UP_TYPE_CLOSES)
+        | UP_OUTER_CLOSES := UP_TYPE_CLOSES and UP_T = 0
+        | UP_SPEC_AT := if UP_OUTER_CLOSES and UP_NC = C_NAME and UP_NN = N_SPEC and UP_NNC = C_OPEN_BAR then UP_INDEX + 2 else -1
+        | UP_SPEC_CLOSE := if UP_SPEC_AT >= 0 then U_CLOSE_OF[UP_SPEC_AT] - 1 else -1
+        | UY_SPEC_OPEN := UY_SPEC_OPEN[?] next UP_TC_SLOT : UP_SPEC_AT + 1
+        | UP_AFTER_TYPE := if UP_SPEC_AT >= 0 then UP_SPEC_CLOSE + 1 else UP_INDEX + 1
+        | UP_TS_TOP := UP_TS_TOP[?] + integer(UP_PUSHES) - integer(UP_TYPE_CLOSES)
+        | UP_TS_TYPE := UP_TS_TYPE[?] next (if UP_PUSHES then UP_TS_TOP[?] else -1) : UP_NEW_TYPE
+        | UP_TS_LEVEL := UP_TS_LEVEL[?] next (if UP_PUSHES then UP_TS_TOP[?] else -1) : UP_L
+        | UP_FS_SLOT := if UP_TYPE_CLOSES or UP_EXPECT_ALIAS or UP_EXPECT_SCALAR or UP_NAMES_END or UP_PUSHES and UP_T >= 0 then UP_T else -1
+        | UP_TS_STATE := UP_TS_STATE[?] next UP_FS_SLOT : (if UP_TYPE_CLOSES or UP_NAMES_END then 0 else 1)
+        | UP_TS_FNESTED := UP_TS_FNESTED[?] next UP_FS_SLOT
+                         : (if UP_PUSHES then UP_NEW_TYPE + 1 else if UP_EXPECT_ALIAS then UP_ALIAS_HERE + 1 else 0)
+        | UP_TS_FSTART := UP_TS_FSTART[?] next (if UP_EXPECT_ARRAY and UP_FSTART < 0 or UP_FS_SLOT >= 0 then UP_T else -1)
+                        : (if UP_EXPECT_ARRAY or UP_EXPECT_SCALAR and UP_FSTART < 0 then UP_INDEX + 1
+                           else if UP_EXPECT_SCALAR or UP_EXPECT_ALIAS or UP_PUSHES then UP_FSTART + 1 else 0)
+        | UP_TS_FEND := UP_TS_FEND[?] next (if UP_EXPECT_SCALAR or UP_TYPE_CLOSES or UP_NAMES_END then UP_T else -1)
+                      : (if UP_EXPECT_SCALAR then UP_INDEX + 1 else 0)
+        | UP_ACC_SLOT := if UP_FIELD_ADDS or UP_TYPE_CLOSES then UP_T else -1
+        | UP_TS_NFIELDS := UP_TS_NFIELDS[?] next UP_ACC_SLOT : (if UP_TYPE_CLOSES then 0 else UP_TS_NFIELDS[?][UP_TS] + 1)
+        | UP_TS_LEAVES := UP_TS_LEAVES[?] next UP_ACC_SLOT : (if UP_TYPE_CLOSES then 0 else UP_TS_LEAVES[?][UP_TS] + UP_FIELD_LEAVES)
+        | UP_TS_DEPTH := UP_TS_DEPTH[?] next UP_ACC_SLOT
+                       : (if UP_TYPE_CLOSES then 0 else if UP_FIELD_DEPTH > UP_TS_DEPTH[?][UP_TS] then UP_FIELD_DEPTH else UP_TS_DEPTH[?][UP_TS])
+        | UP_TS_TYPELEN := UP_TS_TYPELEN[?] next UP_ACC_SLOT : (if UP_TYPE_CLOSES then 0 else UP_TS_TYPELEN[?][UP_TS] + UP_FIELD_TYPELEN)
+        | UP_ALIAS_DEF := UP_PUSHES and UP_T < 0 and UP_INDEX >= 3 and UP_PC = C_EQUAL and integer(RAW_TOKEN_CODE[(if (UP_INDEX - 2) >= 0 then (UP_INDEX - 2) else 0)]) = C_NAME
+                       and integer(RAW_TOKEN_CODE[(if (UP_INDEX - 3) >= 0 then (UP_INDEX - 3) else 0)]) = C_TYPE
+        | UP_COPY_SHAPE := UP_IS_NAME and UP_T < 0 and UP_ROLE[?] = 0 and UP_INDEX >= 3 and UP_PC = C_EQUAL
+                       and integer(RAW_TOKEN_CODE[(if (UP_INDEX - 2) >= 0 then (UP_INDEX - 2) else 0)]) = C_NAME and integer(RAW_TOKEN_CODE[(if (UP_INDEX - 3) >= 0 then (UP_INDEX - 3) else 0)]) = C_TYPE
+        | UP_ALIAS_COPY := UP_COPY_SHAPE and UP_ALIAS_HERE >= 0
+        | UP_ALIAS_COPY_OK := UP_ALIAS_COPY and UP_NC = C_SEMICOLON
+        | UP_TYPE_NAMED := UP_IS_NAME and UP_PC = C_TYPE and UP_N >= 0
+        | UP_TYPE_TWICE := UP_TYPE_NAMED and U_TYPE_SEEN[?][(if UP_N >= 0 then UP_N else 0)]
+        | U_TYPE_SEEN := U_TYPE_SEEN[?] next (if UP_TYPE_NAMED then UP_N else -1) : true
+        | UP_NAME_DECL := UP_IS_NAME and UP_NC = C_NAME and UP_T < 0 and UP_ROLE[?] = 0 and not UP_COPY_SHAPE and UP_DECL_PLACE_OK
+        | UP_ALIAS_MISPLACED := UP_ALIAS_TYPE_USE and UP_T < 0 and UP_ROLE[?] = 0 and not UP_COPY_SHAPE and not UP_DECL_PLACE_OK
+        | UP_DECL_OPENS := (UP_PUSHES and UP_T < 0 and not UP_ALIAS_DEF or UP_NAME_DECL) and UC_COUNT[?] < U_SIG_CAP
+        | UP_DECL_NEW := UC_COUNT[?]
+        | UC_COUNT := UC_COUNT[?] + integer(UP_DECL_OPENS)
+        | UP_DECL_SLOT := if UP_DECL_OPENS then UP_DECL_NEW else -1
+        | UC_START := UC_START[?] next UP_DECL_SLOT : UP_DECL_START
+        | UC_TYPE_START := UC_TYPE_START[?] next UP_DECL_SLOT : UP_INDEX
+        | UC_TYPE_NAME := UC_TYPE_NAME[?] next UP_DECL_SLOT : (if UP_PUSHES then 0 else UP_N + 1)
+        | UC_PLACE_OK := UC_PLACE_OK[?] next UP_DECL_SLOT : UP_PREFIX_OK and UP_DECL_PLACE_OK
+        | UC_ARRAY := UC_ARRAY[?] next UP_DECL_SLOT : UP_PREFIX_ARRAY
+        | UC_DIR := UC_DIR[?] next UP_DECL_SLOT : (if UP_CUR_WHERE then 0 else UP_CUR_DIR)
+        | UC_MODEL := UC_MODEL[?] next UP_DECL_SLOT : UP_CUR_MODEL
+        | U_DECL_AT := U_DECL_AT[?] next (if UP_DECL_OPENS then UP_DECL_START else -1) : UP_DECL_NEW + 1
+        | UP_ROLE := if UP_ALIAS_DEF then 1 else if UP_DECL_OPENS and UP_PUSHES then 2 else if UP_DECL_OPENS then 3
+                   else if UP_OUTER_CLOSES then (if UP_ROLE[?] = 2 then 3 else 0)
+                   else if UP_ROLE[?] = 3 and UP_INDEX >= UP_NAMES_FROM[?] and not UP_IS_NAME and UP_C /= C_COMMA then 0
+                   else UP_ROLE[?]
+        | UP_ROLE_START := if UP_ALIAS_DEF then UP_INDEX - 3 else UP_ROLE_START[?]
+        | UP_ROLE_NAME := if UP_ALIAS_DEF then RAW_TOKEN_NAME[(if (UP_INDEX - 2) >= 0 then (UP_INDEX - 2) else 0)] - 1 else UP_ROLE_NAME[?]
+        | UP_ROLE_DECL := if UP_DECL_OPENS then UP_DECL_NEW else UP_ROLE_DECL[?]
+        | UP_ROLE_ARRAY := if UP_DECL_OPENS then UP_PREFIX_ARRAY else UP_ROLE_ARRAY[?]
+        | UP_NAMES_FROM := if UP_DECL_OPENS and not UP_PUSHES then UP_INDEX + 1 else if UP_OUTER_CLOSES then UP_AFTER_TYPE else UP_NAMES_FROM[?]
+        | UP_ALIAS_END := if UP_OUTER_CLOSES and UP_ROLE[?] = 1 then UP_AFTER_TYPE else if UP_ALIAS_COPY then UP_INDEX + 1 else -1
+        | UP_ALIAS_SEMICOLON_OK := UP_ALIAS_END < 0 or integer(RAW_TOKEN_CODE[(if (if UP_ALIAS_END >= 0 then UP_ALIAS_END else 0) >= 0 then (if UP_ALIAS_END >= 0 then UP_ALIAS_END else 0) else 0)]) = C_SEMICOLON
+        | U_ALIAS := U_ALIAS[?] next (if UP_ALIAS_END >= 0 then (if UP_ALIAS_COPY then RAW_TOKEN_NAME[(if (UP_INDEX - 2) >= 0 then (UP_INDEX - 2) else 0)] - 1 else UP_ROLE_NAME[?]) else -1)
+                   : (if UP_ALIAS_COPY then UP_ALIAS_HERE + 1 else UP_TC_TYPE + 1)
+        | U_REMOVE_TO := U_REMOVE_TO[?] next (if UP_ALIAS_END >= 0 then (if UP_ALIAS_COPY then UP_INDEX - 3 else UP_ROLE_START[?]) else -1)
+                       : UP_ALIAS_END + 2
+        | UC_TYPE := UC_TYPE[?] next (if UP_OUTER_CLOSES and UP_ROLE[?] = 2 then UP_ROLE_DECL[?] else -1) : UP_TC_TYPE
+        | UP_IN_NAMES := UP_ROLE[?] = 3 and UP_INDEX >= UP_NAMES_FROM[?]
+        | UP_DECL_NAME := UP_IN_NAMES and UP_IS_NAME
+        | UP_DECL_ENDS := UP_IN_NAMES and not UP_IS_NAME and UP_C /= C_COMMA
+        | UC_INIT_AT := UC_INIT_AT[?] next (if UP_DECL_ENDS and UP_C = C_INIT then UP_ROLE_DECL[?] else -1) : UP_INDEX + 1
+        | UC_END := UC_END[?] next (if UP_DECL_ENDS then UP_ROLE_DECL[?] else -1) : (if UP_C = C_SEMICOLON then UP_INDEX else UP_INDEX - 1)
+        | UP_DECL_NAMES := if UP_DECL_OPENS then 0 else UP_DECL_NAMES[?] + integer(UP_DECL_NAME)
+        | UC_NAME_COUNT := UC_NAME_COUNT[?] next (if UP_DECL_NAME then UP_ROLE_DECL[?] else -1) : UP_DECL_NAMES
+        | UC_NAMES := UC_NAMES[?] next (if UP_DECL_NAME and UP_DECL_NAMES[?] = 0 then UP_ROLE_DECL[?] else -1) : UP_INDEX
+        | UC_SIG_FIRST := UC_SIG_FIRST[?] next (if UP_DECL_NAME and UP_DECL_NAMES[?] = 0 then UP_ROLE_DECL[?] else -1) : US_COUNT[?]
+        | UP_FORWARD := UP_EXPECT_SCALAR and UP_C = C_NAME or UP_COPY_SHAPE and UP_ALIAS_HERE < 0
+        | UZ_COUNT := UZ_COUNT[?] + integer(UP_FORWARD)
+        | UZ_AT := UZ_AT[?] next (if UP_FORWARD then UZ_COUNT[?] else -1) : UP_INDEX
+        | UP_SP_H := (if ((UP_CUR_MODEL) * 1031 + (UP_N)) >= 0 then ((UP_CUR_MODEL) * 1031 + (UP_N)) else 0) modulo U_HASH_CAP
+        | UP_SP_E0 := U_SIG_HASH[?][UP_SP_H + 0] - 1
+        | UP_SP_HIT0 := UP_SP_E0 >= 0 and US_MODEL[?][(if UP_SP_E0 >= 0 then UP_SP_E0 else 0)] = (UP_CUR_MODEL) and US_NAME[?][(if UP_SP_E0 >= 0 then UP_SP_E0 else 0)] = (UP_N)
+        | UP_SP_E1 := U_SIG_HASH[?][UP_SP_H + 1] - 1
+        | UP_SP_HIT1 := UP_SP_E1 >= 0 and US_MODEL[?][(if UP_SP_E1 >= 0 then UP_SP_E1 else 0)] = (UP_CUR_MODEL) and US_NAME[?][(if UP_SP_E1 >= 0 then UP_SP_E1 else 0)] = (UP_N)
+        | UP_SP_E2 := U_SIG_HASH[?][UP_SP_H + 2] - 1
+        | UP_SP_HIT2 := UP_SP_E2 >= 0 and US_MODEL[?][(if UP_SP_E2 >= 0 then UP_SP_E2 else 0)] = (UP_CUR_MODEL) and US_NAME[?][(if UP_SP_E2 >= 0 then UP_SP_E2 else 0)] = (UP_N)
+        | UP_SP_E3 := U_SIG_HASH[?][UP_SP_H + 3] - 1
+        | UP_SP_HIT3 := UP_SP_E3 >= 0 and US_MODEL[?][(if UP_SP_E3 >= 0 then UP_SP_E3 else 0)] = (UP_CUR_MODEL) and US_NAME[?][(if UP_SP_E3 >= 0 then UP_SP_E3 else 0)] = (UP_N)
+        | UP_SP_E4 := U_SIG_HASH[?][UP_SP_H + 4] - 1
+        | UP_SP_HIT4 := UP_SP_E4 >= 0 and US_MODEL[?][(if UP_SP_E4 >= 0 then UP_SP_E4 else 0)] = (UP_CUR_MODEL) and US_NAME[?][(if UP_SP_E4 >= 0 then UP_SP_E4 else 0)] = (UP_N)
+        | UP_SP_E5 := U_SIG_HASH[?][UP_SP_H + 5] - 1
+        | UP_SP_HIT5 := UP_SP_E5 >= 0 and US_MODEL[?][(if UP_SP_E5 >= 0 then UP_SP_E5 else 0)] = (UP_CUR_MODEL) and US_NAME[?][(if UP_SP_E5 >= 0 then UP_SP_E5 else 0)] = (UP_N)
+        | UP_SP_E6 := U_SIG_HASH[?][UP_SP_H + 6] - 1
+        | UP_SP_HIT6 := UP_SP_E6 >= 0 and US_MODEL[?][(if UP_SP_E6 >= 0 then UP_SP_E6 else 0)] = (UP_CUR_MODEL) and US_NAME[?][(if UP_SP_E6 >= 0 then UP_SP_E6 else 0)] = (UP_N)
+        | UP_SP_E7 := U_SIG_HASH[?][UP_SP_H + 7] - 1
+        | UP_SP_HIT7 := UP_SP_E7 >= 0 and US_MODEL[?][(if UP_SP_E7 >= 0 then UP_SP_E7 else 0)] = (UP_CUR_MODEL) and US_NAME[?][(if UP_SP_E7 >= 0 then UP_SP_E7 else 0)] = (UP_N)
+        | UP_SP_FOUND := if UP_SP_HIT0 then UP_SP_E0 else if UP_SP_HIT1 then UP_SP_E1 else if UP_SP_HIT2 then UP_SP_E2 else if UP_SP_HIT3 then UP_SP_E3 else if UP_SP_HIT4 then UP_SP_E4 else if UP_SP_HIT5 then UP_SP_E5 else if UP_SP_HIT6 then UP_SP_E6 else if UP_SP_HIT7 then UP_SP_E7 else -1
+        | UP_SP_FREE := if UP_SP_E0 < 0 then UP_SP_H + 0 else if UP_SP_E1 < 0 then UP_SP_H + 1 else if UP_SP_E2 < 0 then UP_SP_H + 2 else if UP_SP_E3 < 0 then UP_SP_H + 3 else if UP_SP_E4 < 0 then UP_SP_H + 4 else if UP_SP_E5 < 0 then UP_SP_H + 5 else if UP_SP_E6 < 0 then UP_SP_H + 6 else if UP_SP_E7 < 0 then UP_SP_H + 7 else -1
+        | UP_SIG_ADDS := UP_DECL_NAME and US_COUNT[?] < U_SIG_CAP
+        | UP_SIG_NEW := US_COUNT[?]
+        | US_COUNT := US_COUNT[?] + integer(UP_SIG_ADDS)
+        | UP_SIG_SLOT := if UP_SIG_ADDS then UP_SIG_NEW else -1
+        | U_SIG_HASH := U_SIG_HASH[?] next (if UP_SIG_ADDS and UP_SP_FOUND < 0 then UP_SP_FREE else -1) : UP_SIG_NEW + 1
+        | US_NAME := US_NAME[?] next UP_SIG_SLOT : UP_N
+        | US_MODEL := US_MODEL[?] next UP_SIG_SLOT : UP_CUR_MODEL
+        | US_DECL := US_DECL[?] next UP_SIG_SLOT : UP_ROLE_DECL[?]
+        | US_TOKEN := US_TOKEN[?] next UP_SIG_SLOT : UP_INDEX
+        | US_DUP := US_DUP[?] next UP_SIG_SLOT : UP_SP_FOUND + 1
+        | US_ARRAY := US_ARRAY[?] next UP_SIG_SLOT : UP_ROLE_ARRAY[?]
+        | UP_MODEL_LAST := UM_SIG_LAST[?][UP_CUR_MODEL] - 1
+        | US_NEXT := US_NEXT[?] next (if UP_SIG_ADDS and UP_MODEL_LAST >= 0 then UP_MODEL_LAST else -1) : UP_SIG_NEW + 1
+        | UM_SIG_FIRST := UM_SIG_FIRST[?] next (if UP_SIG_ADDS and UP_MODEL_LAST < 0 then UP_CUR_MODEL else -1) : UP_SIG_NEW + 1
+        | UM_SIG_LAST := UM_SIG_LAST[?] next (if UP_SIG_ADDS then UP_CUR_MODEL else -1) : UP_SIG_NEW + 1
+        | UP_SCALAR_TYPE := UP_PC = C_INTEGER or UP_PC = C_BOOLEAN or UP_PC = C_SHORT or UP_PC = C_LONG or UP_PC = C_EVENT
+                          or UP_PC = C_NAME and UP_PN >= N_UBYTE and UP_PN <= N_ULONG + 1
+        | UP_SCALAR_DECL := UP_IS_NAME and UP_DECL_PLACE_OK and UP_T < 0 and UP_ROLE[?] = 0
+                          and (UP_SCALAR_TYPE or UP_PC = C_COMMA and UP_SCALAR_RUN[?])
+                          and (UP_NC = C_COMMA or UP_NC = C_SEMICOLON or UP_NC = C_INIT)
+        | UP_SCALAR_RUN := if UP_SCALAR_DECL then true else if UP_C = C_SEMICOLON then false else UP_SCALAR_RUN[?]
+        | UP_SCALAR_TWICE := UP_SCALAR_DECL and UP_SP_FOUND >= 0
+        | U_SCALAR_AT := U_SCALAR_AT[?] next (if UP_SCALAR_DECL then UP_N else -1) : UP_INDEX + 1
+        | UP_SCALAR_BEFORE := if UP_DECL_NAME then U_SCALAR_AT[?][(if UP_N >= 0 then UP_N else 0)] - 1 else -1
+        | UP_TUPLE_AFTER_SCALAR := UP_SCALAR_BEFORE >= 0 and U_TOKEN_MODEL[?][(if UP_SCALAR_BEFORE >= 0 then UP_SCALAR_BEFORE else 0)] = UP_CUR_MODEL
+        | UP_SPEC_TYPE := if UP_SPEC_AT >= 0 then UP_TC_TYPE + 1 else if UP_INDEX >= UP_SPEC_END[?] then 0 else UP_SPEC_TYPE[?]
+        | UP_SPEC_END := if UP_SPEC_AT >= 0 then UP_SPEC_CLOSE else UP_SPEC_END[?]
+        | UP_SPEC_LOOKS := UP_SPEC_TYPE[?] > 0 and UP_INDEX < UP_SPEC_END[?] and UP_IS_NAME
+        | UP_SPEC_OPENED := if UP_SPEC_AT >= 0 then UP_SPEC_AT else UP_SPEC_OPENED[?]
+        | UP_SF_H := (if ((UP_SPEC_TYPE[?] - 1) * 1031 + (UP_N)) >= 0 then ((UP_SPEC_TYPE[?] - 1) * 1031 + (UP_N)) else 0) modulo U_HASH_CAP
+        | UP_SF_E0 := U_FIELD_HASH[?][UP_SF_H + 0] - 1
+        | UP_SF_HIT0 := UP_SF_E0 >= 0 and UD_TYPE_OF[?][(if UP_SF_E0 >= 0 then UP_SF_E0 else 0)] = (UP_SPEC_TYPE[?] - 1) and UD_NAME[?][(if UP_SF_E0 >= 0 then UP_SF_E0 else 0)] = (UP_N)
+        | UP_SF_E1 := U_FIELD_HASH[?][UP_SF_H + 1] - 1
+        | UP_SF_HIT1 := UP_SF_E1 >= 0 and UD_TYPE_OF[?][(if UP_SF_E1 >= 0 then UP_SF_E1 else 0)] = (UP_SPEC_TYPE[?] - 1) and UD_NAME[?][(if UP_SF_E1 >= 0 then UP_SF_E1 else 0)] = (UP_N)
+        | UP_SF_E2 := U_FIELD_HASH[?][UP_SF_H + 2] - 1
+        | UP_SF_HIT2 := UP_SF_E2 >= 0 and UD_TYPE_OF[?][(if UP_SF_E2 >= 0 then UP_SF_E2 else 0)] = (UP_SPEC_TYPE[?] - 1) and UD_NAME[?][(if UP_SF_E2 >= 0 then UP_SF_E2 else 0)] = (UP_N)
+        | UP_SF_E3 := U_FIELD_HASH[?][UP_SF_H + 3] - 1
+        | UP_SF_HIT3 := UP_SF_E3 >= 0 and UD_TYPE_OF[?][(if UP_SF_E3 >= 0 then UP_SF_E3 else 0)] = (UP_SPEC_TYPE[?] - 1) and UD_NAME[?][(if UP_SF_E3 >= 0 then UP_SF_E3 else 0)] = (UP_N)
+        | UP_SF_E4 := U_FIELD_HASH[?][UP_SF_H + 4] - 1
+        | UP_SF_HIT4 := UP_SF_E4 >= 0 and UD_TYPE_OF[?][(if UP_SF_E4 >= 0 then UP_SF_E4 else 0)] = (UP_SPEC_TYPE[?] - 1) and UD_NAME[?][(if UP_SF_E4 >= 0 then UP_SF_E4 else 0)] = (UP_N)
+        | UP_SF_E5 := U_FIELD_HASH[?][UP_SF_H + 5] - 1
+        | UP_SF_HIT5 := UP_SF_E5 >= 0 and UD_TYPE_OF[?][(if UP_SF_E5 >= 0 then UP_SF_E5 else 0)] = (UP_SPEC_TYPE[?] - 1) and UD_NAME[?][(if UP_SF_E5 >= 0 then UP_SF_E5 else 0)] = (UP_N)
+        | UP_SF_E6 := U_FIELD_HASH[?][UP_SF_H + 6] - 1
+        | UP_SF_HIT6 := UP_SF_E6 >= 0 and UD_TYPE_OF[?][(if UP_SF_E6 >= 0 then UP_SF_E6 else 0)] = (UP_SPEC_TYPE[?] - 1) and UD_NAME[?][(if UP_SF_E6 >= 0 then UP_SF_E6 else 0)] = (UP_N)
+        | UP_SF_E7 := U_FIELD_HASH[?][UP_SF_H + 7] - 1
+        | UP_SF_HIT7 := UP_SF_E7 >= 0 and UD_TYPE_OF[?][(if UP_SF_E7 >= 0 then UP_SF_E7 else 0)] = (UP_SPEC_TYPE[?] - 1) and UD_NAME[?][(if UP_SF_E7 >= 0 then UP_SF_E7 else 0)] = (UP_N)
+        | UP_SF_FOUND := if UP_SF_HIT0 then UP_SF_E0 else if UP_SF_HIT1 then UP_SF_E1 else if UP_SF_HIT2 then UP_SF_E2 else if UP_SF_HIT3 then UP_SF_E3 else if UP_SF_HIT4 then UP_SF_E4 else if UP_SF_HIT5 then UP_SF_E5 else if UP_SF_HIT6 then UP_SF_E6 else if UP_SF_HIT7 then UP_SF_E7 else -1
+        | UP_SF_FREE := if UP_SF_E0 < 0 then UP_SF_H + 0 else if UP_SF_E1 < 0 then UP_SF_H + 1 else if UP_SF_E2 < 0 then UP_SF_H + 2 else if UP_SF_E3 < 0 then UP_SF_H + 3 else if UP_SF_E4 < 0 then UP_SF_H + 4 else if UP_SF_E5 < 0 then UP_SF_H + 5 else if UP_SF_E6 < 0 then UP_SF_H + 6 else if UP_SF_E7 < 0 then UP_SF_H + 7 else -1
+        | U_SPEC_FIELD := U_SPEC_FIELD[?] next (if UP_SPEC_LOOKS then UP_INDEX else -1) : UP_SF_FOUND + 1
+        | UP_STMT_SETS := UP_C = C_BAR or UP_C = C_COLONS or UP_C = C_COLON and UP_PC = C_CLOSE_BRACE or UP_C = C_OF or UP_C = C_WITH
+                        or UP_C = C_ELSE and UP_IFS[?][UP_L] = 0
+        | UP_STMT := UP_STMT[?] next (if UP_C = C_OPEN_BAR then UP_L + 1 else if UP_STMT_SETS then UP_L else -1) : UP_INDEX + 1
+        | UP_IFS := UP_IFS[?] next (if UP_C = C_OPEN_BAR then UP_L + 1 else if UP_C = C_IF or UP_C = C_ELSE or UP_STMT_SETS then UP_L else -1)
+                  : (if UP_C = C_IF then UP_IFS[?][UP_L] + 1 else if UP_C = C_ELSE and UP_IFS[?][UP_L] > 0 then UP_IFS[?][UP_L] - 1 else 0)
+        | UP_DEFINES := (UP_C = C_DEFINE or UP_C = C_PARTIAL_DEFINE) and UQ_COUNT[?] < TOKEN_CAP
+        | UP_EQ_NEW := UQ_COUNT[?]
+        | UQ_COUNT := UQ_COUNT[?] + integer(UP_DEFINES)
+        | UP_EQ_SLOT := if UP_DEFINES then UP_EQ_NEW else -1
+        | UQ_DEFINE := UQ_DEFINE[?] next UP_EQ_SLOT : UP_INDEX
+        | UQ_START := UQ_START[?] next UP_EQ_SLOT : UP_STMT[?][UP_L]
+        | U_EQ_AT := U_EQ_AT[?] next (if UP_DEFINES then UP_STMT[?][UP_L] else -1) : UP_EQ_NEW + 1
+        | UP_EQ_TERMINATES := UP_C = C_BAR or UP_C = C_END or UP_C = C_OF or UP_C = C_WITH or UP_C = C_SEMICOLON or UP_C = C_WHERE
+                            or UP_C = C_ELSE and UP_IFS[?][UP_L] = 0
+                            or UP_C = C_OPEN_BRACE and UP_CLOSE >= 0 and integer(RAW_TOKEN_CODE[(if (UP_CLOSE + 1) >= 0 then (UP_CLOSE + 1) else 0)]) = C_COLON
+        | UP_EQ_HERE := UP_EQ_OPEN[?][UP_L] - 1
+        | UP_EQ_INNER := if UP_CLOSES then UP_EQ_OPEN[?][UP_L + 1] - 1 else -1
+        | UP_EQ_ENDS := if UP_EQ_TERMINATES and UP_EQ_HERE >= 0 then UP_EQ_HERE else UP_EQ_INNER
+        | UQ_END := UQ_END[?] next UP_EQ_ENDS : UP_INDEX - 1
+        | UP_EQ_OPEN := UP_EQ_OPEN[?] next (if UP_DEFINES or UP_EQ_TERMINATES and UP_EQ_HERE >= 0 then UP_L
+                                       else if UP_EQ_INNER >= 0 then UP_L + 1 else -1)
+                      : (if UP_DEFINES then UP_EQ_NEW + 1 else 0)
+        | UP_COMMA_OPENER := if UP_C = C_COMMA then U_ENCLOSING[UP_INDEX] - 1 else -1
+        | UP_COMMAS_BEFORE := U_COMMAS[?][if UP_COMMA_OPENER >= 0 then UP_COMMA_OPENER else 0]
+        | U_COMMAS := U_COMMAS[?] next UP_COMMA_OPENER : UP_COMMAS_BEFORE + 1
+        | U_COMMA_ORD := U_COMMA_ORD[?] next (if UP_COMMA_OPENER >= 0 then UP_INDEX else -1) : UP_COMMAS_BEFORE
+        | UP_HEAD_IS := UP_IS_NAME and UP_PC /= C_DOT
+        | UP_FIELD_IS := UP_IS_NAME and UP_PC = C_DOT
+        | UP_BEFORE_DOT := if UP_INDEX >= 2 then integer(RAW_TOKEN_CODE[(if (UP_INDEX - 2) >= 0 then (UP_INDEX - 2) else 0)]) else 0
+        | UP_GROUP := if UP_FIELD_IS and UP_BEFORE_DOT = C_CLOSE_BRACKET then U_OPEN_OF[(if UP_INDEX - 2 >= 0 then UP_INDEX - 2 else 0)] - 1 else -1
+        | UP_GROUP_HEAD := UP_GROUP >= 1 and integer(RAW_TOKEN_CODE[(if (if UP_GROUP >= 1 then UP_GROUP - 1 else 0) >= 0 then (if UP_GROUP >= 1 then UP_GROUP - 1 else 0) else 0)]) = C_NAME
+                         and U_HEAD_OF[?][if UP_GROUP >= 1 then UP_GROUP - 1 else 0] = UP_GROUP
+                         and U_CHAIN_FIELDS[?][if UP_GROUP >= 1 then UP_GROUP - 1 else 0] = 0
+        | UP_HEAD := if UP_HEAD_IS then UP_INDEX
+                   else if UP_FIELD_IS and UP_BEFORE_DOT = C_NAME then U_HEAD_OF[?][(if UP_INDEX - 2 >= 0 then UP_INDEX - 2 else 0)] - 1
+                   else if UP_GROUP_HEAD then UP_GROUP - 1 else -1
+        | U_HEAD_OF := U_HEAD_OF[?] next (if UP_IS_NAME then UP_INDEX else -1) : UP_HEAD + 1
+        | UP_CHAIN_SLOT := if UP_FIELD_IS and UP_HEAD >= 0 then UP_HEAD else -1
+        | U_CHAIN_FIELDS := U_CHAIN_FIELDS[?] next UP_CHAIN_SLOT : U_CHAIN_FIELDS[?][if UP_HEAD >= 0 then UP_HEAD else 0] + 1
+        | U_CHAIN_LAST := U_CHAIN_LAST[?] next UP_CHAIN_SLOT : UP_INDEX
+        | U_CHAIN_GROUP := U_CHAIN_GROUP[?] next (if UP_GROUP_HEAD then UP_GROUP - 1 else -1) : UP_GROUP + 1
+        | UP_DOT_BAD := UP_C = C_DOT and UP_NC /= C_NAME or UP_FIELD_IS and UP_HEAD < 0
+        | UP_FOUND_MESSAGE := if UP_TYPE_FULL and UP_STRUCT_OPENS then T_CAPACITY else if UP_FIELD_FULL and UP_NAMES_FIELD or UP_FIELD_HASH_FULL then T_CAPACITY else if UP_DECL_NAME and (US_COUNT[?] >= U_SIG_CAP or UP_SP_FOUND < 0 and UP_SP_FREE < 0) then T_CAPACITY else if (UP_PUSHES and UP_T < 0 and not UP_ALIAS_DEF or UP_NAME_DECL) and not UP_DECL_OPENS then T_CAPACITY else if not UP_MODEL_OPENS and MODEL_CLASS[UP_C] = 1 and UP_NC = C_NAME then T_CAPACITY else if not UP_DEFINES and (UP_C = C_DEFINE or UP_C = C_PARTIAL_DEFINE) then T_CAPACITY else if UP_DOT_BAD then T_FIELD_ACCESS else if UP_NESTED_ARRAY then T_TUPLE_FIELD_ARRAY else if UP_NESTED_BUNDLE or UP_PUSHES and UP_T >= 0 and UP_N = N_BUNDLE then T_BUNDLE_FIELD else if UP_FIELD_TWICE then T_FIELD_TWICE else if UP_TYPE_TWICE then T_DECLARED_TWICE else if UP_SCALAR_TWICE or UP_TUPLE_AFTER_SCALAR then T_DECLARED_TWICE else if UP_SPEC_LOOKS and UP_INDEX > UP_SPEC_OPENED[?] and UP_SF_FOUND < 0 then T_SPEC_FIELD else if UP_NAMES_BAD then T_EXPECTED_NAME else if UP_TYPE_CLOSES and UP_FSTATE = 1 then T_EXPECTED_FOUND else if UP_TYPE_CLOSES and UP_TC_FIELDS = 0 then T_TUPLE_EMPTY else if UP_TYPE_CLOSES and UP_TC_DEPTH > 4 then T_TUPLE_DEPTH else if UP_SPEC_AT >= 0 and not UY_KIND[?][UP_TC_TYPE] then T_TUPLE_PLACE else if UP_ALIAS_MISPLACED then T_TUPLE_PLACE else if not UP_ALIAS_SEMICOLON_OK then T_EXPECTED_FOUND else if UP_ALIAS_COPY and not UP_ALIAS_COPY_OK then T_EXPECTED_FOUND else 0
+        | UP_FOUND_ARGUMENT0 := if UP_TYPE_FULL and UP_STRUCT_OPENS then F_CAP_TUPLES else if UP_FIELD_FULL and UP_NAMES_FIELD or UP_FIELD_HASH_FULL then F_CAP_TUPLES else if UP_DECL_NAME and (US_COUNT[?] >= U_SIG_CAP or UP_SP_FOUND < 0 and UP_SP_FREE < 0) then F_CAP_TUPLES else if (UP_PUSHES and UP_T < 0 and not UP_ALIAS_DEF or UP_NAME_DECL) and not UP_DECL_OPENS then F_CAP_TUPLES else if not UP_MODEL_OPENS and MODEL_CLASS[UP_C] = 1 and UP_NC = C_NAME then F_CAP_TUPLES else if not UP_DEFINES and (UP_C = C_DEFINE or UP_C = C_PARTIAL_DEFINE) then F_CAP_TUPLES else if UP_DOT_BAD then 0 else if UP_NESTED_ARRAY then 0 else if UP_NESTED_BUNDLE or UP_PUSHES and UP_T >= 0 and UP_N = N_BUNDLE then 0 else if UP_FIELD_TWICE then UP_N else if UP_TYPE_TWICE then F_ROLE_TYPE else if UP_SCALAR_TWICE or UP_TUPLE_AFTER_SCALAR then F_ROLE_SIGNAL else if UP_SPEC_LOOKS and UP_INDEX > UP_SPEC_OPENED[?] and UP_SF_FOUND < 0 then UP_N else if UP_NAMES_BAD then UP_INDEX else if UP_TYPE_CLOSES and UP_FSTATE = 1 then C_SEMICOLON else if UP_TYPE_CLOSES and UP_TC_FIELDS = 0 then 0 else if UP_TYPE_CLOSES and UP_TC_DEPTH > 4 then 0 else if UP_SPEC_AT >= 0 and not UY_KIND[?][UP_TC_TYPE] then 0 else if UP_ALIAS_MISPLACED then 0 else if not UP_ALIAS_SEMICOLON_OK then C_SEMICOLON else if UP_ALIAS_COPY and not UP_ALIAS_COPY_OK then C_SEMICOLON else 0
+        | UP_FOUND_ARGUMENT1 := if UP_TYPE_FULL and UP_STRUCT_OPENS then 0 else if UP_FIELD_FULL and UP_NAMES_FIELD or UP_FIELD_HASH_FULL then 0 else if UP_DECL_NAME and (US_COUNT[?] >= U_SIG_CAP or UP_SP_FOUND < 0 and UP_SP_FREE < 0) then 0 else if (UP_PUSHES and UP_T < 0 and not UP_ALIAS_DEF or UP_NAME_DECL) and not UP_DECL_OPENS then 0 else if not UP_MODEL_OPENS and MODEL_CLASS[UP_C] = 1 and UP_NC = C_NAME then 0 else if not UP_DEFINES and (UP_C = C_DEFINE or UP_C = C_PARTIAL_DEFINE) then 0 else if UP_DOT_BAD then 0 else if UP_NESTED_ARRAY then 0 else if UP_NESTED_BUNDLE or UP_PUSHES and UP_T >= 0 and UP_N = N_BUNDLE then 0 else if UP_FIELD_TWICE then 0 else if UP_TYPE_TWICE then UP_N else if UP_SCALAR_TWICE or UP_TUPLE_AFTER_SCALAR then UP_N else if UP_SPEC_LOOKS and UP_INDEX > UP_SPEC_OPENED[?] and UP_SF_FOUND < 0 then 0 else if UP_NAMES_BAD then 0 else if UP_TYPE_CLOSES and UP_FSTATE = 1 then UP_INDEX else if UP_TYPE_CLOSES and UP_TC_FIELDS = 0 then 0 else if UP_TYPE_CLOSES and UP_TC_DEPTH > 4 then 0 else if UP_SPEC_AT >= 0 and not UY_KIND[?][UP_TC_TYPE] then 0 else if UP_ALIAS_MISPLACED then 0 else if not UP_ALIAS_SEMICOLON_OK then UP_ALIAS_END else if UP_ALIAS_COPY and not UP_ALIAS_COPY_OK then UP_INDEX + 1 else 0
+        | UP_FOUND_ARGUMENT2 := if UP_TYPE_FULL and UP_STRUCT_OPENS then 0 else if UP_FIELD_FULL and UP_NAMES_FIELD or UP_FIELD_HASH_FULL then 0 else if UP_DECL_NAME and (US_COUNT[?] >= U_SIG_CAP or UP_SP_FOUND < 0 and UP_SP_FREE < 0) then 0 else if (UP_PUSHES and UP_T < 0 and not UP_ALIAS_DEF or UP_NAME_DECL) and not UP_DECL_OPENS then 0 else if not UP_MODEL_OPENS and MODEL_CLASS[UP_C] = 1 and UP_NC = C_NAME then 0 else if not UP_DEFINES and (UP_C = C_DEFINE or UP_C = C_PARTIAL_DEFINE) then 0 else if UP_DOT_BAD then 0 else if UP_NESTED_ARRAY then 0 else if UP_NESTED_BUNDLE or UP_PUSHES and UP_T >= 0 and UP_N = N_BUNDLE then 0 else if UP_FIELD_TWICE then 0 else if UP_TYPE_TWICE then 0 else if UP_SCALAR_TWICE or UP_TUPLE_AFTER_SCALAR then 0 else if UP_SPEC_LOOKS and UP_INDEX > UP_SPEC_OPENED[?] and UP_SF_FOUND < 0 then 0 else if UP_NAMES_BAD then 0 else if UP_TYPE_CLOSES and UP_FSTATE = 1 then 0 else if UP_TYPE_CLOSES and UP_TC_FIELDS = 0 then 0 else if UP_TYPE_CLOSES and UP_TC_DEPTH > 4 then 0 else if UP_SPEC_AT >= 0 and not UY_KIND[?][UP_TC_TYPE] then 0 else if UP_ALIAS_MISPLACED then 0 else if not UP_ALIAS_SEMICOLON_OK then 0 else if UP_ALIAS_COPY and not UP_ALIAS_COPY_OK then 0 else 0
+        | UP_FIRST_ERROR := UP_MESSAGE[?] = 0 and UP_FOUND_MESSAGE /= 0
+        | UP_MESSAGE := if UP_FIRST_ERROR then UP_FOUND_MESSAGE else UP_MESSAGE[?]
+        | UP_TOKEN := if UP_FIRST_ERROR then (if UP_FOUND_MESSAGE = T_EXPECTED_FOUND and not UP_ALIAS_SEMICOLON_OK then UP_ALIAS_END else UP_INDEX) else UP_TOKEN[?]
+        | UP_ARGUMENT0 := if UP_FIRST_ERROR then UP_FOUND_ARGUMENT0 else UP_ARGUMENT0[?]
+        | UP_ARGUMENT1 := if UP_FIRST_ERROR then UP_FOUND_ARGUMENT1 else UP_ARGUMENT1[?]
+        | UP_ARGUMENT2 := if UP_FIRST_ERROR then UP_FOUND_ARGUMENT2 else UP_ARGUMENT2[?]
+        |)
+     with (| UP_MF_TOP := 0 | UM_COUNT := 0 | UY_COUNT := 0 | UD_COUNT := 0 | UP_FIELD_SLOTS := 0 | UP_LEAF_SLOTS := 0
+           | UP_CLOSED := 0 | UP_TS_TOP := 0 | UC_COUNT := 0 | UP_ROLE := 0 | UP_ROLE_START := 0 | UP_ROLE_NAME := 0
+           | UP_ROLE_DECL := 0 | UP_ROLE_ARRAY := false | UP_NAMES_FROM := 0 | UZ_COUNT := 0
+           | UP_DECL_NAMES := 0 | US_COUNT := 0
+           | UP_SPEC_TYPE := 0 | UP_SPEC_END := 0 | UP_SPEC_OPENED := 0 | UP_SCALAR_RUN := false | UQ_COUNT := 0 | UP_MESSAGE := 0 | UP_TOKEN := 0 | UP_ARGUMENT0 := 0 | UP_ARGUMENT1 := 0 | UP_ARGUMENT2 := 0 |)
+     end
+   | UP_OK := U_SEEN and UP_MESSAGE = 0
+   | UZ_INDEX := 0 .. (if UP_OK then UZ_COUNT - 1 else -1)
+   | iterate UZ_INDEX of
+       (| UZ_NAME := RAW_TOKEN_NAME[(if (UZ_AT[UZ_INDEX]) >= 0 then (UZ_AT[UZ_INDEX]) else 0)] - 1
+        | UZ_TUPLE := UZ_NAME >= 0 and U_ALIAS[(if (UZ_NAME) >= 0 then (UZ_NAME) else 0)] > 0
+        | UZ_FOUND_MESSAGE := if UZ_TUPLE then T_TUPLE_FORWARD else 0
+        | UZ_FOUND_ARGUMENT0 := if UZ_TUPLE then UZ_NAME else 0
+        | UZ_FOUND_ARGUMENT1 := if UZ_TUPLE then 0 else 0
+        | UZ_FOUND_ARGUMENT2 := if UZ_TUPLE then 0 else 0
+        | UZ_FIRST_ERROR := UZ_MESSAGE[?] = 0 and UZ_FOUND_MESSAGE /= 0
+        | UZ_MESSAGE := if UZ_FIRST_ERROR then UZ_FOUND_MESSAGE else UZ_MESSAGE[?]
+        | UZ_TOKEN := if UZ_FIRST_ERROR then UZ_AT[UZ_INDEX] else UZ_TOKEN[?]
+        | UZ_ARGUMENT0 := if UZ_FIRST_ERROR then UZ_FOUND_ARGUMENT0 else UZ_ARGUMENT0[?]
+        | UZ_ARGUMENT1 := if UZ_FIRST_ERROR then UZ_FOUND_ARGUMENT1 else UZ_ARGUMENT1[?]
+        | UZ_ARGUMENT2 := if UZ_FIRST_ERROR then UZ_FOUND_ARGUMENT2 else UZ_ARGUMENT2[?]
+        |)
+     with (| UZ_MESSAGE := 0 | UZ_TOKEN := 0 | UZ_ARGUMENT0 := 0 | UZ_ARGUMENT1 := 0 | UZ_ARGUMENT2 := 0 |)
+     end
+   | UZ_OK := UP_OK and UZ_MESSAGE = 0
+   | UK_INDEX := 0 .. (if UZ_OK then US_COUNT - 1 else -1)
+   | iterate UK_INDEX of
+       (| UK_D := US_DECL[UK_INDEX]
+        | UK_NAMED := UC_TYPE_NAME[UK_D] - 1
+        | UK_TYPE := if UK_NAMED >= 0 then U_ALIAS[(if (UK_NAMED) >= 0 then (UK_NAMED) else 0)] - 1 else UC_TYPE[UK_D]
+        | UK_TUPLE := UK_TYPE >= 0
+        | UK_DUP := US_DUP[UK_INDEX] - 1
+        | UK_DUP_TUPLE := UK_DUP >= 0 and (UK_TUPLE or US_TYPE[?][(if UK_DUP >= 0 then UK_DUP else 0)] >= 0)
+        | UK_TS := if UK_TUPLE then UK_TYPE else 0
+        | UK_LEAVES := if UK_TUPLE then UY_LEAF_COUNT[UK_TS] else 0
+        | US_TYPE := US_TYPE[?] next UK_INDEX : UK_TYPE
+        | US_HIDDEN_BASE := US_HIDDEN_BASE[?] next UK_INDEX : UK_HIDDEN[?]
+        | UK_HIDDEN := UK_HIDDEN[?] + UK_LEAVES
+        | UK_TUPLE_SIG := UK_TUPLE_SIG[?] next (if UK_TUPLE then UK_TUPLES[?] else -1) : UK_INDEX
+        | UK_TUPLES := UK_TUPLES[?] + integer(UK_TUPLE)
+        | UC_FINAL := UC_FINAL[?] next UK_D : UK_TYPE
+        | UM_TUPLE_OUT := UM_TUPLE_OUT[?] next (if UK_TUPLE and UC_DIR[UK_D] = 2 then UC_MODEL[UK_D] else -1) : true
+        | UK_MAXLEAF := if UK_LEAVES > UK_MAXLEAF[?] then UK_LEAVES else UK_MAXLEAF[?]
+        | UK_SPEC := UY_SPEC_OPEN[UK_TS] - 1
+        | UK_SPEC_LENGTH := if UK_TUPLE and UK_SPEC >= 0 then U_CLOSE_OF[(if (UK_SPEC) >= 0 then (UK_SPEC) else 0)] - UK_SPEC else 0
+        | UK_PREFIX_LENGTH := UC_TYPE_START[UK_D] - UC_START[UK_D]
+        | UK_ESTIMATE := UK_ESTIMATE[?] + (if UK_TUPLE then long(UK_LEAVES) * long(UK_PREFIX_LENGTH + 5) + long(UY_TYPELEN[UK_TS])
+                                               + long(2 * UK_SPEC_LENGTH + 8) else long(0))
+        | UK_FOUND_MESSAGE := if UK_TUPLE and not UC_PLACE_OK[UK_D] then T_TUPLE_PLACE else if UK_TUPLE and UC_ARRAY[UK_D] and UY_KIND[UK_TS] then T_BUNDLE_ELEMENT else if UK_TUPLE and UC_INIT_AT[UK_D] > 0 then T_TUPLE_INIT else if UK_DUP_TUPLE then T_DECLARED_TWICE else if UK_TUPLE and NAME_COUNT + UK_HIDDEN > NAME_CAP then T_CAPACITY else 0
+        | UK_FOUND_ARGUMENT0 := if UK_TUPLE and not UC_PLACE_OK[UK_D] then 0 else if UK_TUPLE and UC_ARRAY[UK_D] and UY_KIND[UK_TS] then 0 else if UK_TUPLE and UC_INIT_AT[UK_D] > 0 then 0 else if UK_DUP_TUPLE then F_ROLE_SIGNAL else if UK_TUPLE and NAME_COUNT + UK_HIDDEN > NAME_CAP then F_CAP_NAMES else 0
+        | UK_FOUND_ARGUMENT1 := if UK_TUPLE and not UC_PLACE_OK[UK_D] then 0 else if UK_TUPLE and UC_ARRAY[UK_D] and UY_KIND[UK_TS] then 0 else if UK_TUPLE and UC_INIT_AT[UK_D] > 0 then 0 else if UK_DUP_TUPLE then US_NAME[UK_INDEX] else if UK_TUPLE and NAME_COUNT + UK_HIDDEN > NAME_CAP then 0 else 0
+        | UK_FOUND_ARGUMENT2 := if UK_TUPLE and not UC_PLACE_OK[UK_D] then 0 else if UK_TUPLE and UC_ARRAY[UK_D] and UY_KIND[UK_TS] then 0 else if UK_TUPLE and UC_INIT_AT[UK_D] > 0 then 0 else if UK_DUP_TUPLE then 0 else if UK_TUPLE and NAME_COUNT + UK_HIDDEN > NAME_CAP then 0 else 0
+        | UK_FIRST_ERROR := UK_MESSAGE[?] = 0 and UK_FOUND_MESSAGE /= 0
+        | UK_MESSAGE := if UK_FIRST_ERROR then UK_FOUND_MESSAGE else UK_MESSAGE[?]
+        | UK_TOKEN := if UK_FIRST_ERROR then (if UK_FOUND_MESSAGE = T_TUPLE_INIT then UC_INIT_AT[UK_D] - 1
+                              else if UK_FOUND_MESSAGE = T_DECLARED_TWICE then US_TOKEN[UK_INDEX] else UC_TYPE_START[UK_D]) else UK_TOKEN[?]
+        | UK_ARGUMENT0 := if UK_FIRST_ERROR then UK_FOUND_ARGUMENT0 else UK_ARGUMENT0[?]
+        | UK_ARGUMENT1 := if UK_FIRST_ERROR then UK_FOUND_ARGUMENT1 else UK_ARGUMENT1[?]
+        | UK_ARGUMENT2 := if UK_FIRST_ERROR then UK_FOUND_ARGUMENT2 else UK_ARGUMENT2[?]
+        |)
+     with (| UK_HIDDEN := 0 | UK_TUPLES := 0 | UK_MAXLEAF := 0 | UK_ESTIMATE := long(0) | UK_MESSAGE := 0 | UK_TOKEN := 0 | UK_ARGUMENT0 := 0 | UK_ARGUMENT1 := 0 | UK_ARGUMENT2 := 0 |)
+     end
+   | UK_OK := UZ_OK and UK_MESSAGE = 0 and NAME_COUNT + UK_HIDDEN <= NAME_CAP
+   | UR_INDEX := 0 .. (if UK_OK then RAW_TOKEN_COUNT - 1 else -1)
+   | iterate UR_INDEX of
+       (| UR_C := integer(RAW_TOKEN_CODE[(if (UR_INDEX) >= 0 then (UR_INDEX) else 0)])
+        | UR_N := RAW_TOKEN_NAME[(if (UR_INDEX) >= 0 then (UR_INDEX) else 0)] - 1
+        | UR_PC := if UR_INDEX > 0 then integer(RAW_TOKEN_CODE[(if (UR_INDEX - 1) >= 0 then (UR_INDEX - 1) else 0)]) else 0
+        | UR_HEAD := UR_C = C_NAME and U_HEAD_OF[UR_INDEX] = UR_INDEX + 1
+        | UR_MODEL := U_TOKEN_MODEL[UR_INDEX]
+        | UR_SP_H := (if ((UR_MODEL) * 1031 + (UR_N)) >= 0 then ((UR_MODEL) * 1031 + (UR_N)) else 0) modulo U_HASH_CAP
+        | UR_SP_E0 := U_SIG_HASH[UR_SP_H + 0] - 1
+        | UR_SP_HIT0 := UR_SP_E0 >= 0 and US_MODEL[(if UR_SP_E0 >= 0 then UR_SP_E0 else 0)] = (UR_MODEL) and US_NAME[(if UR_SP_E0 >= 0 then UR_SP_E0 else 0)] = (UR_N)
+        | UR_SP_E1 := U_SIG_HASH[UR_SP_H + 1] - 1
+        | UR_SP_HIT1 := UR_SP_E1 >= 0 and US_MODEL[(if UR_SP_E1 >= 0 then UR_SP_E1 else 0)] = (UR_MODEL) and US_NAME[(if UR_SP_E1 >= 0 then UR_SP_E1 else 0)] = (UR_N)
+        | UR_SP_E2 := U_SIG_HASH[UR_SP_H + 2] - 1
+        | UR_SP_HIT2 := UR_SP_E2 >= 0 and US_MODEL[(if UR_SP_E2 >= 0 then UR_SP_E2 else 0)] = (UR_MODEL) and US_NAME[(if UR_SP_E2 >= 0 then UR_SP_E2 else 0)] = (UR_N)
+        | UR_SP_E3 := U_SIG_HASH[UR_SP_H + 3] - 1
+        | UR_SP_HIT3 := UR_SP_E3 >= 0 and US_MODEL[(if UR_SP_E3 >= 0 then UR_SP_E3 else 0)] = (UR_MODEL) and US_NAME[(if UR_SP_E3 >= 0 then UR_SP_E3 else 0)] = (UR_N)
+        | UR_SP_E4 := U_SIG_HASH[UR_SP_H + 4] - 1
+        | UR_SP_HIT4 := UR_SP_E4 >= 0 and US_MODEL[(if UR_SP_E4 >= 0 then UR_SP_E4 else 0)] = (UR_MODEL) and US_NAME[(if UR_SP_E4 >= 0 then UR_SP_E4 else 0)] = (UR_N)
+        | UR_SP_E5 := U_SIG_HASH[UR_SP_H + 5] - 1
+        | UR_SP_HIT5 := UR_SP_E5 >= 0 and US_MODEL[(if UR_SP_E5 >= 0 then UR_SP_E5 else 0)] = (UR_MODEL) and US_NAME[(if UR_SP_E5 >= 0 then UR_SP_E5 else 0)] = (UR_N)
+        | UR_SP_E6 := U_SIG_HASH[UR_SP_H + 6] - 1
+        | UR_SP_HIT6 := UR_SP_E6 >= 0 and US_MODEL[(if UR_SP_E6 >= 0 then UR_SP_E6 else 0)] = (UR_MODEL) and US_NAME[(if UR_SP_E6 >= 0 then UR_SP_E6 else 0)] = (UR_N)
+        | UR_SP_E7 := U_SIG_HASH[UR_SP_H + 7] - 1
+        | UR_SP_HIT7 := UR_SP_E7 >= 0 and US_MODEL[(if UR_SP_E7 >= 0 then UR_SP_E7 else 0)] = (UR_MODEL) and US_NAME[(if UR_SP_E7 >= 0 then UR_SP_E7 else 0)] = (UR_N)
+        | UR_SP_FOUND := if UR_SP_HIT0 then UR_SP_E0 else if UR_SP_HIT1 then UR_SP_E1 else if UR_SP_HIT2 then UR_SP_E2 else if UR_SP_HIT3 then UR_SP_E3 else if UR_SP_HIT4 then UR_SP_E4 else if UR_SP_HIT5 then UR_SP_E5 else if UR_SP_HIT6 then UR_SP_E6 else if UR_SP_HIT7 then UR_SP_E7 else -1
+        | UR_SP_FREE := if UR_SP_E0 < 0 then UR_SP_H + 0 else if UR_SP_E1 < 0 then UR_SP_H + 1 else if UR_SP_E2 < 0 then UR_SP_H + 2 else if UR_SP_E3 < 0 then UR_SP_H + 3 else if UR_SP_E4 < 0 then UR_SP_H + 4 else if UR_SP_E5 < 0 then UR_SP_H + 5 else if UR_SP_E6 < 0 then UR_SP_H + 6 else if UR_SP_E7 < 0 then UR_SP_H + 7 else -1
+        | UR_SIG := if UR_HEAD then UR_SP_FOUND else -1
+        | UR_NF := if UR_HEAD then U_CHAIN_FIELDS[UR_INDEX] else 0
+        | UR_GROUP := U_CHAIN_GROUP[UR_INDEX] - 1
+        | UR_ARRAY := UR_SIG >= 0 and US_ARRAY[if UR_SIG >= 0 then UR_SIG else 0]
+        | UR_GROUP_OPEN := if UR_GROUP >= 0 then UR_GROUP else if UR_ARRAY and integer(RAW_TOKEN_CODE[(if (UR_INDEX + 1) >= 0 then (UR_INDEX + 1) else 0)]) = C_OPEN_BRACKET then UR_INDEX + 1 else -1
+        | UR_FIELD0 := if UR_GROUP >= 0 then U_CLOSE_OF[(if UR_GROUP >= 0 then UR_GROUP else 0)] + 1 else UR_INDEX + 2
+        | UR_T0 := if UR_SIG >= 0 then US_TYPE[UR_SIG] else -1
+        | UR_OFF0 := 0
+        | UR_PREV0 := UR_N
+        | UR_BAD0 := UR_HEAD and UR_SIG < 0 and UR_NF > 0
+        | UR_FN0 := if UR_NF > 0 then RAW_TOKEN_NAME[UR_FIELD0 + 0] - 1 else -1
+        | UR_ACTIVE0 := UR_HEAD and UR_SIG >= 0 and UR_NF > 0 and not UR_BAD0
+        | UR_FP0_H := (if ((UR_T0) * 1031 + (UR_FN0)) >= 0 then ((UR_T0) * 1031 + (UR_FN0)) else 0) modulo U_HASH_CAP
+        | UR_FP0_E0 := U_FIELD_HASH[UR_FP0_H + 0] - 1
+        | UR_FP0_HIT0 := UR_FP0_E0 >= 0 and UD_TYPE_OF[(if UR_FP0_E0 >= 0 then UR_FP0_E0 else 0)] = (UR_T0) and UD_NAME[(if UR_FP0_E0 >= 0 then UR_FP0_E0 else 0)] = (UR_FN0)
+        | UR_FP0_E1 := U_FIELD_HASH[UR_FP0_H + 1] - 1
+        | UR_FP0_HIT1 := UR_FP0_E1 >= 0 and UD_TYPE_OF[(if UR_FP0_E1 >= 0 then UR_FP0_E1 else 0)] = (UR_T0) and UD_NAME[(if UR_FP0_E1 >= 0 then UR_FP0_E1 else 0)] = (UR_FN0)
+        | UR_FP0_E2 := U_FIELD_HASH[UR_FP0_H + 2] - 1
+        | UR_FP0_HIT2 := UR_FP0_E2 >= 0 and UD_TYPE_OF[(if UR_FP0_E2 >= 0 then UR_FP0_E2 else 0)] = (UR_T0) and UD_NAME[(if UR_FP0_E2 >= 0 then UR_FP0_E2 else 0)] = (UR_FN0)
+        | UR_FP0_E3 := U_FIELD_HASH[UR_FP0_H + 3] - 1
+        | UR_FP0_HIT3 := UR_FP0_E3 >= 0 and UD_TYPE_OF[(if UR_FP0_E3 >= 0 then UR_FP0_E3 else 0)] = (UR_T0) and UD_NAME[(if UR_FP0_E3 >= 0 then UR_FP0_E3 else 0)] = (UR_FN0)
+        | UR_FP0_E4 := U_FIELD_HASH[UR_FP0_H + 4] - 1
+        | UR_FP0_HIT4 := UR_FP0_E4 >= 0 and UD_TYPE_OF[(if UR_FP0_E4 >= 0 then UR_FP0_E4 else 0)] = (UR_T0) and UD_NAME[(if UR_FP0_E4 >= 0 then UR_FP0_E4 else 0)] = (UR_FN0)
+        | UR_FP0_E5 := U_FIELD_HASH[UR_FP0_H + 5] - 1
+        | UR_FP0_HIT5 := UR_FP0_E5 >= 0 and UD_TYPE_OF[(if UR_FP0_E5 >= 0 then UR_FP0_E5 else 0)] = (UR_T0) and UD_NAME[(if UR_FP0_E5 >= 0 then UR_FP0_E5 else 0)] = (UR_FN0)
+        | UR_FP0_E6 := U_FIELD_HASH[UR_FP0_H + 6] - 1
+        | UR_FP0_HIT6 := UR_FP0_E6 >= 0 and UD_TYPE_OF[(if UR_FP0_E6 >= 0 then UR_FP0_E6 else 0)] = (UR_T0) and UD_NAME[(if UR_FP0_E6 >= 0 then UR_FP0_E6 else 0)] = (UR_FN0)
+        | UR_FP0_E7 := U_FIELD_HASH[UR_FP0_H + 7] - 1
+        | UR_FP0_HIT7 := UR_FP0_E7 >= 0 and UD_TYPE_OF[(if UR_FP0_E7 >= 0 then UR_FP0_E7 else 0)] = (UR_T0) and UD_NAME[(if UR_FP0_E7 >= 0 then UR_FP0_E7 else 0)] = (UR_FN0)
+        | UR_FP0_FOUND := if UR_FP0_HIT0 then UR_FP0_E0 else if UR_FP0_HIT1 then UR_FP0_E1 else if UR_FP0_HIT2 then UR_FP0_E2 else if UR_FP0_HIT3 then UR_FP0_E3 else if UR_FP0_HIT4 then UR_FP0_E4 else if UR_FP0_HIT5 then UR_FP0_E5 else if UR_FP0_HIT6 then UR_FP0_E6 else if UR_FP0_HIT7 then UR_FP0_E7 else -1
+        | UR_FP0_FREE := if UR_FP0_E0 < 0 then UR_FP0_H + 0 else if UR_FP0_E1 < 0 then UR_FP0_H + 1 else if UR_FP0_E2 < 0 then UR_FP0_H + 2 else if UR_FP0_E3 < 0 then UR_FP0_H + 3 else if UR_FP0_E4 < 0 then UR_FP0_H + 4 else if UR_FP0_E5 < 0 then UR_FP0_H + 5 else if UR_FP0_E6 < 0 then UR_FP0_H + 6 else if UR_FP0_E7 < 0 then UR_FP0_H + 7 else -1
+        | UR_F0 := if UR_ACTIVE0 and UR_T0 >= 0 then UR_FP0_FOUND else -1
+        | UR_NOT_TUPLE0 := UR_ACTIVE0 and UR_T0 < 0
+        | UR_UNKNOWN0 := UR_ACTIVE0 and UR_T0 >= 0 and UR_F0 < 0
+        | UR_BAD1 := UR_BAD0 or UR_NOT_TUPLE0 or UR_UNKNOWN0
+        | UR_FS0 := if UR_F0 >= 0 then UR_F0 else 0
+        | UR_T1 := if UR_ACTIVE0 then (if UR_F0 >= 0 then UD_NESTED[UR_FS0] else -1) else UR_T0
+        | UR_OFF1 := if UR_ACTIVE0 and UR_F0 >= 0 then UR_OFF0 + UD_LEAF_OFFSET[UR_FS0] else UR_OFF0
+        | UR_PREV1 := if UR_ACTIVE0 then UR_FN0 else UR_PREV0
+        | UR_FN1 := if UR_NF > 1 then RAW_TOKEN_NAME[UR_FIELD0 + 2] - 1 else -1
+        | UR_ACTIVE1 := UR_HEAD and UR_SIG >= 0 and UR_NF > 1 and not UR_BAD1
+        | UR_FP1_H := (if ((UR_T1) * 1031 + (UR_FN1)) >= 0 then ((UR_T1) * 1031 + (UR_FN1)) else 0) modulo U_HASH_CAP
+        | UR_FP1_E0 := U_FIELD_HASH[UR_FP1_H + 0] - 1
+        | UR_FP1_HIT0 := UR_FP1_E0 >= 0 and UD_TYPE_OF[(if UR_FP1_E0 >= 0 then UR_FP1_E0 else 0)] = (UR_T1) and UD_NAME[(if UR_FP1_E0 >= 0 then UR_FP1_E0 else 0)] = (UR_FN1)
+        | UR_FP1_E1 := U_FIELD_HASH[UR_FP1_H + 1] - 1
+        | UR_FP1_HIT1 := UR_FP1_E1 >= 0 and UD_TYPE_OF[(if UR_FP1_E1 >= 0 then UR_FP1_E1 else 0)] = (UR_T1) and UD_NAME[(if UR_FP1_E1 >= 0 then UR_FP1_E1 else 0)] = (UR_FN1)
+        | UR_FP1_E2 := U_FIELD_HASH[UR_FP1_H + 2] - 1
+        | UR_FP1_HIT2 := UR_FP1_E2 >= 0 and UD_TYPE_OF[(if UR_FP1_E2 >= 0 then UR_FP1_E2 else 0)] = (UR_T1) and UD_NAME[(if UR_FP1_E2 >= 0 then UR_FP1_E2 else 0)] = (UR_FN1)
+        | UR_FP1_E3 := U_FIELD_HASH[UR_FP1_H + 3] - 1
+        | UR_FP1_HIT3 := UR_FP1_E3 >= 0 and UD_TYPE_OF[(if UR_FP1_E3 >= 0 then UR_FP1_E3 else 0)] = (UR_T1) and UD_NAME[(if UR_FP1_E3 >= 0 then UR_FP1_E3 else 0)] = (UR_FN1)
+        | UR_FP1_E4 := U_FIELD_HASH[UR_FP1_H + 4] - 1
+        | UR_FP1_HIT4 := UR_FP1_E4 >= 0 and UD_TYPE_OF[(if UR_FP1_E4 >= 0 then UR_FP1_E4 else 0)] = (UR_T1) and UD_NAME[(if UR_FP1_E4 >= 0 then UR_FP1_E4 else 0)] = (UR_FN1)
+        | UR_FP1_E5 := U_FIELD_HASH[UR_FP1_H + 5] - 1
+        | UR_FP1_HIT5 := UR_FP1_E5 >= 0 and UD_TYPE_OF[(if UR_FP1_E5 >= 0 then UR_FP1_E5 else 0)] = (UR_T1) and UD_NAME[(if UR_FP1_E5 >= 0 then UR_FP1_E5 else 0)] = (UR_FN1)
+        | UR_FP1_E6 := U_FIELD_HASH[UR_FP1_H + 6] - 1
+        | UR_FP1_HIT6 := UR_FP1_E6 >= 0 and UD_TYPE_OF[(if UR_FP1_E6 >= 0 then UR_FP1_E6 else 0)] = (UR_T1) and UD_NAME[(if UR_FP1_E6 >= 0 then UR_FP1_E6 else 0)] = (UR_FN1)
+        | UR_FP1_E7 := U_FIELD_HASH[UR_FP1_H + 7] - 1
+        | UR_FP1_HIT7 := UR_FP1_E7 >= 0 and UD_TYPE_OF[(if UR_FP1_E7 >= 0 then UR_FP1_E7 else 0)] = (UR_T1) and UD_NAME[(if UR_FP1_E7 >= 0 then UR_FP1_E7 else 0)] = (UR_FN1)
+        | UR_FP1_FOUND := if UR_FP1_HIT0 then UR_FP1_E0 else if UR_FP1_HIT1 then UR_FP1_E1 else if UR_FP1_HIT2 then UR_FP1_E2 else if UR_FP1_HIT3 then UR_FP1_E3 else if UR_FP1_HIT4 then UR_FP1_E4 else if UR_FP1_HIT5 then UR_FP1_E5 else if UR_FP1_HIT6 then UR_FP1_E6 else if UR_FP1_HIT7 then UR_FP1_E7 else -1
+        | UR_FP1_FREE := if UR_FP1_E0 < 0 then UR_FP1_H + 0 else if UR_FP1_E1 < 0 then UR_FP1_H + 1 else if UR_FP1_E2 < 0 then UR_FP1_H + 2 else if UR_FP1_E3 < 0 then UR_FP1_H + 3 else if UR_FP1_E4 < 0 then UR_FP1_H + 4 else if UR_FP1_E5 < 0 then UR_FP1_H + 5 else if UR_FP1_E6 < 0 then UR_FP1_H + 6 else if UR_FP1_E7 < 0 then UR_FP1_H + 7 else -1
+        | UR_F1 := if UR_ACTIVE1 and UR_T1 >= 0 then UR_FP1_FOUND else -1
+        | UR_NOT_TUPLE1 := UR_ACTIVE1 and UR_T1 < 0
+        | UR_UNKNOWN1 := UR_ACTIVE1 and UR_T1 >= 0 and UR_F1 < 0
+        | UR_BAD2 := UR_BAD1 or UR_NOT_TUPLE1 or UR_UNKNOWN1
+        | UR_FS1 := if UR_F1 >= 0 then UR_F1 else 0
+        | UR_T2 := if UR_ACTIVE1 then (if UR_F1 >= 0 then UD_NESTED[UR_FS1] else -1) else UR_T1
+        | UR_OFF2 := if UR_ACTIVE1 and UR_F1 >= 0 then UR_OFF1 + UD_LEAF_OFFSET[UR_FS1] else UR_OFF1
+        | UR_PREV2 := if UR_ACTIVE1 then UR_FN1 else UR_PREV1
+        | UR_FN2 := if UR_NF > 2 then RAW_TOKEN_NAME[UR_FIELD0 + 4] - 1 else -1
+        | UR_ACTIVE2 := UR_HEAD and UR_SIG >= 0 and UR_NF > 2 and not UR_BAD2
+        | UR_FP2_H := (if ((UR_T2) * 1031 + (UR_FN2)) >= 0 then ((UR_T2) * 1031 + (UR_FN2)) else 0) modulo U_HASH_CAP
+        | UR_FP2_E0 := U_FIELD_HASH[UR_FP2_H + 0] - 1
+        | UR_FP2_HIT0 := UR_FP2_E0 >= 0 and UD_TYPE_OF[(if UR_FP2_E0 >= 0 then UR_FP2_E0 else 0)] = (UR_T2) and UD_NAME[(if UR_FP2_E0 >= 0 then UR_FP2_E0 else 0)] = (UR_FN2)
+        | UR_FP2_E1 := U_FIELD_HASH[UR_FP2_H + 1] - 1
+        | UR_FP2_HIT1 := UR_FP2_E1 >= 0 and UD_TYPE_OF[(if UR_FP2_E1 >= 0 then UR_FP2_E1 else 0)] = (UR_T2) and UD_NAME[(if UR_FP2_E1 >= 0 then UR_FP2_E1 else 0)] = (UR_FN2)
+        | UR_FP2_E2 := U_FIELD_HASH[UR_FP2_H + 2] - 1
+        | UR_FP2_HIT2 := UR_FP2_E2 >= 0 and UD_TYPE_OF[(if UR_FP2_E2 >= 0 then UR_FP2_E2 else 0)] = (UR_T2) and UD_NAME[(if UR_FP2_E2 >= 0 then UR_FP2_E2 else 0)] = (UR_FN2)
+        | UR_FP2_E3 := U_FIELD_HASH[UR_FP2_H + 3] - 1
+        | UR_FP2_HIT3 := UR_FP2_E3 >= 0 and UD_TYPE_OF[(if UR_FP2_E3 >= 0 then UR_FP2_E3 else 0)] = (UR_T2) and UD_NAME[(if UR_FP2_E3 >= 0 then UR_FP2_E3 else 0)] = (UR_FN2)
+        | UR_FP2_E4 := U_FIELD_HASH[UR_FP2_H + 4] - 1
+        | UR_FP2_HIT4 := UR_FP2_E4 >= 0 and UD_TYPE_OF[(if UR_FP2_E4 >= 0 then UR_FP2_E4 else 0)] = (UR_T2) and UD_NAME[(if UR_FP2_E4 >= 0 then UR_FP2_E4 else 0)] = (UR_FN2)
+        | UR_FP2_E5 := U_FIELD_HASH[UR_FP2_H + 5] - 1
+        | UR_FP2_HIT5 := UR_FP2_E5 >= 0 and UD_TYPE_OF[(if UR_FP2_E5 >= 0 then UR_FP2_E5 else 0)] = (UR_T2) and UD_NAME[(if UR_FP2_E5 >= 0 then UR_FP2_E5 else 0)] = (UR_FN2)
+        | UR_FP2_E6 := U_FIELD_HASH[UR_FP2_H + 6] - 1
+        | UR_FP2_HIT6 := UR_FP2_E6 >= 0 and UD_TYPE_OF[(if UR_FP2_E6 >= 0 then UR_FP2_E6 else 0)] = (UR_T2) and UD_NAME[(if UR_FP2_E6 >= 0 then UR_FP2_E6 else 0)] = (UR_FN2)
+        | UR_FP2_E7 := U_FIELD_HASH[UR_FP2_H + 7] - 1
+        | UR_FP2_HIT7 := UR_FP2_E7 >= 0 and UD_TYPE_OF[(if UR_FP2_E7 >= 0 then UR_FP2_E7 else 0)] = (UR_T2) and UD_NAME[(if UR_FP2_E7 >= 0 then UR_FP2_E7 else 0)] = (UR_FN2)
+        | UR_FP2_FOUND := if UR_FP2_HIT0 then UR_FP2_E0 else if UR_FP2_HIT1 then UR_FP2_E1 else if UR_FP2_HIT2 then UR_FP2_E2 else if UR_FP2_HIT3 then UR_FP2_E3 else if UR_FP2_HIT4 then UR_FP2_E4 else if UR_FP2_HIT5 then UR_FP2_E5 else if UR_FP2_HIT6 then UR_FP2_E6 else if UR_FP2_HIT7 then UR_FP2_E7 else -1
+        | UR_FP2_FREE := if UR_FP2_E0 < 0 then UR_FP2_H + 0 else if UR_FP2_E1 < 0 then UR_FP2_H + 1 else if UR_FP2_E2 < 0 then UR_FP2_H + 2 else if UR_FP2_E3 < 0 then UR_FP2_H + 3 else if UR_FP2_E4 < 0 then UR_FP2_H + 4 else if UR_FP2_E5 < 0 then UR_FP2_H + 5 else if UR_FP2_E6 < 0 then UR_FP2_H + 6 else if UR_FP2_E7 < 0 then UR_FP2_H + 7 else -1
+        | UR_F2 := if UR_ACTIVE2 and UR_T2 >= 0 then UR_FP2_FOUND else -1
+        | UR_NOT_TUPLE2 := UR_ACTIVE2 and UR_T2 < 0
+        | UR_UNKNOWN2 := UR_ACTIVE2 and UR_T2 >= 0 and UR_F2 < 0
+        | UR_BAD3 := UR_BAD2 or UR_NOT_TUPLE2 or UR_UNKNOWN2
+        | UR_FS2 := if UR_F2 >= 0 then UR_F2 else 0
+        | UR_T3 := if UR_ACTIVE2 then (if UR_F2 >= 0 then UD_NESTED[UR_FS2] else -1) else UR_T2
+        | UR_OFF3 := if UR_ACTIVE2 and UR_F2 >= 0 then UR_OFF2 + UD_LEAF_OFFSET[UR_FS2] else UR_OFF2
+        | UR_PREV3 := if UR_ACTIVE2 then UR_FN2 else UR_PREV2
+        | UR_FN3 := if UR_NF > 3 then RAW_TOKEN_NAME[UR_FIELD0 + 6] - 1 else -1
+        | UR_ACTIVE3 := UR_HEAD and UR_SIG >= 0 and UR_NF > 3 and not UR_BAD3
+        | UR_FP3_H := (if ((UR_T3) * 1031 + (UR_FN3)) >= 0 then ((UR_T3) * 1031 + (UR_FN3)) else 0) modulo U_HASH_CAP
+        | UR_FP3_E0 := U_FIELD_HASH[UR_FP3_H + 0] - 1
+        | UR_FP3_HIT0 := UR_FP3_E0 >= 0 and UD_TYPE_OF[(if UR_FP3_E0 >= 0 then UR_FP3_E0 else 0)] = (UR_T3) and UD_NAME[(if UR_FP3_E0 >= 0 then UR_FP3_E0 else 0)] = (UR_FN3)
+        | UR_FP3_E1 := U_FIELD_HASH[UR_FP3_H + 1] - 1
+        | UR_FP3_HIT1 := UR_FP3_E1 >= 0 and UD_TYPE_OF[(if UR_FP3_E1 >= 0 then UR_FP3_E1 else 0)] = (UR_T3) and UD_NAME[(if UR_FP3_E1 >= 0 then UR_FP3_E1 else 0)] = (UR_FN3)
+        | UR_FP3_E2 := U_FIELD_HASH[UR_FP3_H + 2] - 1
+        | UR_FP3_HIT2 := UR_FP3_E2 >= 0 and UD_TYPE_OF[(if UR_FP3_E2 >= 0 then UR_FP3_E2 else 0)] = (UR_T3) and UD_NAME[(if UR_FP3_E2 >= 0 then UR_FP3_E2 else 0)] = (UR_FN3)
+        | UR_FP3_E3 := U_FIELD_HASH[UR_FP3_H + 3] - 1
+        | UR_FP3_HIT3 := UR_FP3_E3 >= 0 and UD_TYPE_OF[(if UR_FP3_E3 >= 0 then UR_FP3_E3 else 0)] = (UR_T3) and UD_NAME[(if UR_FP3_E3 >= 0 then UR_FP3_E3 else 0)] = (UR_FN3)
+        | UR_FP3_E4 := U_FIELD_HASH[UR_FP3_H + 4] - 1
+        | UR_FP3_HIT4 := UR_FP3_E4 >= 0 and UD_TYPE_OF[(if UR_FP3_E4 >= 0 then UR_FP3_E4 else 0)] = (UR_T3) and UD_NAME[(if UR_FP3_E4 >= 0 then UR_FP3_E4 else 0)] = (UR_FN3)
+        | UR_FP3_E5 := U_FIELD_HASH[UR_FP3_H + 5] - 1
+        | UR_FP3_HIT5 := UR_FP3_E5 >= 0 and UD_TYPE_OF[(if UR_FP3_E5 >= 0 then UR_FP3_E5 else 0)] = (UR_T3) and UD_NAME[(if UR_FP3_E5 >= 0 then UR_FP3_E5 else 0)] = (UR_FN3)
+        | UR_FP3_E6 := U_FIELD_HASH[UR_FP3_H + 6] - 1
+        | UR_FP3_HIT6 := UR_FP3_E6 >= 0 and UD_TYPE_OF[(if UR_FP3_E6 >= 0 then UR_FP3_E6 else 0)] = (UR_T3) and UD_NAME[(if UR_FP3_E6 >= 0 then UR_FP3_E6 else 0)] = (UR_FN3)
+        | UR_FP3_E7 := U_FIELD_HASH[UR_FP3_H + 7] - 1
+        | UR_FP3_HIT7 := UR_FP3_E7 >= 0 and UD_TYPE_OF[(if UR_FP3_E7 >= 0 then UR_FP3_E7 else 0)] = (UR_T3) and UD_NAME[(if UR_FP3_E7 >= 0 then UR_FP3_E7 else 0)] = (UR_FN3)
+        | UR_FP3_FOUND := if UR_FP3_HIT0 then UR_FP3_E0 else if UR_FP3_HIT1 then UR_FP3_E1 else if UR_FP3_HIT2 then UR_FP3_E2 else if UR_FP3_HIT3 then UR_FP3_E3 else if UR_FP3_HIT4 then UR_FP3_E4 else if UR_FP3_HIT5 then UR_FP3_E5 else if UR_FP3_HIT6 then UR_FP3_E6 else if UR_FP3_HIT7 then UR_FP3_E7 else -1
+        | UR_FP3_FREE := if UR_FP3_E0 < 0 then UR_FP3_H + 0 else if UR_FP3_E1 < 0 then UR_FP3_H + 1 else if UR_FP3_E2 < 0 then UR_FP3_H + 2 else if UR_FP3_E3 < 0 then UR_FP3_H + 3 else if UR_FP3_E4 < 0 then UR_FP3_H + 4 else if UR_FP3_E5 < 0 then UR_FP3_H + 5 else if UR_FP3_E6 < 0 then UR_FP3_H + 6 else if UR_FP3_E7 < 0 then UR_FP3_H + 7 else -1
+        | UR_F3 := if UR_ACTIVE3 and UR_T3 >= 0 then UR_FP3_FOUND else -1
+        | UR_NOT_TUPLE3 := UR_ACTIVE3 and UR_T3 < 0
+        | UR_UNKNOWN3 := UR_ACTIVE3 and UR_T3 >= 0 and UR_F3 < 0
+        | UR_BAD4 := UR_BAD3 or UR_NOT_TUPLE3 or UR_UNKNOWN3
+        | UR_FS3 := if UR_F3 >= 0 then UR_F3 else 0
+        | UR_T4 := if UR_ACTIVE3 then (if UR_F3 >= 0 then UD_NESTED[UR_FS3] else -1) else UR_T3
+        | UR_OFF4 := if UR_ACTIVE3 and UR_F3 >= 0 then UR_OFF3 + UD_LEAF_OFFSET[UR_FS3] else UR_OFF3
+        | UR_PREV4 := if UR_ACTIVE3 then UR_FN3 else UR_PREV3
+        | UR_FN4 := if UR_NF > 4 then RAW_TOKEN_NAME[UR_FIELD0 + 8] - 1 else -1
+        | UR_ACTIVE4 := UR_HEAD and UR_SIG >= 0 and UR_NF > 4 and not UR_BAD4
+        | UR_FP4_H := (if ((UR_T4) * 1031 + (UR_FN4)) >= 0 then ((UR_T4) * 1031 + (UR_FN4)) else 0) modulo U_HASH_CAP
+        | UR_FP4_E0 := U_FIELD_HASH[UR_FP4_H + 0] - 1
+        | UR_FP4_HIT0 := UR_FP4_E0 >= 0 and UD_TYPE_OF[(if UR_FP4_E0 >= 0 then UR_FP4_E0 else 0)] = (UR_T4) and UD_NAME[(if UR_FP4_E0 >= 0 then UR_FP4_E0 else 0)] = (UR_FN4)
+        | UR_FP4_E1 := U_FIELD_HASH[UR_FP4_H + 1] - 1
+        | UR_FP4_HIT1 := UR_FP4_E1 >= 0 and UD_TYPE_OF[(if UR_FP4_E1 >= 0 then UR_FP4_E1 else 0)] = (UR_T4) and UD_NAME[(if UR_FP4_E1 >= 0 then UR_FP4_E1 else 0)] = (UR_FN4)
+        | UR_FP4_E2 := U_FIELD_HASH[UR_FP4_H + 2] - 1
+        | UR_FP4_HIT2 := UR_FP4_E2 >= 0 and UD_TYPE_OF[(if UR_FP4_E2 >= 0 then UR_FP4_E2 else 0)] = (UR_T4) and UD_NAME[(if UR_FP4_E2 >= 0 then UR_FP4_E2 else 0)] = (UR_FN4)
+        | UR_FP4_E3 := U_FIELD_HASH[UR_FP4_H + 3] - 1
+        | UR_FP4_HIT3 := UR_FP4_E3 >= 0 and UD_TYPE_OF[(if UR_FP4_E3 >= 0 then UR_FP4_E3 else 0)] = (UR_T4) and UD_NAME[(if UR_FP4_E3 >= 0 then UR_FP4_E3 else 0)] = (UR_FN4)
+        | UR_FP4_E4 := U_FIELD_HASH[UR_FP4_H + 4] - 1
+        | UR_FP4_HIT4 := UR_FP4_E4 >= 0 and UD_TYPE_OF[(if UR_FP4_E4 >= 0 then UR_FP4_E4 else 0)] = (UR_T4) and UD_NAME[(if UR_FP4_E4 >= 0 then UR_FP4_E4 else 0)] = (UR_FN4)
+        | UR_FP4_E5 := U_FIELD_HASH[UR_FP4_H + 5] - 1
+        | UR_FP4_HIT5 := UR_FP4_E5 >= 0 and UD_TYPE_OF[(if UR_FP4_E5 >= 0 then UR_FP4_E5 else 0)] = (UR_T4) and UD_NAME[(if UR_FP4_E5 >= 0 then UR_FP4_E5 else 0)] = (UR_FN4)
+        | UR_FP4_E6 := U_FIELD_HASH[UR_FP4_H + 6] - 1
+        | UR_FP4_HIT6 := UR_FP4_E6 >= 0 and UD_TYPE_OF[(if UR_FP4_E6 >= 0 then UR_FP4_E6 else 0)] = (UR_T4) and UD_NAME[(if UR_FP4_E6 >= 0 then UR_FP4_E6 else 0)] = (UR_FN4)
+        | UR_FP4_E7 := U_FIELD_HASH[UR_FP4_H + 7] - 1
+        | UR_FP4_HIT7 := UR_FP4_E7 >= 0 and UD_TYPE_OF[(if UR_FP4_E7 >= 0 then UR_FP4_E7 else 0)] = (UR_T4) and UD_NAME[(if UR_FP4_E7 >= 0 then UR_FP4_E7 else 0)] = (UR_FN4)
+        | UR_FP4_FOUND := if UR_FP4_HIT0 then UR_FP4_E0 else if UR_FP4_HIT1 then UR_FP4_E1 else if UR_FP4_HIT2 then UR_FP4_E2 else if UR_FP4_HIT3 then UR_FP4_E3 else if UR_FP4_HIT4 then UR_FP4_E4 else if UR_FP4_HIT5 then UR_FP4_E5 else if UR_FP4_HIT6 then UR_FP4_E6 else if UR_FP4_HIT7 then UR_FP4_E7 else -1
+        | UR_FP4_FREE := if UR_FP4_E0 < 0 then UR_FP4_H + 0 else if UR_FP4_E1 < 0 then UR_FP4_H + 1 else if UR_FP4_E2 < 0 then UR_FP4_H + 2 else if UR_FP4_E3 < 0 then UR_FP4_H + 3 else if UR_FP4_E4 < 0 then UR_FP4_H + 4 else if UR_FP4_E5 < 0 then UR_FP4_H + 5 else if UR_FP4_E6 < 0 then UR_FP4_H + 6 else if UR_FP4_E7 < 0 then UR_FP4_H + 7 else -1
+        | UR_F4 := if UR_ACTIVE4 and UR_T4 >= 0 then UR_FP4_FOUND else -1
+        | UR_NOT_TUPLE4 := UR_ACTIVE4 and UR_T4 < 0
+        | UR_UNKNOWN4 := UR_ACTIVE4 and UR_T4 >= 0 and UR_F4 < 0
+        | UR_BAD5 := UR_BAD4 or UR_NOT_TUPLE4 or UR_UNKNOWN4
+        | UR_FS4 := if UR_F4 >= 0 then UR_F4 else 0
+        | UR_T5 := if UR_ACTIVE4 then (if UR_F4 >= 0 then UD_NESTED[UR_FS4] else -1) else UR_T4
+        | UR_OFF5 := if UR_ACTIVE4 and UR_F4 >= 0 then UR_OFF4 + UD_LEAF_OFFSET[UR_FS4] else UR_OFF4
+        | UR_PREV5 := if UR_ACTIVE4 then UR_FN4 else UR_PREV4
+        | UR_NODE := UR_HEAD and UR_SIG >= 0 and UR_T0 >= 0
+        | UR_END := if UR_NF > 0 then U_CHAIN_LAST[UR_INDEX] + 1 else if UR_GROUP_OPEN >= 0 then U_CLOSE_OF[(if UR_GROUP_OPEN >= 0 then UR_GROUP_OPEN else 0)] else UR_INDEX + 1
+        | UR_NODE_SLOT := if UR_NODE then UR_INDEX else -1
+        | U_NODE_SIG := U_NODE_SIG[?] next UR_NODE_SLOT : UR_SIG + 1
+        | U_NODE_TYPE := U_NODE_TYPE[?] next UR_NODE_SLOT : UR_T5 + 1
+        | U_NODE_FIRST := U_NODE_FIRST[?] next UR_NODE_SLOT : UR_OFF5
+        | U_NODE_INDEX := U_NODE_INDEX[?] next UR_NODE_SLOT : UR_GROUP_OPEN + 1
+        | U_CHAIN_END := U_CHAIN_END[?] next UR_NODE_SLOT : UR_END
+        | UR_LEAVES_HERE := if UR_NODE and UR_T5 >= 0 then UY_LEAF_COUNT[(if UR_T5 >= 0 then UR_T5 else 0)] else 1
+        | UR_BEGIN := U_EQ_AT[UR_INDEX] - 1
+        | UR_E := if UR_BEGIN >= 0 then UR_BEGIN else UR_ACC_E[?]
+        | UR_ES := if UR_E >= 0 then UR_E else 0
+        | UR_DEFINE_AT := UQ_DEFINE[UR_ES]
+        | UR_IN_TARGET := UR_E >= 0 and UR_INDEX < UR_DEFINE_AT
+        | UR_AT_DEFINE := UR_E >= 0 and UR_INDEX = UR_DEFINE_AT
+        | UR_LIST := if UR_BEGIN >= 0 then UR_C = C_OPEN and U_CLOSE_OF[UR_INDEX] = UR_DEFINE_AT else UR_LIST[?]
+        | UR_INSIDE := UR_BEGIN < 0 and UR_INDEX < UR_SKIP[?]
+        | UR_ITEM := UR_IN_TARGET and UR_HEAD and not UR_INSIDE and UI_COUNT_ALL[?] < U_TLEAF_CAP
+        | UR_ITEM_LEAVES := if UR_ITEM then UR_LEAVES_HERE else 0
+        | UR_OK_TOKEN := UR_ITEM and UR_GROUP_OPEN < 0 or UR_INSIDE
+                       or UR_LIST and (UR_BEGIN >= 0 or UR_INDEX = UR_DEFINE_AT - 1
+                                       or UR_C = C_COMMA and U_LEVEL[UR_INDEX] = U_LEVEL[UQ_START[UR_ES]] + 1)
+        | UR_SKIP := if UR_ITEM then UR_END else if UR_BEGIN >= 0 then -1 else UR_SKIP[?]
+        | UR_VALID := if UR_BEGIN >= 0 then UR_OK_TOKEN else UR_VALID[?] and (not UR_IN_TARGET or UR_OK_TOKEN)
+        | UR_ITEMS := (if UR_BEGIN >= 0 then 0 else UR_ITEMS[?]) + integer(UR_ITEM)
+        | UR_LEAVES := (if UR_BEGIN >= 0 then 0 else UR_LEAVES[?]) + UR_ITEM_LEAVES
+        | UR_TUPLE := (UR_BEGIN < 0 and UR_TUPLE[?]) or UR_ITEM and UR_T5 >= 0
+        | UR_TLEAF := UR_TLEAF[?] + UR_ITEM_LEAVES
+        | UR_ITEM_SLOT := if UR_ITEM then UI_COUNT_ALL[?] else -1
+        | UI_COUNT_ALL := UI_COUNT_ALL[?] + integer(UR_ITEM)
+        | UI_HEAD := UI_HEAD[?] next UR_ITEM_SLOT : UR_INDEX
+        | UI_EQ := UI_EQ[?] next UR_ITEM_SLOT : UR_E
+        | UI_ORD := UI_ORD[?] next UR_ITEM_SLOT : (if UR_BEGIN >= 0 then 0 else UR_ITEMS[?])
+        | UI_SLOT := UI_SLOT[?] next UR_ITEM_SLOT : UR_TLEAF[?]
+        | UI_COUNT := UI_COUNT[?] next UR_ITEM_SLOT : UR_ITEM_LEAVES
+        | UQ_TLEAF_BASE := UQ_TLEAF_BASE[?] next (if UR_BEGIN >= 0 then UR_BEGIN else -1) : UR_TLEAF[?]
+        | UR_ACC_E := if UR_AT_DEFINE then -1 else UR_E
+        | UR_RHS := UR_INDEX + 1
+        | UR_RHS_END := UQ_END[UR_ES]
+        | UR_RHS_NEXT := integer(RAW_TOKEN_CODE[(if (UR_INDEX + 2) >= 0 then (UR_INDEX + 2) else 0)])
+        | UR_BRACE_CLOSE := if UR_RHS_NEXT = C_OPEN_BRACE then U_CLOSE_OF[UR_INDEX + 2] - 1 else -1
+        | UR_CALL_PAREN := if UR_RHS_NEXT = C_OPEN then UR_INDEX + 2
+                         else if UR_BRACE_CLOSE >= 0 and integer(RAW_TOKEN_CODE[(if (UR_BRACE_CLOSE + 1) >= 0 then (UR_BRACE_CLOSE + 1) else 0)]) = C_OPEN then UR_BRACE_CLOSE + 1 else -1
+        | UR_WHOLE := UR_AT_DEFINE and integer(RAW_TOKEN_CODE[(if (UR_RHS) >= 0 then (UR_RHS) else 0)]) = C_NAME and UR_CALL_PAREN >= 0
+                    and U_CLOSE_OF[if UR_CALL_PAREN >= 0 then UR_CALL_PAREN else 0] - 1 = UR_RHS_END
+        | UR_KIND := if not UR_VALID[?] or not UR_TUPLE[?] and (not UR_LIST[?] or UR_WHOLE) then 0
+                   else if UR_TUPLE[?] and UR_WHOLE then 1 else 2
+        | UQ_KIND := UQ_KIND[?] next (if UR_AT_DEFINE then UR_E else -1) : UR_KIND
+        | UQ_LEAVES := UQ_LEAVES[?] next (if UR_AT_DEFINE then UR_E else -1) : UR_LEAVES[?]
+        | UQ_ITEMS := UQ_ITEMS[?] next (if UR_AT_DEFINE then UR_E else -1) : UR_ITEMS[?]
+        | UQ_LIST := UQ_LIST[?] next (if UR_AT_DEFINE then UR_E else -1) : UR_LIST[?]
+        | U_WHOLE_CALL := U_WHOLE_CALL[?] next (if UR_WHOLE then UR_CALL_PAREN else -1) : true
+        | UR_ESTIMATE := UR_ESTIMATE[?] + (if UR_AT_DEFINE and UR_KIND = 2
+                                    then long(UR_LEAVES[?]) * (long(UR_RHS_END - UR_INDEX + 2) * long(4 * UK_MAXLEAF + 6) + long(8))
+                                    else if UR_AT_DEFINE and UR_KIND = 1 then long(2 * UR_LEAVES[?] + 4) else long(0))
+        | UR_CALLEE := if UR_C /= C_OPEN then -1 else if UR_PC = C_NAME then RAW_TOKEN_NAME[(if (UR_INDEX - 1) >= 0 then (UR_INDEX - 1) else 0)] - 1
+                     else if UR_PC = C_CLOSE_BRACE and U_OPEN_OF[(if UR_INDEX - 1 >= 0 then UR_INDEX - 1 else 0)] >= 2
+                             and integer(RAW_TOKEN_CODE[(if (U_OPEN_OF[(if UR_INDEX - 1 >= 0 then UR_INDEX - 1 else 0)] - 2) >= 0 then (U_OPEN_OF[(if UR_INDEX - 1 >= 0 then UR_INDEX - 1 else 0)] - 2) else 0)]) = C_NAME then RAW_TOKEN_NAME[(if (U_OPEN_OF[(if UR_INDEX - 1 >= 0 then UR_INDEX - 1 else 0)] - 2) >= 0 then (U_OPEN_OF[(if UR_INDEX - 1 >= 0 then UR_INDEX - 1 else 0)] - 2) else 0)] - 1
+                     else -1
+        | U_CALLEE := U_CALLEE[?] next (if UR_CALLEE >= 0 then UR_INDEX else -1) : UR_CALLEE + 1
+        | UR_TV := UR_C = C_OPEN and UR_CALLEE < 0 and U_COMMAS[UR_INDEX] > 0 and UR_PC /= C_INTEGER and UR_PC /= C_BOOLEAN
+                 and UR_PC /= C_SHORT and UR_PC /= C_LONG and UR_PC /= C_EVENT and UR_PC /= C_ENUM
+                 and UR_COMPONENTS[?] + U_COMMAS[UR_INDEX] + 2 < U_TLEAF_CAP
+        | U_TV := U_TV[?] next (if UR_TV then UR_INDEX else -1) : true
+        | U_TV_BASE := U_TV_BASE[?] next (if UR_TV then UR_INDEX else -1) : UR_COMPONENTS[?] + 1
+        | UR_COMPONENTS := UR_COMPONENTS[?] + (if UR_TV then U_COMMAS[UR_INDEX] + 2 else 0)
+        | UR_OWNER := if UR_C = C_COMMA then U_ENCLOSING[UR_INDEX] - 1 else if UR_C = C_CLOSE then U_OPEN_OF[UR_INDEX] - 1 else -1
+        | UR_OWNER_TV := UR_OWNER >= 0 and U_TV[if UR_OWNER >= 0 then UR_OWNER else 0]
+        | UR_OWNER_BASE := U_TV_BASE[if UR_OWNER >= 0 then UR_OWNER else 0] - 1
+        | U_COMPONENT_AT := U_COMPONENT_AT[?] next (if UR_TV then UR_COMPONENTS[?]
+                                                 else if UR_OWNER_TV and UR_C = C_COMMA then UR_OWNER_BASE + U_COMMA_ORD[UR_INDEX] + 1
+                                                 else if UR_OWNER_TV then UR_OWNER_BASE + U_COMMAS[(if UR_OWNER >= 0 then UR_OWNER else 0)] + 1 else -1)
+                          : UR_INDEX + 2
+        | UR_FOUND_MESSAGE := if UR_BAD0 then T_NOT_TUPLE else if UR_NOT_TUPLE0 then T_NOT_TUPLE else if UR_NOT_TUPLE1 then T_NOT_TUPLE else if UR_NOT_TUPLE2 then T_NOT_TUPLE else if UR_NOT_TUPLE3 then T_NOT_TUPLE else if UR_NOT_TUPLE4 then T_NOT_TUPLE else if UR_UNKNOWN0 then T_FIELD_UNKNOWN else if UR_UNKNOWN1 then T_FIELD_UNKNOWN else if UR_UNKNOWN2 then T_FIELD_UNKNOWN else if UR_UNKNOWN3 then T_FIELD_UNKNOWN else if UR_UNKNOWN4 then T_FIELD_UNKNOWN else if UR_IN_TARGET and UR_HEAD and not UR_INSIDE and UI_COUNT_ALL[?] >= U_TLEAF_CAP then T_CAPACITY else 0
+        | UR_FOUND_ARGUMENT0 := if UR_BAD0 then UR_N else if UR_NOT_TUPLE0 then UR_PREV0 else if UR_NOT_TUPLE1 then UR_PREV1 else if UR_NOT_TUPLE2 then UR_PREV2 else if UR_NOT_TUPLE3 then UR_PREV3 else if UR_NOT_TUPLE4 then UR_PREV4 else if UR_UNKNOWN0 then UR_PREV0 else if UR_UNKNOWN1 then UR_PREV1 else if UR_UNKNOWN2 then UR_PREV2 else if UR_UNKNOWN3 then UR_PREV3 else if UR_UNKNOWN4 then UR_PREV4 else if UR_IN_TARGET and UR_HEAD and not UR_INSIDE and UI_COUNT_ALL[?] >= U_TLEAF_CAP then F_CAP_TUPLES else 0
+        | UR_FOUND_ARGUMENT1 := if UR_BAD0 then UR_FN0 else if UR_NOT_TUPLE0 then UR_FN0 else if UR_NOT_TUPLE1 then UR_FN1 else if UR_NOT_TUPLE2 then UR_FN2 else if UR_NOT_TUPLE3 then UR_FN3 else if UR_NOT_TUPLE4 then UR_FN4 else if UR_UNKNOWN0 then UR_FN0 else if UR_UNKNOWN1 then UR_FN1 else if UR_UNKNOWN2 then UR_FN2 else if UR_UNKNOWN3 then UR_FN3 else if UR_UNKNOWN4 then UR_FN4 else if UR_IN_TARGET and UR_HEAD and not UR_INSIDE and UI_COUNT_ALL[?] >= U_TLEAF_CAP then 0 else 0
+        | UR_FOUND_ARGUMENT2 := if UR_BAD0 then 0 else if UR_NOT_TUPLE0 then 0 else if UR_NOT_TUPLE1 then 0 else if UR_NOT_TUPLE2 then 0 else if UR_NOT_TUPLE3 then 0 else if UR_NOT_TUPLE4 then 0 else if UR_UNKNOWN0 then 0 else if UR_UNKNOWN1 then 0 else if UR_UNKNOWN2 then 0 else if UR_UNKNOWN3 then 0 else if UR_UNKNOWN4 then 0 else if UR_IN_TARGET and UR_HEAD and not UR_INSIDE and UI_COUNT_ALL[?] >= U_TLEAF_CAP then 0 else 0
+        | UR_FIRST_ERROR := UR_MESSAGE[?] = 0 and UR_FOUND_MESSAGE /= 0
+        | UR_MESSAGE := if UR_FIRST_ERROR then UR_FOUND_MESSAGE else UR_MESSAGE[?]
+        | UR_TOKEN := if UR_FIRST_ERROR then UR_INDEX else UR_TOKEN[?]
+        | UR_ARGUMENT0 := if UR_FIRST_ERROR then UR_FOUND_ARGUMENT0 else UR_ARGUMENT0[?]
+        | UR_ARGUMENT1 := if UR_FIRST_ERROR then UR_FOUND_ARGUMENT1 else UR_ARGUMENT1[?]
+        | UR_ARGUMENT2 := if UR_FIRST_ERROR then UR_FOUND_ARGUMENT2 else UR_ARGUMENT2[?]
+        |)
+     with (| UR_ACC_E := -1 | UR_SKIP := -1 | UR_LIST := false | UR_VALID := false | UR_ITEMS := 0 | UR_LEAVES := 0
+           | UR_TUPLE := false | UR_TLEAF := 0 | UI_COUNT_ALL := 0 | UR_ESTIMATE := long(0) | UR_COMPONENTS := 0
+           | UR_MESSAGE := 0 | UR_TOKEN := 0 | UR_ARGUMENT0 := 0 | UR_ARGUMENT1 := 0 | UR_ARGUMENT2 := 0 |)
+     end
+   | UR_OK := UK_OK and UR_MESSAGE = 0
+   | UF_INDEX := 0 .. (if UR_OK then UD_COUNT - 1 else -1)
+   | iterate UF_INDEX of
+       (| UF_TYPE := UD_TYPE_OF[UF_INDEX]
+        | UF_AT := UF_AT[?] next UY_FIELD_BASE[UF_TYPE] + UD_ORD[UF_INDEX] : UF_INDEX
+        | UF_NESTED := UD_NESTED[UF_INDEX]
+        | UF_STRUCT_GROUP := not UY_KIND[UF_TYPE] and UD_ORD[UF_INDEX] = 0 and UY_LEAF_COUNT[UF_TYPE] >= 2
+        | UF_FIELD_GROUP := UY_KIND[UF_TYPE] and UF_NESTED >= 0 and UY_LEAF_COUNT[if UF_NESTED >= 0 then UF_NESTED else 0] >= 2
+        | UF_GROUPS := UF_STRUCT_GROUP or UF_FIELD_GROUP
+        | UF_GROUP_NEW := UA_COUNT[?]
+        | UA_COUNT := UA_COUNT[?] + integer(UF_GROUPS)
+        | UF_GROUP_SLOT := if UF_GROUPS then UF_GROUP_NEW else -1
+        | UA_LEAF := UA_LEAF[?] next UF_GROUP_SLOT : (if UF_STRUCT_GROUP then 0 else UD_LEAF_OFFSET[UF_INDEX])
+        | UA_LEAVES := UA_LEAVES[?] next UF_GROUP_SLOT
+                     : (if UF_STRUCT_GROUP then UY_LEAF_COUNT[UF_TYPE] else UY_LEAF_COUNT[if UF_NESTED >= 0 then UF_NESTED else 0])
+        | UF_LAST := UY_GROUP_LAST[?][UF_TYPE] - 1
+        | UA_NEXT := UA_NEXT[?] next (if UF_GROUPS and UF_LAST >= 0 then UF_LAST else -1) : UF_GROUP_NEW + 1
+        | UY_GROUP_FIRST := UY_GROUP_FIRST[?] next (if UF_GROUPS and UF_LAST < 0 then UF_TYPE else -1) : UF_GROUP_NEW + 1
+        | UY_GROUP_LAST := UY_GROUP_LAST[?] next (if UF_GROUPS then UF_TYPE else -1) : UF_GROUP_NEW + 1
+        |)
+     with UA_COUNT := 0
+     end
+   | UL_INDEX := 0 .. (if UR_OK then UP_LEAF_SLOTS - 1 else -1)
+   | iterate UL_INDEX of
+       (| UL_CTYPE := UY_CLOSE_ORDER[UL_C[?]]
+        | UL_C := if UL_INDEX >= UY_LEAF_BASE[UL_CTYPE] + UY_LEAF_COUNT[UL_CTYPE] then UL_C[?] + 1 else UL_C[?]
+        | UL_TYPE := UY_CLOSE_ORDER[UL_C]
+        | UL_K := UL_INDEX - UY_LEAF_BASE[UL_TYPE]
+        | UL_JF := UF_AT[UY_FIELD_BASE[UL_TYPE] + UL_J[?]]
+        | UL_JNEST := UD_NESTED[UL_JF]
+        | UL_JEND := UD_LEAF_OFFSET[UL_JF] + (if UL_JNEST >= 0 then UY_LEAF_COUNT[UL_JNEST] else 1)
+        | UL_J := if UL_K = 0 then 0 else if UL_K >= UL_JEND then UL_J[?] + 1 else UL_J[?]
+        | UL_F := UF_AT[UY_FIELD_BASE[UL_TYPE] + UL_J]
+        | UL_FIELD := UL_FIELD[?] next UL_INDEX : UL_F
+        | UL_SUB := UL_SUB[?] next UL_INDEX : UL_K - UD_LEAF_OFFSET[UL_F]
+        |)
+     with (| UL_C := 0 | UL_J := 0 |)
+     end
+   | UG_INDEX := 0 .. (if UR_OK then 5 * UR_TLEAF - 1 else -1)
+   | iterate UG_INDEX of
+       (| UG_G := UG_INDEX / 5
+        | UG_LEVEL := UG_INDEX modulo 5
+        | UG_CI := UI_SLOT[UG_C[?]] + UI_COUNT[UG_C[?]]
+        | UG_C := if UG_LEVEL = 0 and UG_G >= UG_CI then UG_C[?] + 1 else UG_C[?]
+        | UG_HEAD := UI_HEAD[UG_C]
+        | UG_E := UI_EQ[UG_C]
+        | UG_J0 := UG_G - UI_SLOT[UG_C]
+        | UG_SIG := U_NODE_SIG[UG_HEAD] - 1
+        | UG_NODE_T := U_NODE_TYPE[UG_HEAD] - 1
+        | UG_LIST := UQ_LIST[UG_E]
+        | UG_START := UG_LEVEL = 0
+        | UG_FROM_T := if UG_START then UG_NODE_T else UG_T[?]
+        | UG_FROM_J := if UG_START then UG_J0 else UG_J[?]
+        | UG_TAKES_LIST := UG_START and UG_LIST
+        | UG_D_ON := UG_FROM_T >= 0
+        | UG_D_F := if UG_D_ON then UL_FIELD[UY_LEAF_BASE[(if (UG_FROM_T) >= 0 then (UG_FROM_T) else 0)] + UG_FROM_J] else 0
+        | UG_D_COMP := if UG_D_ON then UD_ORD[UG_D_F] else -1
+        | UG_D_COUNT := if UG_D_ON then UY_FIELD_COUNT[(if (UG_FROM_T) >= 0 then (UG_FROM_T) else 0)] else 0
+        | UG_D_NT := if UG_D_ON then UD_NESTED[UG_D_F] else -1
+        | UG_D_NJ := if UG_D_ON then UL_SUB[UY_LEAF_BASE[(if (UG_FROM_T) >= 0 then (UG_FROM_T) else 0)] + UG_FROM_J] else 0
+        | UG_COMP_HERE := if UG_TAKES_LIST then UI_ORD[UG_C] else UG_D_COMP
+        | UG_COUNT_HERE := if UG_TAKES_LIST then UQ_ITEMS[UG_E] else UG_D_COUNT
+        | UG_T := if UG_TAKES_LIST then UG_FROM_T else UG_D_NT
+        | UG_J := if UG_TAKES_LIST then UG_FROM_J else UG_D_NJ
+        | UG_COMP := UG_COMP[?] next UG_INDEX : UG_COMP_HERE
+        | UG_COUNT := UG_COUNT[?] next UG_INDEX : UG_COUNT_HERE
+        | UG_LENGTH_RUN := (if UG_START then 0 else UG_LENGTH_RUN[?]) + integer(UG_COMP_HERE >= 0)
+        | UG_LENGTH := UG_LENGTH[?] next (if UG_LEVEL = 4 then UG_G else -1) : UG_LENGTH_RUN
+        | UG_NAME := UG_NAME[?] next (if UG_START then UG_G else -1)
+                   : (if UG_SIG >= 0 then NAME_COUNT + US_HIDDEN_BASE[UG_SIG] + U_NODE_FIRST[UG_HEAD] + UG_J0 else RAW_TOKEN_NAME[UG_HEAD] - 1)
+        | UG_ORIGIN := UG_ORIGIN[?] next (if UG_START then UG_G else -1) : UG_HEAD
+        |)
+     with (| UG_C := 0 | UG_T := -1 | UG_J := 0 | UG_LENGTH_RUN := 0 |)
+     end
+   | UH_INDEX := 0 .. (if UR_OK then UK_HIDDEN - 1 else -1)
+   | iterate UH_INDEX of
+       (| UH_SP := UK_TUPLE_SIG[UH_S[?]]
+        | UH_SI := US_HIDDEN_BASE[UH_SP] + UY_LEAF_COUNT[US_TYPE[UH_SP]]
+        | UH_SIG := UK_TUPLE_SIG[UH_S]
+        | UH_S := if UH_INDEX >= UH_SI then UH_S[?] + 1 else UH_S[?]
+        | UH_K := UH_INDEX - US_HIDDEN_BASE[UH_SIG]
+        | UH_T0 := US_TYPE[UH_SIG]
+        | UH_J0 := UH_K
+        | UH_ON0 := UH_T0 >= 0
+        | UH_F0 := if UH_ON0 then UL_FIELD[UY_LEAF_BASE[(if (UH_T0) >= 0 then (UH_T0) else 0)] + UH_J0] else -1
+        | UH_T1 := if UH_ON0 then UD_NESTED[(if (UH_F0) >= 0 then (UH_F0) else 0)] else -1
+        | UH_J1 := if UH_ON0 then UL_SUB[UY_LEAF_BASE[(if (UH_T0) >= 0 then (UH_T0) else 0)] + UH_J0] else 0
+        | UH_LENGTH0 := if UH_ON0 then 1 + NAME_LENGTH[UD_NAME[(if (UH_F0) >= 0 then (UH_F0) else 0)]] else 0
+        | UH_ON1 := UH_T1 >= 0
+        | UH_F1 := if UH_ON1 then UL_FIELD[UY_LEAF_BASE[(if (UH_T1) >= 0 then (UH_T1) else 0)] + UH_J1] else -1
+        | UH_T2 := if UH_ON1 then UD_NESTED[(if (UH_F1) >= 0 then (UH_F1) else 0)] else -1
+        | UH_J2 := if UH_ON1 then UL_SUB[UY_LEAF_BASE[(if (UH_T1) >= 0 then (UH_T1) else 0)] + UH_J1] else 0
+        | UH_LENGTH1 := if UH_ON1 then 1 + NAME_LENGTH[UD_NAME[(if (UH_F1) >= 0 then (UH_F1) else 0)]] else 0
+        | UH_ON2 := UH_T2 >= 0
+        | UH_F2 := if UH_ON2 then UL_FIELD[UY_LEAF_BASE[(if (UH_T2) >= 0 then (UH_T2) else 0)] + UH_J2] else -1
+        | UH_T3 := if UH_ON2 then UD_NESTED[(if (UH_F2) >= 0 then (UH_F2) else 0)] else -1
+        | UH_J3 := if UH_ON2 then UL_SUB[UY_LEAF_BASE[(if (UH_T2) >= 0 then (UH_T2) else 0)] + UH_J2] else 0
+        | UH_LENGTH2 := if UH_ON2 then 1 + NAME_LENGTH[UD_NAME[(if (UH_F2) >= 0 then (UH_F2) else 0)]] else 0
+        | UH_ON3 := UH_T3 >= 0
+        | UH_F3 := if UH_ON3 then UL_FIELD[UY_LEAF_BASE[(if (UH_T3) >= 0 then (UH_T3) else 0)] + UH_J3] else -1
+        | UH_T4 := if UH_ON3 then UD_NESTED[(if (UH_F3) >= 0 then (UH_F3) else 0)] else -1
+        | UH_J4 := if UH_ON3 then UL_SUB[UY_LEAF_BASE[(if (UH_T3) >= 0 then (UH_T3) else 0)] + UH_J3] else 0
+        | UH_LENGTH3 := if UH_ON3 then 1 + NAME_LENGTH[UD_NAME[(if (UH_F3) >= 0 then (UH_F3) else 0)]] else 0
+        | UH_BASE_LENGTH := NAME_LENGTH[US_NAME[UH_SIG]]
+        | UH_TOTAL_HERE := UH_BASE_LENGTH + UH_LENGTH0 + UH_LENGTH1 + UH_LENGTH2 + UH_LENGTH3
+        | UH_AT := UH_AT[?] next UH_INDEX : UH_TOTAL[?]
+        | UH_LENGTH := UH_LENGTH[?] next UH_INDEX : UH_TOTAL_HERE
+        | UH_TOTAL := UH_TOTAL[?] + UH_TOTAL_HERE
+        | UH_NAME0 := UH_NAME0[?] next UH_INDEX : US_NAME[UH_SIG]
+        | UH_NAME1 := UH_NAME1[?] next UH_INDEX : (if UH_ON0 then UD_NAME[(if (UH_F0) >= 0 then (UH_F0) else 0)] else -1)
+        | UH_NAME2 := UH_NAME2[?] next UH_INDEX : (if UH_ON1 then UD_NAME[(if (UH_F1) >= 0 then (UH_F1) else 0)] else -1)
+        | UH_NAME3 := UH_NAME3[?] next UH_INDEX : (if UH_ON2 then UD_NAME[(if (UH_F2) >= 0 then (UH_F2) else 0)] else -1)
+        | UH_NAME4 := UH_NAME4[?] next UH_INDEX : (if UH_ON3 then UD_NAME[(if (UH_F3) >= 0 then (UH_F3) else 0)] else -1)
+        |)
+     with (| UH_S := 0 | UH_TOTAL := 0 |)
+     end
+   | UX_INDEX := 0 .. (if UR_OK and UH_TOTAL <= U_TEXT_CAP then UH_TOTAL - 1 else -1)
+   | iterate UX_INDEX of
+       (| UX_H := if UX_INDEX >= UH_AT[UX_H[?]] + UH_LENGTH[UX_H[?]] then UX_H[?] + 1 else UX_H[?]
+        | UX_O := UX_INDEX - UH_AT[UX_H]
+        | UX_B0 := NAME_LENGTH[UH_NAME0[UX_H]]
+        | UX_B1 := UX_B0 + (if UH_NAME1[UX_H] >= 0 then 1 + NAME_LENGTH[(if (UH_NAME1[UX_H]) >= 0 then (UH_NAME1[UX_H]) else 0)] else 0)
+        | UX_B2 := UX_B1 + (if UH_NAME2[UX_H] >= 0 then 1 + NAME_LENGTH[(if (UH_NAME2[UX_H]) >= 0 then (UH_NAME2[UX_H]) else 0)] else 0)
+        | UX_B3 := UX_B2 + (if UH_NAME3[UX_H] >= 0 then 1 + NAME_LENGTH[(if (UH_NAME3[UX_H]) >= 0 then (UH_NAME3[UX_H]) else 0)] else 0)
+        | UX_B4 := UX_B3 + (if UH_NAME4[UX_H] >= 0 then 1 + NAME_LENGTH[(if (UH_NAME4[UX_H]) >= 0 then (UH_NAME4[UX_H]) else 0)] else 0)
+        | UX_AT := if UX_O < UX_B0 then NAME_AT[UH_NAME0[UX_H]] + UX_O
+                   else if UX_O = UX_B0 then -1 else if UX_O < UX_B1 then NAME_AT[(if (UH_NAME1[UX_H]) >= 0 then (UH_NAME1[UX_H]) else 0)] + UX_O - UX_B0 - 1
+                   else if UX_O = UX_B1 then -1 else if UX_O < UX_B2 then NAME_AT[(if (UH_NAME2[UX_H]) >= 0 then (UH_NAME2[UX_H]) else 0)] + UX_O - UX_B1 - 1
+                   else if UX_O = UX_B2 then -1 else if UX_O < UX_B3 then NAME_AT[(if (UH_NAME3[UX_H]) >= 0 then (UH_NAME3[UX_H]) else 0)] + UX_O - UX_B2 - 1
+                   else if UX_O = UX_B3 then -1 else if UX_O < UX_B4 then NAME_AT[(if (UH_NAME4[UX_H]) >= 0 then (UH_NAME4[UX_H]) else 0)] + UX_O - UX_B3 - 1 else -1
+        | U_HIDDEN_TEXT := U_HIDDEN_TEXT[?] next UX_INDEX
+                         : (if UX_AT < 0 then ubyte(46) else if UX_AT < SEED_LENGTH then SEED[UX_AT] else SRC[(if UX_AT - SEED_LENGTH >= 0 then UX_AT - SEED_LENGTH else 0)])
+        |)
+     with UX_H := 0
+     end
+   | UE_LIMIT := if not U_SEEN then long(RAW_TOKEN_COUNT + 1)
+                 else if not UR_OK or UH_TOTAL > U_TEXT_CAP then long(0)
+                 else long(RAW_TOKEN_COUNT) * long(4 * UK_MAXLEAF + 8) + UK_ESTIMATE + UR_ESTIMATE + long(16)
+   | UE_STEPS := if UE_LIMIT > long(U_EMIT_CAP) then U_EMIT_CAP else integer(UE_LIMIT)
+   | UE_INDEX := 0 .. (if INTERNED then UE_STEPS - 1 else -1)
+   | iterate UE_INDEX of
+       (| UE_MODE0 := UE_MODE[?]
+        | UE_R := UE_POS[?]
+        | UE_RS := if UE_R < RAW_TOKEN_COUNT then UE_R else 0
+        | UE_C := integer(RAW_TOKEN_CODE[(if (UE_RS) >= 0 then (UE_RS) else 0)])
+        | UE_PC := if UE_RS > 0 then integer(RAW_TOKEN_CODE[(if (UE_RS - 1) >= 0 then (UE_RS - 1) else 0)]) else 0
+        | UE_EQ0 := UE_EQ[?] - 1
+        | UE_ES := if UE_EQ0 >= 0 then UE_EQ0 else 0
+        | UE_KIND := if UE_EQ0 >= 0 then UQ_KIND[UE_ES] else 0
+        | UE_PROJ := UE_KIND = 2
+        | UE_CF := UE_KIND = 1
+        | UE_TOP := UE_EQ0 < 0
+        | UE_LV := UE_LEVEL[?]
+        | UE_PATH := UE_PATHLEN[?]
+        | UE_TLS := UE_TL[?]
+        | UE_WALKS := UE_MODE0 = 0
+        | UE_W1 := UE_WALKS and UE_PROJ and UE_LV = 0 and UE_R > UQ_END[UE_ES]
+        | UE_W1C := UE_WALKS and UE_CF and UE_R > UQ_END[UE_ES]
+        | UE_LVS := if UE_LV > 0 then UE_LV - 1 else 0
+        | UE_W2 := UE_WALKS and not UE_W1 and not UE_W1C and UE_LV > 0 and UE_R = UE_CEND[?][UE_LVS]
+        | UE_W3 := UE_WALKS and not UE_W1 and not UE_W1C and not UE_W2 and UE_R = UE_JUMP_FROM[?]
+        | UE_PRE := UE_WALKS and not UE_W1 and not UE_W1C and not UE_W2 and not UE_W3
+        | UE_CFC := UE_PRE and UE_R = UE_CF_CLOSE[?]
+        | UE_PRE2 := UE_PRE and not UE_CFC
+        | UE_DONE_NOW := UE_PRE2 and UE_R >= RAW_TOKEN_COUNT
+        | UE_LIVE := UE_PRE2 and not UE_DONE_NOW
+        | UE_W4 := UE_LIVE and UE_TOP and U_REMOVE_TO[UE_RS] > 0
+        | UE_W5_DECL := U_DECL_AT[UE_RS] - 1
+        | UE_W5 := UE_LIVE and UE_TOP and not UE_W4 and UE_W5_DECL >= 0 and UC_FINAL[(if UE_W5_DECL >= 0 then UE_W5_DECL else 0)] >= 0
+        | UE_BODY_MODEL := U_BODY_CLOSE_MODEL[UE_RS]
+        | UE_W6 := UE_LIVE and UE_TOP and not UE_W4 and not UE_W5 and UE_BODY_MODEL > 0 and UE_RDONE[?] /= UE_R
+                 and UM_SIG_FIRST[UE_BODY_MODEL] > 0
+        | UE_EQ_HERE := U_EQ_AT[UE_RS] - 1
+        | UE_EQ_HERE_KIND := if UE_EQ_HERE >= 0 then UQ_KIND[(if UE_EQ_HERE >= 0 then UE_EQ_HERE else 0)] else 0
+        | UE_W7 := UE_LIVE and UE_TOP and not UE_W4 and not UE_W5 and not UE_W6 and UE_EQ_HERE_KIND > 0
+        | UE_W7_SINGLE := UE_W7 and UE_EQ_HERE_KIND = 1 and not UQ_LIST[(if UE_EQ_HERE >= 0 then UE_EQ_HERE else 0)]
+        | UE_REST := UE_LIVE and not UE_W4 and not UE_W5 and not UE_W6 and not UE_W7
+        | UE_SIG := U_NODE_SIG[UE_RS] - 1
+        | UE_CHAIN := UE_REST and UE_SIG >= 0
+        | UE_SIGS := if UE_SIG >= 0 then UE_SIG else 0
+        | UE_NT := U_NODE_TYPE[UE_RS] - 1
+        | UE_NTS := if UE_NT >= 0 then UE_NT else 0
+        | UE_FIRST := U_NODE_FIRST[UE_RS]
+        | UE_CEND_HERE := U_CHAIN_END[UE_RS]
+        | UE_IDX := U_NODE_INDEX[UE_RS] - 1
+        | UE_HNAME := RAW_TOKEN_NAME[(if (UE_RS) >= 0 then (UE_RS) else 0)] - 1
+        | UE_HBASE := NAME_COUNT + US_HIDDEN_BASE[UE_SIGS] + UE_FIRST
+        | UE_LEAFCOUNT := if UE_NT >= 0 then UY_LEAF_COUNT[UE_NTS] else 1
+        | UE_AFTER := integer(RAW_TOKEN_CODE[(if (UE_CEND_HERE) >= 0 then (UE_CEND_HERE) else 0)])
+        | UE_CLOCK_OP := UE_PC = C_CARET or UE_PC = C_CLOCK_EQUAL or UE_PC = C_CLOCK_SHARP or UE_PC = C_CLOCK_LT or UE_PC = C_CLOCK_GT
+                       or UE_PC = C_CLOCK_PLUS or UE_PC = C_CLOCK_TIMES or UE_PC = C_CLOCK_MINUS
+                       or UE_AFTER = C_CLOCK_EQUAL or UE_AFTER = C_CLOCK_SHARP or UE_AFTER = C_CLOCK_LT or UE_AFTER = C_CLOCK_GT
+                       or UE_AFTER = C_CLOCK_PLUS or UE_AFTER = C_CLOCK_TIMES or UE_AFTER = C_CLOCK_MINUS
+        | UE_ARG_OPEN := if UE_PC = C_OPEN then UE_RS - 1 else if UE_PC = C_COMMA then U_ENCLOSING[(if UE_RS - 1 >= 0 then UE_RS - 1 else 0)] - 1 else -1
+        | UE_ARG_OS := if UE_ARG_OPEN >= 0 then UE_ARG_OPEN else 0
+        | UE_ARG_CALLEE := if UE_ARG_OPEN >= 0 then U_CALLEE[UE_ARG_OS] - 1 else -1
+        | UE_WHOLE_ARG := UE_ARG_CALLEE >= 0 and (UE_AFTER = C_COMMA and U_ENCLOSING[UE_CEND_HERE] - 1 = UE_ARG_OPEN
+                                             or U_CLOSE_OF[UE_ARG_OS] - 1 = UE_CEND_HERE)
+        | UE_ARG_EFFECT := UE_ARG_CALLEE >= N_LOAD and UE_ARG_CALLEE <= N_INSTRUCTION
+        | UE_ARG_MODEL := UE_ARG_CALLEE >= 0 and U_MODEL_OF_NAME[if UE_ARG_CALLEE >= 0 then UE_ARG_CALLEE else 0] > 0
+        | UE_B_HEAD := UE_CEND_HERE + 1
+        | UE_B_SIG := U_NODE_SIG[UE_B_HEAD] - 1
+        | UE_B_T := U_NODE_TYPE[UE_B_HEAD] - 1
+        | UE_B_TUPLE := UE_B_SIG >= 0 and UE_B_T >= 0
+        | UE_IDENT := UE_AFTER = C_IDENTITY
+        | UE_EQX_OK := (UE_AFTER = C_EQUAL_EQUAL or UE_IDENT) and UE_B_TUPLE
+        | UE_BUNDLE := UE_NT >= 0 and UY_KIND[UE_NTS]
+        | UE_KIND_MIX := UE_B_TUPLE and UE_NT >= 0 and UY_KIND[UE_NTS] /= UY_KIND[if UE_B_T >= 0 then UE_B_T else 0]
+                       and (UE_AFTER = C_EQUAL_EQUAL or UE_IDENT or UE_AFTER = C_LESS_LESS_EQUAL)
+        | UE_SHAPE_CALL := (UE_ARG_CALLEE = N_SIZE or UE_ARG_CALLEE = N_DIM) and not UE_ARG_MODEL and UE_IDX < 0 and US_ARRAY[UE_SIGS]
+        | UE_A := UE_CHAIN and UE_CF and UE_R < UQ_DEFINE[UE_ES]
+        | UE_B := UE_CHAIN and not UE_A and UE_NT < 0
+        | UE_C1 := UE_CHAIN and not UE_A and UE_NT >= 0 and UE_CLOCK_OP
+        | UE_C2 := UE_CHAIN and not UE_A and UE_NT >= 0 and not UE_CLOCK_OP and UE_PROJ and UE_LV < UE_PATH
+        | UE_C_REST := UE_CHAIN and not UE_A and UE_NT >= 0 and not UE_CLOCK_OP and not UE_C2
+        | UE_C3 := UE_C_REST and UE_WHOLE_ARG
+        | UE_C4 := UE_C_REST and not UE_C3 and UE_EQX_OK
+        | UE_C5 := UE_C_REST and not UE_C3 and not UE_C4 and UE_AFTER = C_LESS_LESS_EQUAL
+        | UE_C6 := UE_C_REST and not UE_C3 and not UE_C4 and not UE_C5
+        | UE_PT0 := UE_NT
+        | UE_POFF0 := 0
+        | UE_PSHAPE0 := false
+        | UE_PON0 := UE_C2 and UE_LV + 0 < UE_PATH and UE_PT0 >= 0 and not UE_PSHAPE0
+        | UE_PQ0 := if UE_PON0 then UE_TLS * 5 + UE_LV + 0 else 0
+        | UE_PCOMP0 := UG_COMP[UE_PQ0]
+        | UE_PCOUNT0 := UG_COUNT[UE_PQ0]
+        | UE_PTS0 := if UE_PT0 >= 0 then UE_PT0 else 0
+        | UE_PNF0 := UY_FIELD_COUNT[UE_PTS0]
+        | UE_PBAD0 := UE_PON0 and (UE_PNF0 /= UE_PCOUNT0 or UE_PCOMP0 < 0)
+        | UE_PSHAPE1 := UE_PSHAPE0 or UE_PBAD0
+        | UE_PF0 := if UE_PON0 and not UE_PBAD0 then UF_AT[(if (UY_FIELD_BASE[UE_PTS0] + UE_PCOMP0) >= 0 then (UY_FIELD_BASE[UE_PTS0] + UE_PCOMP0) else 0)] else 0
+        | UE_PT1 := if UE_PON0 and not UE_PBAD0 then UD_NESTED[UE_PF0] else UE_PT0
+        | UE_POFF1 := if UE_PON0 and not UE_PBAD0 then UE_POFF0 + UD_LEAF_OFFSET[UE_PF0] else UE_POFF0
+        | UE_PON1 := UE_C2 and UE_LV + 1 < UE_PATH and UE_PT1 >= 0 and not UE_PSHAPE1
+        | UE_PQ1 := if UE_PON1 then UE_TLS * 5 + UE_LV + 1 else 0
+        | UE_PCOMP1 := UG_COMP[UE_PQ1]
+        | UE_PCOUNT1 := UG_COUNT[UE_PQ1]
+        | UE_PTS1 := if UE_PT1 >= 0 then UE_PT1 else 0
+        | UE_PNF1 := UY_FIELD_COUNT[UE_PTS1]
+        | UE_PBAD1 := UE_PON1 and (UE_PNF1 /= UE_PCOUNT1 or UE_PCOMP1 < 0)
+        | UE_PSHAPE2 := UE_PSHAPE1 or UE_PBAD1
+        | UE_PF1 := if UE_PON1 and not UE_PBAD1 then UF_AT[(if (UY_FIELD_BASE[UE_PTS1] + UE_PCOMP1) >= 0 then (UY_FIELD_BASE[UE_PTS1] + UE_PCOMP1) else 0)] else 0
+        | UE_PT2 := if UE_PON1 and not UE_PBAD1 then UD_NESTED[UE_PF1] else UE_PT1
+        | UE_POFF2 := if UE_PON1 and not UE_PBAD1 then UE_POFF1 + UD_LEAF_OFFSET[UE_PF1] else UE_POFF1
+        | UE_PON2 := UE_C2 and UE_LV + 2 < UE_PATH and UE_PT2 >= 0 and not UE_PSHAPE2
+        | UE_PQ2 := if UE_PON2 then UE_TLS * 5 + UE_LV + 2 else 0
+        | UE_PCOMP2 := UG_COMP[UE_PQ2]
+        | UE_PCOUNT2 := UG_COUNT[UE_PQ2]
+        | UE_PTS2 := if UE_PT2 >= 0 then UE_PT2 else 0
+        | UE_PNF2 := UY_FIELD_COUNT[UE_PTS2]
+        | UE_PBAD2 := UE_PON2 and (UE_PNF2 /= UE_PCOUNT2 or UE_PCOMP2 < 0)
+        | UE_PSHAPE3 := UE_PSHAPE2 or UE_PBAD2
+        | UE_PF2 := if UE_PON2 and not UE_PBAD2 then UF_AT[(if (UY_FIELD_BASE[UE_PTS2] + UE_PCOMP2) >= 0 then (UY_FIELD_BASE[UE_PTS2] + UE_PCOMP2) else 0)] else 0
+        | UE_PT3 := if UE_PON2 and not UE_PBAD2 then UD_NESTED[UE_PF2] else UE_PT2
+        | UE_POFF3 := if UE_PON2 and not UE_PBAD2 then UE_POFF2 + UD_LEAF_OFFSET[UE_PF2] else UE_POFF2
+        | UE_PON3 := UE_C2 and UE_LV + 3 < UE_PATH and UE_PT3 >= 0 and not UE_PSHAPE3
+        | UE_PQ3 := if UE_PON3 then UE_TLS * 5 + UE_LV + 3 else 0
+        | UE_PCOMP3 := UG_COMP[UE_PQ3]
+        | UE_PCOUNT3 := UG_COUNT[UE_PQ3]
+        | UE_PTS3 := if UE_PT3 >= 0 then UE_PT3 else 0
+        | UE_PNF3 := UY_FIELD_COUNT[UE_PTS3]
+        | UE_PBAD3 := UE_PON3 and (UE_PNF3 /= UE_PCOUNT3 or UE_PCOMP3 < 0)
+        | UE_PSHAPE4 := UE_PSHAPE3 or UE_PBAD3
+        | UE_PF3 := if UE_PON3 and not UE_PBAD3 then UF_AT[(if (UY_FIELD_BASE[UE_PTS3] + UE_PCOMP3) >= 0 then (UY_FIELD_BASE[UE_PTS3] + UE_PCOMP3) else 0)] else 0
+        | UE_PT4 := if UE_PON3 and not UE_PBAD3 then UD_NESTED[UE_PF3] else UE_PT3
+        | UE_POFF4 := if UE_PON3 and not UE_PBAD3 then UE_POFF3 + UD_LEAF_OFFSET[UE_PF3] else UE_POFF3
+        | UE_PON4 := UE_C2 and UE_LV + 4 < UE_PATH and UE_PT4 >= 0 and not UE_PSHAPE4
+        | UE_PQ4 := if UE_PON4 then UE_TLS * 5 + UE_LV + 4 else 0
+        | UE_PCOMP4 := UG_COMP[UE_PQ4]
+        | UE_PCOUNT4 := UG_COUNT[UE_PQ4]
+        | UE_PTS4 := if UE_PT4 >= 0 then UE_PT4 else 0
+        | UE_PNF4 := UY_FIELD_COUNT[UE_PTS4]
+        | UE_PBAD4 := UE_PON4 and (UE_PNF4 /= UE_PCOUNT4 or UE_PCOMP4 < 0)
+        | UE_PSHAPE5 := UE_PSHAPE4 or UE_PBAD4
+        | UE_PF4 := if UE_PON4 and not UE_PBAD4 then UF_AT[(if (UY_FIELD_BASE[UE_PTS4] + UE_PCOMP4) >= 0 then (UY_FIELD_BASE[UE_PTS4] + UE_PCOMP4) else 0)] else 0
+        | UE_PT5 := if UE_PON4 and not UE_PBAD4 then UD_NESTED[UE_PF4] else UE_PT4
+        | UE_POFF5 := if UE_PON4 and not UE_PBAD4 then UE_POFF4 + UD_LEAF_OFFSET[UE_PF4] else UE_POFF4
+        | UE_SHAPE_FOUND := if UE_PBAD0 then UE_PNF0 else if UE_PBAD1 then UE_PNF1 else if UE_PBAD2 then UE_PNF2 else if UE_PBAD3 then UE_PNF3 else if UE_PBAD4 then UE_PNF4 else 0
+        | UE_SHAPE_WANT := if UE_PBAD0 then UE_PCOUNT0 else if UE_PBAD1 then UE_PCOUNT1 else if UE_PBAD2 then UE_PCOUNT2 else if UE_PBAD3 then UE_PCOUNT3 else if UE_PBAD4 then UE_PCOUNT4 else 0
+        | UE_C2_STILL := UE_C2 and not UE_PSHAPE5 and UE_PT5 >= 0
+        | UE_TV := UE_REST and not UE_CHAIN and UE_PROJ and UE_C = C_OPEN and U_TV[UE_RS]
+        | UE_TV_SELECT := UE_TV and UE_LV < UE_PATH
+        | UE_TQ := UE_TLS * 5 + (if UE_LV < 5 then UE_LV else 4)
+        | UE_TV_COMP := UG_COMP[UE_TQ]
+        | UE_TV_WANT := UG_COUNT[UE_TQ]
+        | UE_TV_HAVE := U_COMMAS[UE_RS] + 1
+        | UE_TV_BAD := UE_TV_SELECT and (UE_TV_HAVE /= UE_TV_WANT or UE_TV_COMP < 0)
+        | UE_TV_GO := UE_TV_SELECT and not UE_TV_BAD
+        | UE_TV_BASE := (if U_TV_BASE[UE_RS] - 1 + (if UE_TV_GO then UE_TV_COMP else 0) >= 0 then U_TV_BASE[UE_RS] - 1 + (if UE_TV_GO then UE_TV_COMP else 0) else 0)
+        | UE_TV_START := U_COMPONENT_AT[UE_TV_BASE] - 1
+        | UE_TV_END := U_COMPONENT_AT[UE_TV_BASE + 1] - 2
+        | UE_TV_BARE := UE_PC = C_INIT
+        | UE_CALLEE := if UE_REST and not UE_CHAIN and UE_C = C_OPEN then U_CALLEE[UE_RS] - 1 else -1
+        | UE_CALLEE_MODEL := if UE_CALLEE >= 0 then U_MODEL_OF_NAME[(if UE_CALLEE >= 0 then UE_CALLEE else 0)] else 0
+        | UE_TUPLE_CALL := UE_CALLEE_MODEL > 0 and UM_TUPLE_OUT[UE_CALLEE_MODEL] and not U_WHOLE_CALL[UE_RS]
+        | UE_SPREAD := not UE_TUPLE_CALL and UE_PROJ and UE_LV < UE_PATH and UE_CALLEE >= 0
+                     and (UE_CALLEE_MODEL > 0 or UE_CALLEE >= N_LOAD and UE_CALLEE <= N_INSTRUCTION)
+        | UE_COPY := UE_REST and not UE_CHAIN and not UE_TV and not UE_TUPLE_CALL and not UE_SPREAD
+        | UE_N1 := integer(RAW_TOKEN_CODE[(if (UE_RS + 1) >= 0 then (UE_RS + 1) else 0)])
+        | UE_DELAY_INIT := UE_COPY and UE_PROJ and UE_LV < UE_PATH
+                          and (UE_C = C_DOLLAR or UE_C = C_NAME and RAW_TOKEN_NAME[(if (UE_RS) >= 0 then (UE_RS) else 0)] - 1 = N_WINDOW) and integer(RAW_TOKEN_CODE[(if (UE_RS + 2) >= 0 then (UE_RS + 2) else 0)]) = C_INIT
+                          and not (UE_C = C_DOLLAR and UE_N1 = C_NUMBER and RAW_TOKEN_VALUE[(if (UE_RS + 1) >= 0 then (UE_RS + 1) else 0)] = long(1))
+        | UE_TV_AFTER := U_CLOSE_OF[UE_RS]
+        | UE_TV_ARGUMENT := UE_COPY and UE_C = C_OPEN and U_TV[UE_RS] and UE_ARG_CALLEE >= 0
+                           and (integer(RAW_TOKEN_CODE[(if (UE_TV_AFTER) >= 0 then (UE_TV_AFTER) else 0)]) = C_COMMA and U_ENCLOSING[UE_TV_AFTER] - 1 = UE_ARG_OPEN
+                                or U_CLOSE_OF[UE_ARG_OS] - 1 = UE_TV_AFTER)
+        | UE_FLAT_STARTS := UE_A or UE_C3 and UE_ARG_MODEL and UE_IDX < 0
+        | UE_EQX_STARTS := UE_C4 and not UE_KIND_MIX and (UE_IDENT or not UE_BUNDLE) and UE_IDX < 0 and U_NODE_INDEX[UE_B_HEAD] = 0
+                         and UY_LEAF_COUNT[UE_NTS] = UY_LEAF_COUNT[if UE_B_T >= 0 then UE_B_T else 0]
+        | UE_ERROR_HERE := if UE_TUPLE_CALL then T_TUPLE_CALL
+                         else if UE_TV_ARGUMENT then T_TUPLE_ARGUMENT
+                         else if UE_DELAY_INIT then T_TUPLE_DELAY_INIT
+                         else if UE_SPREAD then T_TUPLE_SPREAD
+                         else if UE_TV_BAD then T_TUPLE_SHAPE
+                         else if UE_TV and not UE_TV_SELECT then T_TUPLE_VALUE
+                         else if UE_C1 and UE_BUNDLE then T_BUNDLE_CLOCK
+                         else if (UE_C2 or UE_C4 or UE_C5) and UE_KIND_MIX then T_TUPLE_KIND_MIX
+                         else if UE_C2 and UE_PSHAPE5 then T_TUPLE_SHAPE
+                         else if UE_C2_STILL then T_TUPLE_EXPRESSION
+                         else if UE_C3 and UE_ARG_EFFECT then T_TUPLE_EFFECT
+                         else if UE_C3 and not UE_ARG_MODEL and not UE_SHAPE_CALL then T_TUPLE_EXPRESSION
+                         else if UE_C3 and UE_IDX >= 0 then T_TUPLE_PLACE
+                         else if UE_C4 and UE_BUNDLE and not UE_IDENT then T_TUPLE_EXPRESSION
+                         else if UE_C4 and not UE_EQX_STARTS and (UE_IDX >= 0 or U_NODE_INDEX[UE_B_HEAD] > 0)
+                              then (if UE_IDENT then T_TUPLE_PLACE else T_STRUCT_ELEMENT_EQUAL)
+                         else if UE_C4 and not UE_EQX_STARTS then T_TUPLE_SHAPE
+                         else if UE_C5 and not UE_BUNDLE then T_STRUCT_ORDER
+                         else if UE_C6 and UE_IDX >= 0 and (UE_AFTER = C_DEFINE or UE_AFTER = C_PARTIAL_DEFINE) then T_STRUCT_ELEMENT_TARGET
+                         else if UE_C5 or UE_C6 then T_TUPLE_EXPRESSION
+                         else 0
+        | UE_ERROR_ARG0 := if UE_TUPLE_CALL or UE_SPREAD then UE_CALLEE
+                         else if UE_TV_ARGUMENT then UE_ARG_CALLEE
+                         else if (UE_C2 or UE_C4 or UE_C5) and UE_KIND_MIX then UE_HNAME
+                         else if UE_TV_BAD then UE_TV_HAVE
+                         else if UE_C2 and UE_PSHAPE5 then UE_SHAPE_FOUND
+                         else if UE_C4 and not UE_BUNDLE and not UE_KIND_MIX then UY_LEAF_COUNT[if UE_B_T >= 0 then UE_B_T else 0]
+                         else UE_HNAME
+        | UE_ERROR_ARG1 := if UE_C3 and UE_ARG_EFFECT then UE_ARG_CALLEE
+                         else if (UE_C2 or UE_C4 or UE_C5) and UE_KIND_MIX then RAW_TOKEN_NAME[(if (UE_B_HEAD) >= 0 then (UE_B_HEAD) else 0)] - 1
+                         else if UE_C6 and UE_IDX >= 0 then UE_HNAME
+                         else if UE_TV_BAD or UE_C2 and UE_PSHAPE5 or UE_C4 then UE_TARGET_NAME[?]
+                         else 0
+        | UE_ERROR_ARG2 := if UE_TV_BAD then UE_TV_WANT else if UE_C2 and UE_PSHAPE5 then UE_SHAPE_WANT
+                         else if UE_C4 then UY_LEAF_COUNT[UE_NTS] else 0
+        | UE_LEAF_EMIT := UE_ERROR_HERE = 0 and (UE_B or UE_C1 or UE_C2 or UE_C3 and UE_SHAPE_CALL)
+        | UE_LEAF_ID := UE_HBASE + (if UE_C2 then UE_POFF5 else 0)
+        | UE_LEAF_END := if UE_IDX >= 0 then UE_IDX else UE_CEND_HERE
+        | UE_ENTER_DECL := UE_W5
+        | UE_D0 := U_DECL_AT[UE_RS] - 1
+        | UE_DM := UE_MODE0 = 1
+        | UE_D := UE_DEC[?]
+        | UE_DPREFIX := UC_TYPE_START[UE_D] - UC_START[UE_D]
+        | UE_DTYPE := UC_FINAL[UE_D]
+        | UE_DLEAVES := UY_LEAF_COUNT[UE_DTYPE]
+        | UE_DK := UE_DLEAF[?]
+        | UE_DT0 := UE_DTYPE
+        | UE_DJ0 := UE_DK
+        | UE_DLASTF0 := -1
+        | UE_DON0 := UE_DT0 >= 0
+        | UE_DF0 := if UE_DON0 then UL_FIELD[UY_LEAF_BASE[(if (UE_DT0) >= 0 then (UE_DT0) else 0)] + UE_DJ0] else 0
+        | UE_DT1 := if UE_DON0 then UD_NESTED[UE_DF0] else -1
+        | UE_DJ1 := if UE_DON0 then UL_SUB[UY_LEAF_BASE[(if (UE_DT0) >= 0 then (UE_DT0) else 0)] + UE_DJ0] else 0
+        | UE_DLASTF1 := if UE_DON0 then UE_DF0 else UE_DLASTF0
+        | UE_DON1 := UE_DT1 >= 0
+        | UE_DF1 := if UE_DON1 then UL_FIELD[UY_LEAF_BASE[(if (UE_DT1) >= 0 then (UE_DT1) else 0)] + UE_DJ1] else 0
+        | UE_DT2 := if UE_DON1 then UD_NESTED[UE_DF1] else -1
+        | UE_DJ2 := if UE_DON1 then UL_SUB[UY_LEAF_BASE[(if (UE_DT1) >= 0 then (UE_DT1) else 0)] + UE_DJ1] else 0
+        | UE_DLASTF2 := if UE_DON1 then UE_DF1 else UE_DLASTF1
+        | UE_DON2 := UE_DT2 >= 0
+        | UE_DF2 := if UE_DON2 then UL_FIELD[UY_LEAF_BASE[(if (UE_DT2) >= 0 then (UE_DT2) else 0)] + UE_DJ2] else 0
+        | UE_DT3 := if UE_DON2 then UD_NESTED[UE_DF2] else -1
+        | UE_DJ3 := if UE_DON2 then UL_SUB[UY_LEAF_BASE[(if (UE_DT2) >= 0 then (UE_DT2) else 0)] + UE_DJ2] else 0
+        | UE_DLASTF3 := if UE_DON2 then UE_DF2 else UE_DLASTF2
+        | UE_DON3 := UE_DT3 >= 0
+        | UE_DF3 := if UE_DON3 then UL_FIELD[UY_LEAF_BASE[(if (UE_DT3) >= 0 then (UE_DT3) else 0)] + UE_DJ3] else 0
+        | UE_DT4 := if UE_DON3 then UD_NESTED[UE_DF3] else -1
+        | UE_DJ4 := if UE_DON3 then UL_SUB[UY_LEAF_BASE[(if (UE_DT3) >= 0 then (UE_DT3) else 0)] + UE_DJ3] else 0
+        | UE_DLASTF4 := if UE_DON3 then UE_DF3 else UE_DLASTF3
+        | UE_DFS := if UE_DLASTF4 >= 0 then UE_DLASTF4 else 0
+        | UE_DTSTART := UD_FSTART[UE_DFS]
+        | UE_DTLEN := UD_FEND[UE_DFS] - UE_DTSTART + 1
+        | UE_DPART := if UE_DPART0[?] = 0 and UE_DPREFIX = 0 then 1 else UE_DPART0[?]
+        | UE_DJ := UE_DNAME[?]
+        | UE_DSIG := UC_SIG_FIRST[UE_D] + UE_DJ
+        | UE_DNAME_AT := UC_NAMES[UE_D] + 2 * UE_DJ
+        | UE_DOFF := UE_DOFFSET[?]
+        | UE_DPART_DONE := UE_DPART = 0 and UE_DOFF + 1 >= UE_DPREFIX or UE_DPART = 1 and UE_DOFF + 1 >= UE_DTLEN or UE_DPART >= 2
+        | UE_DLEAF_LAST := UE_DK + 1 >= UE_DLEAVES
+        | UE_DNAME_LAST := UE_DJ + 1 >= UC_NAME_COUNT[UE_D]
+        | UE_DFINISH := UE_DM and UE_DPART = 3 and UE_DLEAF_LAST and UE_DNAME_LAST
+        | UE_RM := UE_MODE0 = 2
+        | UE_RSIG := UE_RELSIG[?] - 1
+        | UE_RSIGS := if UE_RSIG >= 0 then UE_RSIG else 0
+        | UE_RTYPE := US_TYPE[UE_RSIGS]
+        | UE_RTS := if UE_RTYPE >= 0 then UE_RTYPE else 0
+        | UE_RPH := UE_RPHASE[?]
+        | UE_RG := UE_RGROUP[?] - 1
+        | UE_RGS := if UE_RG >= 0 then UE_RG else 0
+        | UE_RJ := UE_RLEAF[?]
+        | UE_RP := UE_RPART[?]
+        | UE_RSPEC := if UE_RTYPE >= 0 then UY_SPEC_OPEN[UE_RTS] - 1 else -1
+        | UE_RSPEC_CLOSE := if UE_RSPEC >= 0 then U_CLOSE_OF[(if UE_RSPEC >= 0 then UE_RSPEC else 0)] - 1 else -1
+        | UE_RSPEC_EMPTY := UE_RSPEC < 0 or UE_RSPEC_CLOSE <= UE_RSPEC + 1
+        | UE_ROFF := UE_ROFFSET[?]
+        | UE_RTOKEN := UE_RSPEC + 1 + UE_ROFF
+        | UE_RFIELD := if UE_RSPEC >= 0 then U_SPEC_FIELD[if UE_RTOKEN >= 0 then UE_RTOKEN else 0] - 1 else -1
+        | UE_RFINISH := UE_RM and UE_RSIG < 0
+        | UE_RGROUP_SKIP := UE_RM and UE_RSIG >= 0 and UE_RPH = 0 and UE_RG < 0
+        | UE_RSPEC_SKIP := UE_RM and UE_RSIG >= 0 and UE_RPH = 1 and UE_RSPEC_EMPTY
+        | UE_RACTIVE := UE_RM and UE_RSIG >= 0 and not UE_RGROUP_SKIP and not UE_RSPEC_SKIP
+        | UE_RSEP := UE_RACTIVE and UE_RP = 0
+        | UE_RSEP_EMITS := UE_RSEP and UE_RNEED[?]
+        | UE_RLEAF_EMITS := UE_RACTIVE and UE_RPH = 0 and UE_RP = 1
+        | UE_RCLOCK_EMITS := UE_RACTIVE and UE_RPH = 0 and UE_RP = 2
+        | UE_RSPEC_EMITS := UE_RACTIVE and UE_RPH = 1 and UE_RP = 1
+        | UE_RGROUP_DONE := UE_RLEAF_EMITS and UE_RJ + 1 >= UA_LEAVES[UE_RGS]
+        | UE_RSPEC_DONE := UE_RSPEC_EMITS and UE_RTOKEN + 1 >= UE_RSPEC_CLOSE or UE_RSPEC_SKIP
+        | UE_RNEXT_SIG := US_NEXT[UE_RSIGS]
+        | UE_RNEXT_TYPE := US_TYPE[if UE_RNEXT_SIG > 0 then UE_RNEXT_SIG - 1 else 0]
+        | UE_FM := UE_MODE0 = 3
+        | UE_FJ := UE_FLAT_J[?]
+        | UE_FLEAF := UE_FM and UE_FLAT_PART[?] = 0
+        | UE_FDONE := UE_FLEAF and UE_FJ + 1 >= UE_FLAT_COUNT[?]
+        | UE_XM := UE_MODE0 = 4
+        | UE_XP := UE_EQX_PART[?]
+        | UE_XJ := UE_EQX_J[?]
+        | UE_XDONE := UE_XM and UE_XP = 4 and UE_XJ + 1 >= UE_EQX_COUNT[?]
+        | UE_QOPEN := UE_MODE0 = 5
+        | UE_QTARGET := UE_MODE0 = 6
+        | UE_QDEFINE := UE_MODE0 = 7
+        | UE_QSEP := UE_MODE0 = 8
+        | UE_QTL := UQ_TLEAF_BASE[UE_ES] + UE_LEAF[?]
+        | UE_QMORE := UE_LEAF[?] + 1 < UQ_LEAVES[UE_ES]
+        | UE_EMITS := UE_W2 and UE_CPAREN[?][UE_LVS] or UE_CFC or UE_W7_SINGLE
+                    or UE_ERROR_HERE = 0 and (UE_LEAF_EMIT or UE_TV_GO and not UE_TV_BARE or UE_COPY)
+                    or UE_DM or UE_RSEP_EMITS or UE_RLEAF_EMITS or UE_RCLOCK_EMITS or UE_RSPEC_EMITS
+                    or UE_FM or UE_XM or UE_QOPEN or UE_QTARGET or UE_QDEFINE or UE_QSEP
+        | UE_SRC := if UE_COPY or UE_TV_GO then UE_RS
+                  else if UE_DM and UE_DPART = 0 then UC_START[UE_D] + UE_DOFF
+                  else if UE_DM and UE_DPART = 1 then UE_DTSTART + UE_DOFF
+                  else if UE_RSPEC_EMITS and UE_RFIELD < 0 then UE_RTOKEN
+                  else if UE_QDEFINE then UQ_DEFINE[UE_ES]
+                  else -1
+        | UE_SYN_CODE := if UE_W2 then C_CLOSE else if UE_CFC then C_CLOSE else if UE_W7_SINGLE then C_OPEN
+                       else if UE_DM and UE_DPART = 3 then C_SEMICOLON
+                       else if UE_RSEP_EMITS then C_BAR else if UE_RCLOCK_EMITS then C_CLOCK_EQUAL
+                       else if UE_FM and not UE_FLEAF then C_COMMA
+                       else if UE_XM and UE_XP = 0 then (if UE_EQX_IDENT[?] then C_OPEN_BAR else C_OPEN)
+                       else if UE_XM and UE_XP = 2 then (if UE_EQX_IDENT[?] then C_IDENTITY else C_EQUAL_EQUAL)
+                       else if UE_XM and UE_XP = 4 and UE_EQX_IDENT[?] then (if UE_XDONE then C_BAR_CLOSE else C_BAR)
+                       else if UE_XM and UE_XP = 4 then (if UE_XDONE then C_CLOSE else C_AND)
+                       else if UE_QOPEN then C_OPEN_BAR else if UE_QSEP then (if UE_QMORE then C_BAR else C_BAR_CLOSE)
+                       else C_NAME
+        | UE_SYN_KIND := if UE_SYN_CODE = C_NAME then KIND_NAME else if UE_SYN_CODE = C_AND then KIND_KEYWORD else KIND_SYMBOL
+        | UE_SYN_NAME := if UE_LEAF_EMIT then UE_LEAF_ID + 1
+                       else if UE_DM then NAME_COUNT + US_HIDDEN_BASE[UE_DSIG] + UE_DK + 1
+                       else if UE_RLEAF_EMITS then NAME_COUNT + US_HIDDEN_BASE[UE_RSIGS] + UA_LEAF[UE_RGS] + UE_RJ + 1
+                       else if UE_RSPEC_EMITS then NAME_COUNT + US_HIDDEN_BASE[UE_RSIGS] + UD_LEAF_OFFSET[if UE_RFIELD >= 0 then UE_RFIELD else 0] + 1
+                       else if UE_FM then UE_FLAT_BASE[?] + UE_FJ + 1
+                       else if UE_XM and UE_XP = 1 then UE_EQX_A[?] + UE_XJ + 1
+                       else if UE_XM and UE_XP = 3 then UE_EQX_B[?] + UE_XJ + 1
+                       else if UE_QTARGET then UG_NAME[UE_QTL] + 1
+                       else if UE_SYN_CODE = C_AND then C_AND else 0
+        | UE_ORIGIN := if UE_SRC >= 0 then UE_SRC
+                     else if UE_DM then UE_DNAME_AT
+                     else if UE_RM then UE_REL_ORIGIN[?]
+                     else if UE_FM then UE_FLAT_ORIGIN[?]
+                     else if UE_XM then UE_EQX_ORIGIN[?]
+                     else if UE_QTARGET then UG_ORIGIN[UE_QTL]
+                     else if UE_QOPEN or UE_QSEP then UQ_DEFINE[UE_ES]
+                     else UE_RS
+        | UE_ORIGIN_END := if UE_LEAF_EMIT and UE_IDX < 0 and UE_NT < 0 then UE_CEND_HERE - 1 else UE_ORIGIN
+        | UE_SRCS := if UE_SRC >= 0 then UE_SRC else 0
+        | UE_SLOT := if UE_EMITS and UE_COUNT[?] < TOKEN_CAP then UE_COUNT[?] else -1
+        | UE_COUNT := UE_COUNT[?] + integer(UE_EMITS)
+        | UE_OVERFLOW := UE_OVERFLOW[?] or UE_EMITS and UE_COUNT[?] >= TOKEN_CAP
+        | UE_COPIES := UE_SRC >= 0
+        | TOKEN_KIND := TOKEN_KIND[?] next UE_SLOT : (if UE_COPIES then RAW_TOKEN_KIND[UE_SRCS] else ubyte(UE_SYN_KIND))
+        | TOKEN_CODE := TOKEN_CODE[?] next UE_SLOT : (if UE_COPIES then RAW_TOKEN_CODE[UE_SRCS] else ubyte(UE_SYN_CODE))
+        | TOKEN_NAME := TOKEN_NAME[?] next UE_SLOT : (if UE_COPIES then RAW_TOKEN_NAME[UE_SRCS] else UE_SYN_NAME)
+        | TOKEN_START := TOKEN_START[?] next UE_SLOT : RAW_TOKEN_START[UE_ORIGIN]
+        | TOKEN_LENGTH := TOKEN_LENGTH[?] next UE_SLOT
+                        : (if UE_COPIES then RAW_TOKEN_LENGTH[UE_SRCS]
+                           else RAW_TOKEN_START[UE_ORIGIN_END] + RAW_TOKEN_LENGTH[UE_ORIGIN_END] - RAW_TOKEN_START[UE_ORIGIN])
+        | TOKEN_TEXT := TOKEN_TEXT[?] next UE_SLOT : RAW_TOKEN_TEXT[UE_ORIGIN]
+        | TOKEN_LINE := TOKEN_LINE[?] next UE_SLOT : RAW_TOKEN_LINE[UE_ORIGIN]
+        | TOKEN_COLUMN := TOKEN_COLUMN[?] next UE_SLOT : RAW_TOKEN_COLUMN[UE_ORIGIN]
+        | TOKEN_VALUE := TOKEN_VALUE[?] next UE_SLOT : (if UE_COPIES then RAW_TOKEN_VALUE[UE_SRCS] else long(0))
+        | TOKEN_BIG := TOKEN_BIG[?] next UE_SLOT : UE_COPIES and RAW_TOKEN_BIG[UE_SRCS]
+        | UE_FINISHED := UE_FINISHED[?] or UE_DONE_NOW
+        | UE_MODE := if UE_ERROR_HERE /= 0 or UE_DONE_NOW then 9
+                   else if UE_W1 then 8
+                   else if UE_W5 then 1
+                   else if UE_W6 then 2
+                   else if UE_W7 and UE_EQ_HERE_KIND = 2 then 5
+                   else if UE_FLAT_STARTS then 3
+                   else if UE_EQX_STARTS then 4
+                   else if UE_DFINISH or UE_RFINISH or UE_FDONE or UE_XDONE then 0
+                   else if UE_QOPEN then 6 else if UE_QTARGET then 7 else if UE_QDEFINE then 0
+                   else if UE_QSEP then (if UE_QMORE then 6 else 0)
+                   else UE_MODE0
+        | UE_POS := if UE_W2 then UE_CCLOSE[?][UE_LVS] + 1
+                  else if UE_W3 then UE_JUMP_TO[?]
+                  else if UE_W4 then U_REMOVE_TO[UE_RS] - 1
+                  else if UE_LEAF_EMIT then UE_LEAF_END
+                  else if UE_TV_GO then UE_TV_START
+                  else if UE_FLAT_STARTS or UE_EQX_STARTS then UE_R
+                  else if UE_COPY then UE_R + 1
+                  else if UE_DFINISH then UC_END[UE_D] + 1
+                  else if UE_FDONE then UE_FLAT_RESUME[?]
+                  else if UE_XDONE then UE_EQX_RESUME[?]
+                  else if UE_QDEFINE then UQ_DEFINE[UE_ES] + 1
+                  else if UE_QSEP and not UE_QMORE then UQ_END[UE_ES] + 1
+                  else UE_R
+        | UE_JUMP_FROM := if UE_LEAF_EMIT and UE_IDX >= 0 then U_CLOSE_OF[(if UE_IDX >= 0 then UE_IDX else 0)] else if UE_W3 then -1 else UE_JUMP_FROM[?]
+        | UE_JUMP_TO := if UE_LEAF_EMIT and UE_IDX >= 0 then UE_CEND_HERE else UE_JUMP_TO[?]
+        | UE_EQ := if UE_W7 then UE_EQ_HERE + 1 else if UE_W1C or UE_QSEP and not UE_QMORE then 0 else UE_EQ[?]
+        | UE_CF_CLOSE := if UE_W7_SINGLE then UQ_DEFINE[UE_EQ_HERE] else if UE_CFC then -1 else UE_CF_CLOSE[?]
+        | UE_LEVEL := if UE_W2 then UE_LV - 1 else if UE_TV_GO then UE_LV + 1 else if UE_QDEFINE then 0 else UE_LV
+        | UE_CEND := UE_CEND[?] next (if UE_TV_GO and UE_LV < 5 then UE_LV else -1) : UE_TV_END
+        | UE_CCLOSE := UE_CCLOSE[?] next (if UE_TV_GO and UE_LV < 5 then UE_LV else -1) : U_CLOSE_OF[UE_RS] - 1
+        | UE_CPAREN := UE_CPAREN[?] next (if UE_TV_GO and UE_LV < 5 then UE_LV else -1) : not UE_TV_BARE
+        | UE_LEAF := if UE_W7 then 0 else if UE_QSEP and UE_QMORE then UE_LEAF[?] + 1 else UE_LEAF[?]
+        | UE_TL := if UE_QTARGET then UE_QTL else UE_TL[?]
+        | UE_PATHLEN := if UE_QTARGET then UG_LENGTH[UE_QTL] else if UE_W7 or UE_QSEP and not UE_QMORE then 0 else UE_PATHLEN[?]
+        | UE_TARGET_NAME := if UE_QTARGET then RAW_TOKEN_NAME[(if (UG_ORIGIN[UE_QTL]) >= 0 then (UG_ORIGIN[UE_QTL]) else 0)] - 1 else UE_TARGET_NAME[?]
+        | UE_RDONE := if UE_RFINISH then UE_REL_CLOSE[?] else UE_RDONE[?]
+        | UE_DEC := if UE_W5 then UE_D0 else UE_DEC[?]
+        | UE_DPART0 := if UE_W5 then 0 else if UE_DM and UE_DPART_DONE then (if UE_DPART = 3 then 0 else UE_DPART + 1)
+                     else if UE_DM then UE_DPART else UE_DPART0[?]
+        | UE_DOFFSET := if UE_W5 or UE_DM and UE_DPART_DONE then 0 else if UE_DM then UE_DOFF + 1 else UE_DOFFSET[?]
+        | UE_DLEAF := if UE_W5 then 0 else if UE_DM and UE_DPART = 3 then (if UE_DLEAF_LAST then 0 else UE_DK + 1) else UE_DLEAF[?]
+        | UE_DNAME := if UE_W5 then 0 else if UE_DM and UE_DPART = 3 and UE_DLEAF_LAST then UE_DJ + 1 else UE_DNAME[?]
+        | UE_W6_SIG := UM_SIG_FIRST[UE_BODY_MODEL]
+        | UE_W6_TYPE := US_TYPE[if UE_W6_SIG > 0 then UE_W6_SIG - 1 else 0]
+        | UE_RELSIG := if UE_W6 then UE_W6_SIG else if UE_RSPEC_DONE then UE_RNEXT_SIG else UE_RELSIG[?]
+        | UE_RPHASE := if UE_W6 or UE_RSPEC_DONE then 0 else if UE_RGROUP_SKIP then 1 else UE_RPHASE[?]
+        | UE_RGROUP := if UE_W6 then (if UE_W6_TYPE >= 0 then UY_GROUP_FIRST[UE_W6_TYPE] else 0)
+                     else if UE_RSPEC_DONE then (if UE_RNEXT_TYPE >= 0 then UY_GROUP_FIRST[UE_RNEXT_TYPE] else 0)
+                     else if UE_RGROUP_DONE then UA_NEXT[UE_RGS] else UE_RGROUP[?]
+        | UE_RLEAF := if UE_W6 or UE_RGROUP_DONE then 0 else if UE_RLEAF_EMITS then UE_RJ + 1 else UE_RLEAF[?]
+        | UE_RPART := if UE_W6 or UE_RGROUP_DONE or UE_RSPEC_DONE then 0 else if UE_RSEP then 1
+                    else if UE_RLEAF_EMITS then 2 else if UE_RCLOCK_EMITS then 1 else UE_RPART[?]
+        | UE_ROFFSET := if UE_W6 or UE_RSPEC_DONE then 0 else if UE_RSPEC_EMITS then UE_ROFF + 1 else UE_ROFFSET[?]
+        | UE_RNEED := if UE_W6 then U_OPEN_OF[UE_RS] < UE_RS else if UE_RSEP then true else UE_RNEED[?]
+        | UE_REL_CLOSE := if UE_W6 then UE_R else UE_REL_CLOSE[?]
+        | UE_REL_ORIGIN := if UE_W6 then UE_R else UE_REL_ORIGIN[?]
+        | UE_FLAT_BASE := if UE_FLAT_STARTS then UE_HBASE else UE_FLAT_BASE[?]
+        | UE_FLAT_COUNT := if UE_FLAT_STARTS then UE_LEAFCOUNT else UE_FLAT_COUNT[?]
+        | UE_FLAT_J := if UE_FLAT_STARTS then 0 else if UE_FM and not UE_FLEAF then UE_FJ + 1 else UE_FLAT_J[?]
+        | UE_FLAT_PART := if UE_FLAT_STARTS then 0 else if UE_FM then 1 - UE_FLAT_PART[?] else UE_FLAT_PART[?]
+        | UE_FLAT_RESUME := if UE_FLAT_STARTS then UE_CEND_HERE else UE_FLAT_RESUME[?]
+        | UE_FLAT_ORIGIN := if UE_FLAT_STARTS then UE_R else UE_FLAT_ORIGIN[?]
+        | UE_EQX_A := if UE_EQX_STARTS then UE_HBASE else UE_EQX_A[?]
+        | UE_EQX_B := if UE_EQX_STARTS then NAME_COUNT + US_HIDDEN_BASE[if UE_B_SIG >= 0 then UE_B_SIG else 0] + U_NODE_FIRST[UE_B_HEAD]
+                    else UE_EQX_B[?]
+        | UE_EQX_COUNT := if UE_EQX_STARTS then UE_LEAFCOUNT else UE_EQX_COUNT[?]
+        | UE_EQX_J := if UE_EQX_STARTS then 0 else if UE_XM and UE_XP = 4 then UE_XJ + 1 else UE_EQX_J[?]
+        | UE_EQX_PART := if UE_EQX_STARTS then 0 else if UE_XM then (if UE_XP = 4 then 1 else UE_XP + 1) else UE_EQX_PART[?]
+        | UE_EQX_RESUME := if UE_EQX_STARTS then U_CHAIN_END[UE_B_HEAD] else UE_EQX_RESUME[?]
+        | UE_EQX_ORIGIN := if UE_EQX_STARTS then UE_R else UE_EQX_ORIGIN[?]
+        | UE_EQX_IDENT := if UE_EQX_STARTS then UE_IDENT else UE_EQX_IDENT[?]
+        | UE_FOUND_MESSAGE := if UE_ERROR_HERE /= 0 then UE_ERROR_HERE else if UE_OVERFLOW and not UE_OVERFLOW[?] then T_CAPACITY else 0
+        | UE_FOUND_ARGUMENT0 := if UE_ERROR_HERE /= 0 then UE_ERROR_ARG0 else F_CAP_TOKENS
+        | UE_FOUND_ARGUMENT1 := UE_ERROR_ARG1
+        | UE_FOUND_ARGUMENT2 := UE_ERROR_ARG2
+        | UE_FIRST_ERROR := UE_MESSAGE[?] = 0 and UE_FOUND_MESSAGE /= 0
+        | UE_MESSAGE := if UE_FIRST_ERROR then UE_FOUND_MESSAGE else UE_MESSAGE[?]
+        | UE_TOKEN := if UE_FIRST_ERROR then UE_RS else UE_TOKEN[?]
+        | UE_ARGUMENT0 := if UE_FIRST_ERROR then UE_FOUND_ARGUMENT0 else UE_ARGUMENT0[?]
+        | UE_ARGUMENT1 := if UE_FIRST_ERROR then UE_FOUND_ARGUMENT1 else UE_ARGUMENT1[?]
+        | UE_ARGUMENT2 := if UE_FIRST_ERROR then UE_FOUND_ARGUMENT2 else UE_ARGUMENT2[?]
+        |)
+     with (| UE_MODE := 0 | UE_POS := 0 | UE_EQ := 0 | UE_LEVEL := 0 | UE_PATHLEN := 0 | UE_TL := 0 | UE_LEAF := 0
+           | UE_JUMP_FROM := -1 | UE_JUMP_TO := 0 | UE_CF_CLOSE := -1 | UE_TARGET_NAME := 0 | UE_RDONE := -1
+           | UE_DEC := 0 | UE_DPART0 := 0 | UE_DOFFSET := 0 | UE_DLEAF := 0 | UE_DNAME := 0
+           | UE_RELSIG := 0 | UE_RPHASE := 0 | UE_RGROUP := 0 | UE_RLEAF := 0 | UE_RPART := 0 | UE_ROFFSET := 0
+           | UE_RNEED := false | UE_REL_CLOSE := -1 | UE_REL_ORIGIN := 0
+           | UE_FLAT_BASE := 0 | UE_FLAT_COUNT := 0 | UE_FLAT_J := 0 | UE_FLAT_PART := 0 | UE_FLAT_RESUME := 0 | UE_FLAT_ORIGIN := 0
+           | UE_EQX_A := 0 | UE_EQX_B := 0 | UE_EQX_COUNT := 0 | UE_EQX_J := 0 | UE_EQX_PART := 0 | UE_EQX_RESUME := 0
+           | UE_EQX_ORIGIN := 0 | UE_EQX_IDENT := false | UE_COUNT := 0 | UE_OVERFLOW := false | UE_FINISHED := false | UE_MESSAGE := 0 | UE_TOKEN := 0 | UE_ARGUMENT0 := 0 | UE_ARGUMENT1 := 0 | UE_ARGUMENT2 := 0 |)
+     end
+   | U_MESSAGE := if not INTERNED then 0
+                   else if UP_MESSAGE /= 0 then UP_MESSAGE
+                   else if UZ_MESSAGE /= 0 then UZ_MESSAGE
+                   else if UK_MESSAGE /= 0 then UK_MESSAGE
+                   else if UR_MESSAGE /= 0 then UR_MESSAGE
+                   else if U_SEEN and UH_TOTAL > U_TEXT_CAP then T_CAPACITY
+                   else if UE_MESSAGE /= 0 then UE_MESSAGE
+                   else if not UE_FINISHED then T_CAPACITY else 0
+   | U_TOKEN := if not INTERNED then 0
+                   else if UP_MESSAGE /= 0 then UP_TOKEN
+                   else if UZ_MESSAGE /= 0 then UZ_TOKEN
+                   else if UK_MESSAGE /= 0 then UK_TOKEN
+                   else if UR_MESSAGE /= 0 then UR_TOKEN
+                   else if U_SEEN and UH_TOTAL > U_TEXT_CAP then 0
+                   else if UE_MESSAGE /= 0 then UE_TOKEN
+                   else if not UE_FINISHED then 0 else 0
+   | U_ARGUMENT0 := if not INTERNED then 0
+                   else if UP_MESSAGE /= 0 then UP_ARGUMENT0
+                   else if UZ_MESSAGE /= 0 then UZ_ARGUMENT0
+                   else if UK_MESSAGE /= 0 then UK_ARGUMENT0
+                   else if UR_MESSAGE /= 0 then UR_ARGUMENT0
+                   else if U_SEEN and UH_TOTAL > U_TEXT_CAP then F_CAP_TUPLES
+                   else if UE_MESSAGE /= 0 then UE_ARGUMENT0
+                   else if not UE_FINISHED then F_CAP_TOKENS else 0
+   | U_ARGUMENT1 := if not INTERNED then 0
+                   else if UP_MESSAGE /= 0 then UP_ARGUMENT1
+                   else if UZ_MESSAGE /= 0 then UZ_ARGUMENT1
+                   else if UK_MESSAGE /= 0 then UK_ARGUMENT1
+                   else if UR_MESSAGE /= 0 then UR_ARGUMENT1
+                   else if U_SEEN and UH_TOTAL > U_TEXT_CAP then 0
+                   else if UE_MESSAGE /= 0 then UE_ARGUMENT1
+                   else if not UE_FINISHED then 0 else 0
+   | U_ARGUMENT2 := if not INTERNED then 0
+                   else if UP_MESSAGE /= 0 then UP_ARGUMENT2
+                   else if UZ_MESSAGE /= 0 then UZ_ARGUMENT2
+                   else if UK_MESSAGE /= 0 then UK_ARGUMENT2
+                   else if UR_MESSAGE /= 0 then UR_ARGUMENT2
+                   else if U_SEEN and UH_TOTAL > U_TEXT_CAP then 0
+                   else if UE_MESSAGE /= 0 then UE_ARGUMENT2
+                   else if not UE_FINISHED then 0 else 0
+   | U_READY := INTERNED and U_MESSAGE = 0
+   | TOKEN_COUNT := UE_COUNT
+   | PRESCAN_INDEX := 0 .. (if U_READY then TOKEN_COUNT - 1 else -1)
    | iterate PRESCAN_INDEX of
        (| SCAN_CODE := integer(TOKEN_CODE[PRESCAN_INDEX])
         | SCAN_NAME := TOKEN_NAME[PRESCAN_INDEX] - 1
@@ -459,7 +1769,7 @@ process SIGC =
            | USER_TYPE_COUNT := 0 | PRESCAN_MESSAGE := 0 | PRESCAN_TOKEN := 0 | PRESCAN_ARGUMENT0 := 0
            | PRESCAN_ARGUMENT1 := 0 |)
      end
-   | PARSES := INTERNED and PRESCAN_MESSAGE = 0
+   | PARSES := U_READY and PRESCAN_MESSAGE = 0
    | PARSE_BOUND := long(BUILTIN_TYPE_COUNT + USER_TYPE_COUNT + 16) + long(8) * long(TOKEN_COUNT)
                     + long(BRACKET_COUNT) * long(BRACKET_COUNT) + long(COLONS_COUNT) * long(COLONS_COUNT)
                     + long(SET_NAMES) * long(SET_NAMES + 2) + long(32) * long(COPY_COUNT) * long(TOKEN_COUNT)
@@ -3712,24 +5022,26 @@ process SIGC =
    | PARSE_INCOMPLETE := PARSES and not PARSE_FAILED and PARSE_STATE /= P_DONE
    | PASS_MESSAGE := if ERROR = ERROR_UNEXPECTED then T_UNEXPECTED_CHARACTER else if ERROR = ERROR_ESCAPE then T_ESCAPE
                 else if ERROR = ERROR_ESCAPE_RANGE then T_ESCAPE_RANGE else if ERROR /= ERROR_NONE then T_CAPACITY
-                else if not TEXT_OK then 0 else if INTERN_ERROR_TOKEN >= 0 then T_CAPACITY
+                else if not TEXT_OK then 0 else if INTERN_ERROR_TOKEN >= 0 then T_CAPACITY else if U_MESSAGE /= 0 then U_MESSAGE
                 else if PRESCAN_MESSAGE /= 0 then PRESCAN_MESSAGE else if PRAGMA_FAILED then PRAGMA_MESSAGE
                 else if VIS_FAILED then VIS_MESSAGE
                 else if FINISH_FAILED then FINISH_MESSAGE
                 else if FINISH_INCOMPLETE then T_CAPACITY else if PARSE_FAILED then PARSE_MESSAGE
                 else if PARSE_INCOMPLETE then T_CAPACITY else 0
-   | MESSAGE_TOKEN := if INTERN_ERROR_TOKEN >= 0 then INTERN_ERROR_TOKEN else if PRESCAN_MESSAGE /= 0 then PRESCAN_TOKEN
+   | MESSAGE_TOKEN := if INTERN_ERROR_TOKEN >= 0 then INTERN_ERROR_TOKEN else if U_MESSAGE /= 0 then U_TOKEN
+                      else if PRESCAN_MESSAGE /= 0 then PRESCAN_TOKEN
                       else if PRAGMA_FAILED then PRAGMA_MESSAGE_TOKEN else if VIS_FAILED then VIS_MESSAGE_TOKEN
                       else if FINISH_FAILED then FINISH_TOKEN else if PARSE_FAILED then PARSE_TOKEN
                       else if INSTANTIATE_FAILED then INSTANTIATE_TOKEN else if LOWER_FAILED then LW_TOKEN
                       else if POST_FAILED then PO_TOKEN else if CLOCK_MESSAGE /= 0 then CLOCK_TOKEN else 0
    | MESSAGE_LINE := if SOURCE_TOO_BIG or MESSAGE_TOKEN < 0 then 1 else if ERROR /= ERROR_NONE then LEX_ERROR_LINE
-                     else TOKEN_LINE[MESSAGE_TOKEN]
+                     else if INTERN_ERROR_TOKEN >= 0 or U_MESSAGE /= 0 then RAW_TOKEN_LINE[MESSAGE_TOKEN] else TOKEN_LINE[MESSAGE_TOKEN]
    | MESSAGE_COLUMN := if SOURCE_TOO_BIG or MESSAGE_TOKEN < 0 then 1 else if ERROR /= ERROR_NONE then LEX_ERROR_COLUMN
-                       else TOKEN_COLUMN[MESSAGE_TOKEN]
+                       else if INTERN_ERROR_TOKEN >= 0 or U_MESSAGE /= 0 then RAW_TOKEN_COLUMN[MESSAGE_TOKEN] else TOKEN_COLUMN[MESSAGE_TOKEN]
    | PASS_ARGUMENT0 := if ERROR = ERROR_UNEXPECTED or ERROR = ERROR_ESCAPE then LEX_ERROR_AT
                           else if ERROR = ERROR_ESCAPE_RANGE then LEX_ERROR_VALUE else if ERROR = ERROR_SRC then F_CAP_SRC
                           else if ERROR = ERROR_TOKENS then F_CAP_TOKENS else if INTERN_ERROR_TOKEN >= 0 then F_CAP_NAMES
+                          else if U_MESSAGE /= 0 then U_ARGUMENT0
                           else if PRESCAN_MESSAGE /= 0 then PRESCAN_ARGUMENT0 else if PRAGMA_FAILED then PRAGMA_ARGUMENT0
                           else if VIS_FAILED then VIS_ARGUMENT0
                           else if FINISH_FAILED then FINISH_ARGUMENT0
@@ -3738,13 +5050,13 @@ process SIGC =
                           else if INSTANTIATE_INCOMPLETE then F_CAP_INSTANTIATE else if LOWER_FAILED then LW_ARGUMENT0
                           else if POST_FAILED then PO_ARGUMENT0 else if EXPAND_FAILED then F_CAP_ROW_DEPENDENCES
                           else if CLOCK_MESSAGE /= 0 then CLOCK_ARGUMENT0 else F_CAP_LOWER
-   | MESSAGE_ARGUMENT1 := if PRESCAN_MESSAGE /= 0 then PRESCAN_ARGUMENT1 else if VIS_FAILED then VIS_ARGUMENT1
+   | MESSAGE_ARGUMENT1 := if U_MESSAGE /= 0 then U_ARGUMENT1 else if PRESCAN_MESSAGE /= 0 then PRESCAN_ARGUMENT1 else if VIS_FAILED then VIS_ARGUMENT1
                           else if FINISH_FAILED then FINISH_ARGUMENT1
                           else if PARSE_FAILED then PARSE_ARGUMENT1 else if LOWER_FAILED then LW_ARGUMENT1
                           else if CLOCK_MESSAGE /= 0 then
                             (if CLOCK_MESSAGE = T_INPUT_SHARED then SIGNAL_NAME[CF_SIGNAL_SOURCE] else 0)
                           else INSTANTIATE_ARGUMENT1
-   | MESSAGE_ARGUMENT2 := if FINISH_FAILED then FINISH_ARGUMENT2 else if PARSE_FAILED then PARSE_ARGUMENT2
+   | MESSAGE_ARGUMENT2 := if U_MESSAGE /= 0 then U_ARGUMENT2 else if FINISH_FAILED then FINISH_ARGUMENT2 else if PARSE_FAILED then PARSE_ARGUMENT2
                           else if LOWER_FAILED then LW_ARGUMENT2 else if CLOCK_MESSAGE /= 0 then SCHEDULE_ARGUMENT2 else INSTANTIATE_ARGUMENT2
    | MESSAGE_INSTANCE := if LOWER_FAILED then LW_INSTANCE else if CLOCK_MESSAGE /= 0 then 0 else PO_INSTANCE
    | INSTANTIATES := (DUMP_PASS = 0 or DUMP_PASS = 3 or DUMP_PASS = 4 or DUMP_PASS = 5 or DUMP_PASS = 6 or DUMP_PASS = 7) and FINISHES and PASS_MESSAGE = 0
@@ -7044,20 +8356,20 @@ process SIGC =
         | L_D2_ALL := 1 + integer(L_N2 >= 10) + integer(L_N2 >= 100) + integer(L_N2 >= 1000) + integer(L_N2 >= 10000) + integer(L_N2 >= 100000) + integer(L_N2 >= 1000000) + integer(L_N2 >= 10000000) + integer(L_N2 >= 100000000) + integer(L_N2 >= 1000000000)
         | L_D1 := if L_PREFIXED or not L_FLAT then L_D1_ALL else 0
         | L_D2 := if not L_FLAT or L_SUFFIX > 0 then L_D2_ALL else 0
-        | L_A_LENGTH := if L_A >= 0 then NAME_LENGTH[L_A] else 0
-        | L_B_LENGTH := if L_B >= 0 then NAME_LENGTH[L_B] else 0
+        | L_A_LENGTH := if L_A >= NAME_COUNT then UH_LENGTH[L_A - NAME_COUNT] else if L_A >= 0 then NAME_LENGTH[L_A] else 0
+        | L_B_LENGTH := if L_B >= NAME_COUNT then UH_LENGTH[L_B - NAME_COUNT] else if L_B >= 0 then NAME_LENGTH[L_B] else 0
         | L_LENGTH := FRAGMENT_LENGTH[L_P] + L_A_LENGTH + FRAGMENT_LENGTH[L_F1] + L_D1 + FRAGMENT_LENGTH[L_F2] + L_B_LENGTH
                     + FRAGMENT_LENGTH[L_F3] + L_D2 + FRAGMENT_LENGTH[L_S]
         | CL_TOTAL := CL_TOTAL[?] + L_LENGTH
         | CL_LONGEST := if L_LENGTH > CL_LONGEST[?] then L_LENGTH else CL_LONGEST[?]
         | CI_P := CI_P[?] next CL_INDEX : L_P
-        | CI_A_AT := CI_A_AT[?] next CL_INDEX : if L_A >= 0 then NAME_AT[L_A] else 0
+        | CI_A_AT := CI_A_AT[?] next CL_INDEX : if L_A >= NAME_COUNT then U_HIDDEN_AT + UH_AT[L_A - NAME_COUNT] else if L_A >= 0 then NAME_AT[L_A] else 0
         | CI_A_LENGTH := CI_A_LENGTH[?] next CL_INDEX : L_A_LENGTH
         | CI_F1 := CI_F1[?] next CL_INDEX : L_F1
         | CI_N1 := CI_N1[?] next CL_INDEX : L_N1
         | CI_D1 := CI_D1[?] next CL_INDEX : L_D1
         | CI_F2 := CI_F2[?] next CL_INDEX : L_F2
-        | CI_B_AT := CI_B_AT[?] next CL_INDEX : if L_B >= 0 then NAME_AT[L_B] else 0
+        | CI_B_AT := CI_B_AT[?] next CL_INDEX : if L_B >= NAME_COUNT then U_HIDDEN_AT + UH_AT[L_B - NAME_COUNT] else if L_B >= 0 then NAME_AT[L_B] else 0
         | CI_B_LENGTH := CI_B_LENGTH[?] next CL_INDEX : L_B_LENGTH
         | CI_F3 := CI_F3[?] next CL_INDEX : L_F3
         | CI_N2 := CI_N2[?] next CL_INDEX : L_N2
@@ -7086,7 +8398,8 @@ process SIGC =
         | CR_N2_END := CR_F3_END + CI_D2[CR_ITEM]
         | CR_NAME_AT := if CR_OFFSET < CR_A_END then CI_A_AT[CR_ITEM] + CR_OFFSET - CR_P_END
                       else CI_B_AT[CR_ITEM] + CR_OFFSET - CR_F2_END
-        | CR_NAME_BYTE := if CR_NAME_AT < SEED_LENGTH then SEED[CR_NAME_AT] else SRC[CR_NAME_AT - SEED_LENGTH]
+        | CR_NAME_BYTE := if CR_NAME_AT >= U_HIDDEN_AT then U_HIDDEN_TEXT[CR_NAME_AT - U_HIDDEN_AT]
+                        else if CR_NAME_AT < SEED_LENGTH then SEED[CR_NAME_AT] else SRC[CR_NAME_AT - SEED_LENGTH]
         | CR_FRAGMENT := if CR_OFFSET < CR_P_END then FRAGMENT_START[CI_P[CR_ITEM]] + CR_OFFSET
                        else if CR_OFFSET < CR_F1_END then FRAGMENT_START[CI_F1[CR_ITEM]] + CR_OFFSET - CR_A_END
                        else if CR_OFFSET < CR_F2_END then FRAGMENT_START[CI_F2[CR_ITEM]] + CR_OFFSET - CR_N1_END
@@ -9730,14 +11043,14 @@ process SIGC =
                else LAYOUT_NONE
    | DUMPS_TOKENS := LAYOUT = LAYOUT_DUMP_TOKENS
    | DUMPS_PROGRAM := LAYOUT = LAYOUT_DUMP_PROGRAM
-   | ITEM_COUNT := if DUMPS_TOKENS then 4 * (TOKEN_COUNT + 1) else if DUMPS_PROGRAM then DUMP_COUNT else LAYOUT_ITEM_COUNT[LAYOUT]
+   | ITEM_COUNT := if DUMPS_TOKENS then 4 * (RAW_TOKEN_COUNT + 1) else if DUMPS_PROGRAM then DUMP_COUNT else LAYOUT_ITEM_COUNT[LAYOUT]
    | USES_ROWS := not DUMPS_TOKENS and not DUMPS_PROGRAM
    | ITEM_INDEX := 0 .. ITEM_COUNT - 1
    | iterate ITEM_INDEX of
-       (| SECTION := ITEM_INDEX / (TOKEN_COUNT + 1)
-        | TOKEN := ITEM_INDEX modulo (TOKEN_COUNT + 1) - 1
+       (| SECTION := ITEM_INDEX / (RAW_TOKEN_COUNT + 1)
+        | TOKEN := ITEM_INDEX modulo (RAW_TOKEN_COUNT + 1) - 1
         | IS_HEADER := TOKEN < 0
-        | KIND := integer(TOKEN_KIND[TOKEN])
+        | KIND := integer(RAW_TOKEN_KIND[TOKEN])
         | ROW := if USES_ROWS then LAYOUT_FIRST_ROW[LAYOUT] + ITEM_INDEX else 0
         | SLOT := if USES_ROWS then ROW_SLOT[ROW] else -1
         | PROGRAM_CLASS := if DUMPS_PROGRAM then DUMP_CLASS[ITEM_INDEX] else -1
@@ -9811,7 +11124,7 @@ process SIGC =
                         or FIRST_HALF and ARGUMENT_KIND = A_NUMBER or NAME_HALF and NAME_SUFFIX > 0 or PRINTS_TYPE_SIZE
                         or PROGRAM_NUMBERED or PROGRAM_SUFFIXED or PROGRAM_PREFIX or FLAT_PREFIX or LONG_ARGUMENT or PRINTS_DIMENSION
         | NUMBER := if DUMPS_TOKENS then
-                      (if IS_HEADER then long(TOKEN_COUNT) else if SECTION = 2 then long(TOKEN_LINE[TOKEN]) else long(TOKEN_COLUMN[TOKEN]))
+                      (if IS_HEADER then long(RAW_TOKEN_COUNT) else if SECTION = 2 then long(RAW_TOKEN_LINE[TOKEN]) else long(RAW_TOKEN_COLUMN[TOKEN]))
                     else if PROGRAM_NUMBERED then PROGRAM_VALUE
                     else if PROGRAM_SUFFIXED then long(PROGRAM_SUFFIX)
                     else if PROGRAM_PREFIX or FLAT_PREFIX then long(INSTANCE_ORDINAL[PREFIX_INSTANCE])
@@ -9854,17 +11167,17 @@ process SIGC =
                     else 0
         | SLICE_OUTPUT_PATH := IS_ROW and ROW_SLICE[ROW] = ROW_SLICE_OUTPUT_PATH
         | SLICE_PATH := IS_ROW and ROW_SLICE[ROW] = ROW_SLICE_PATH or SLICE_OUTPUT_PATH
-        | SLICE_START := if SLICES_TOKEN then SEED_LENGTH + TOKEN_START[SLICED_TOKEN]
+        | SLICE_START := if SLICES_TOKEN then SEED_LENGTH + (if DUMPS_TOKENS or U_MESSAGE /= 0 then RAW_TOKEN_START[SLICED_TOKEN] else TOKEN_START[SLICED_TOKEN])
                          else if SLICES_CHARACTER then SEED_LENGTH + ARGUMENT_VALUE
-                         else if SLICES_NAME then NAME_AT[SLICED_NAME]
+                         else if SLICES_NAME then (if SLICED_NAME >= NAME_COUNT then U_HIDDEN_AT + UH_AT[SLICED_NAME - NAME_COUNT] else NAME_AT[SLICED_NAME])
                          else if SLICES_CLOCK then ARGUMENT_CLOCK_START else if SLICE_OUTPUT_PATH then ARG_CAP else 0
         | SLICE_LENGTH := if SLICES_LITERAL then (if TOKEN_LENGTH[SLICED_TOKEN] > 20 then 20 else TOKEN_LENGTH[SLICED_TOKEN])
-                          else if SLICES_TOKEN then TOKEN_LENGTH[SLICED_TOKEN]
+                          else if SLICES_TOKEN then (if DUMPS_TOKENS or U_MESSAGE /= 0 then RAW_TOKEN_LENGTH[SLICED_TOKEN] else TOKEN_LENGTH[SLICED_TOKEN])
                           else if SLICES_CHARACTER then ERROR_CHARACTER_LENGTH
-                          else if SLICES_NAME then NAME_LENGTH[SLICED_NAME]
+                          else if SLICES_NAME then (if SLICED_NAME >= NAME_COUNT then UH_LENGTH[SLICED_NAME - NAME_COUNT] else NAME_LENGTH[SLICED_NAME])
                           else if SLICES_CLOCK then ARGUMENT_CLOCK_LENGTH
                           else if SLICE_OUTPUT_PATH then OUTPUT_NAME_LENGTH else if SLICE_PATH then SOURCE_NAME_LENGTH else 0
-        | FOLDS := SLICES_TOKEN and not SLICES_TEXT and TOKEN_KIND[SLICED_TOKEN] = ubyte(KIND_KEYWORD)
+        | FOLDS := SLICES_TOKEN and not SLICES_TEXT and (if DUMPS_TOKENS or U_MESSAGE /= 0 then RAW_TOKEN_KIND[SLICED_TOKEN] else TOKEN_KIND[SLICED_TOKEN]) = ubyte(KIND_KEYWORD)
         | INFIX := if PROGRAM_PREFIX or FLAT_PREFIX then F_HASH else if PROGRAM_NAME and PROGRAM_TAG = 1 then F_STATE_SUFFIX
                    else if PROGRAM_SUFFIXED then (if PROGRAM_BASE /= N_ON_MARK and (PROGRAM_BASE < N_FRESH_FIRST or PROGRAM_BASE > N_FRESH_LAST) then F_QUOTE else 0)
                    else if SLICES_TYPE_NAME and TYPE_STATE[NAMED_TYPE] then F_STATE_SUFFIX
@@ -9931,6 +11244,7 @@ process SIGC =
         | SLICE_AT := ITEM_SLICE_START[CURRENT] + OFFSET - PREFIX_END
         | SLICE_BYTE := if ITEM_FROM_PATH[CURRENT] then (if SLICE_AT >= ARG_CAP then OUTPUT_NAME[SLICE_AT - ARG_CAP] else SOURCE_NAME[SLICE_AT])
                         else if ITEM_FROM_CLOCK[CURRENT] then CLOCK_TEXT[SLICE_AT]
+                        else if SLICE_AT >= U_HIDDEN_AT then U_HIDDEN_TEXT[SLICE_AT - U_HIDDEN_AT]
                         else if SLICE_AT < SEED_LENGTH then SEED[SLICE_AT] else SRC[SLICE_AT - SEED_LENGTH]
         | DIGIT := ITEM_MAGNITUDE[CURRENT] / POWERS_OF_TEN[DIGITS_END - 1 - OFFSET] modulo ulong(10)
         | OUTPUT_ITEM_BYTE := if OFFSET < SEPARATOR_END then ubyte(32)
@@ -10030,6 +11344,19 @@ process SIGC =
     constant integer CODE_CAP = 8388608;
     constant integer CODE_LABEL_CAP = 4194304;
     constant integer DATA_CAP = 67108864;
+    constant integer U_HASH_CAP = 262144;
+    constant integer U_HASH_SLOTS = 262152;
+    constant integer U_TYPE_CAP = 65536;
+    constant integer U_FIELD_CAP = 262144;
+    constant integer U_SIG_CAP = 65536;
+    constant integer U_LEAF_CAP = 1048576;
+    constant integer U_TLEAF_CAP = 1048576;
+    constant integer U_TLEAF_STEPS = 5242880;
+    constant integer U_TEXT_CAP = 4194304;
+    constant integer U_NEST_CAP = 64;
+    constant integer U_LEVEL_CAP = 5;
+    constant integer U_EMIT_CAP = 8388608;
+    constant integer U_HIDDEN_AT = 16777216;
     constant long EMIT_PAGE_LIMIT = 1125899906842624;
     constant ulong HASH_K1 = ulong(2685821657736338717);
     constant ulong HASH_K2 = ulong(4354685564936845355);
@@ -10180,9 +11507,9 @@ process SIGC =
     constant integer F_STATE_SUFFIX = 21;
     constant integer F_DEFINE = 22;
     constant integer F_SEED = 23;
-    constant integer SEED_LENGTH = 838;
-    constant integer SEED_NAME_COUNT = 121;
-    constant [838] ubyte SEED = "event boolean short integer long ubyte ushort uinteger ulong pointer load store syscall instruction abs left_tt Automaton_Initial_State Automaton_Transition Automaton_SetClock Automaton_Clock Automaton_SetCurrentStateId Automaton_IsIn clock' state' cur' on' process where end init true false when default and or xor not modulo shl shr type enum constant next iterate of with if then else procedure node function automaton label on external indices pragmas Interrupt Boot Machine cell var after from count case in array to module use private ref action safe deterministic unsafe defaultvalue shared statevar tr assert min_clock spec affine_sample affine_clock_relation affine_unsample cell' zcell' var' varm' zvar' h1' h2' m' a' za' s' zs' n' i' zcount' tick' v' zv' vb' zvb' clk_x' clk_y' clk_i' rep' seq' tup' dim size bounds step window";
+    constant integer SEED_LENGTH = 852;
+    constant integer SEED_NAME_COUNT = 123;
+    constant [852] ubyte SEED = "event boolean short integer long ubyte ushort uinteger ulong pointer load store syscall instruction abs left_tt Automaton_Initial_State Automaton_Transition Automaton_SetClock Automaton_Clock Automaton_SetCurrentStateId Automaton_IsIn clock' state' cur' on' process where end init true false when default and or xor not modulo shl shr type enum constant next iterate of with if then else procedure node function automaton label on external indices pragmas Interrupt Boot Machine cell var after from count case in array to module use private ref action safe deterministic unsafe defaultvalue shared statevar tr assert min_clock spec affine_sample affine_clock_relation affine_unsample cell' zcell' var' varm' zvar' h1' h2' m' a' za' s' zs' n' i' zcount' tick' v' zv' vb' zvb' clk_x' clk_y' clk_i' rep' seq' tup' dim size bounds step window struct bundle";
     constant integer N_EVENT = 0;
     constant integer N_BOOLEAN = 1;
     constant integer N_UBYTE = 5;
@@ -10266,9 +11593,9 @@ process SIGC =
     constant integer C_OPEN_BRACE = 115;
     constant integer C_CLOSE_BRACE = 116;
     constant integer C_EOF = 0;
-    constant integer C_NAME = 134;
-    constant integer C_NUMBER = 135;
-    constant integer C_STRING = 136;
+    constant integer C_NAME = 135;
+    constant integer C_NUMBER = 136;
+    constant integer C_STRING = 137;
     constant integer C_SYMBOL_BASE = 85;
     constant [256] short NAME_CHAR = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -10284,7 +11611,7 @@ process SIGC =
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     constant [256] short SINGLE_SYMBOL = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 107, 0, 111, 96, 0, 0, 0, 101, 102, 99, 97, 105, 98, 0, 100,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 107, 0, 111, 96, 0, 0, 0, 101, 102, 99, 97, 105, 98, 134, 100,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 114, 104, 108, 103, 109, 106, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 112, 0, 113, 110, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -10294,10 +11621,10 @@ process SIGC =
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [49] short SYMBOL_FRAGMENT = [
-        384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 38, 397, 398, 399, 400, 401, 402, 403, 404, 405, 406,
-        407, 408, 24, 11, 12, 1, 409, 410, 411, 412, 413, 414, 415, 416, 417, 0, 418, 419, 420, 421, 422, 423, 424, 425,
-        426];
+    constant [50] short SYMBOL_FRAGMENT = [
+        385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 38, 398, 399, 400, 401, 402, 403, 404, 405, 406, 407,
+        408, 409, 24, 11, 12, 1, 410, 411, 412, 413, 414, 415, 416, 417, 418, 0, 419, 420, 421, 422, 423, 424, 425, 426,
+        427, 25];
     constant integer OP_CONST = 0;
     constant integer OP_SIGNAL = 1;
     constant integer OP_ENUMCONST = 2;
@@ -10357,41 +11684,41 @@ process SIGC =
         2, 2, 2, 0, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 0, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2];
-    constant [137] short BINARY_OP = [
+    constant [138] short BINARY_OP = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 13, 17, 16, 15, 0, 28, 29, 30, 0, 0, 0, 31, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 62, 0, 64, 65, 66, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 21, 23, 33, 0,
         0, 24, 25, 26, 27, 0, 0, 18, 0, 0, 0, 0, 20, 22, 0, 0, 0, 0, 32, 0, 0, 48, 49, 53,
-        18, 21, 0, 0, 57, 67, 76, 0, 0, 0, 0, 0, 101, 135, 0, 0, 0];
-    constant [137] short BINARY_PRECEDENCE = [
+        18, 21, 0, 0, 57, 67, 76, 0, 0, 0, 0, 0, 101, 135, 0, 0, 0, 0];
+    constant [138] short BINARY_PRECEDENCE = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 3, 13, 12, 11, 0, 18, 18, 18, 0, 0, 0, 1, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 21, 0, 5, 5, 5, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 16, 16, 1, 0,
         0, 17, 17, 18, 18, 0, 0, 16, 0, 0, 0, 0, 16, 16, 0, 0, 0, 0, 2, 0, 0, 6, 7, 6,
-        15, 15, 0, 0, 23, 18, 19, 0, 0, 0, 0, 0, 17, 18, 0, 0, 0];
-    constant [137] short PREFIX_OP = [
+        15, 15, 0, 0, 23, 18, 19, 0, 0, 0, 0, 0, 17, 18, 0, 0, 0, 0];
+    constant [138] short PREFIX_OP = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 63, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 134, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 50, 51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [137] short PREFIX_PRECEDENCE = [
+        0, 0, 50, 51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    constant [138] short PREFIX_PRECEDENCE = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant [137] short MODEL_CLASS = [
+        0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    constant [138] short MODEL_CLASS = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     constant integer TK_EVENT = 0;
     constant integer TK_BOOLEAN = 1;
     constant integer TK_INT = 2;
@@ -10560,59 +11887,63 @@ process SIGC =
     constant integer T_NO_OUTPUT = 57;
     constant integer T_HAS_OUTPUT = 58;
     constant integer T_NOT_STATE = 59;
-    constant [278] short TEMPLATE_PIECE0 = [
-        0, 427, 428, 429, 431, 0, 0, 0, 435, 437, 439, 440, 441, 442, 444, 445, 447, 437, 437, 437, 437, 437, 455, 456,
-        457, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 0, 0, 371, 0, 478, 479, 0, 481,
-        483, 484, 486, 483, 0, 0, 0, 484, 0, 495, 495, 0, 499, 483, 501, 503, 504, 505, 495, 0, 508, 508, 0, 513,
-        514, 0, 0, 508, 0, 519, 520, 0, 0, 495, 495, 527, 528, 530, 0, 483, 533, 535, 536, 537, 538, 539, 540, 541,
-        499, 0, 543, 442, 545, 0, 543, 549, 550, 552, 553, 555, 556, 558, 559, 0, 0, 562, 563, 564, 565, 566, 567, 569,
-        556, 571, 573, 0, 575, 556, 556, 556, 556, 556, 556, 583, 584, 447, 447, 442, 442, 587, 588, 499, 590, 592, 499, 593,
-        499, 596, 597, 499, 599, 600, 601, 602, 602, 605, 607, 602, 593, 611, 611, 611, 616, 618, 619, 620, 621, 622, 623, 625,
-        602, 627, 628, 629, 630, 633, 634, 636, 637, 638, 640, 642, 643, 593, 593, 593, 648, 650, 651, 652, 654, 656, 638, 658,
-        659, 660, 662, 499, 666, 667, 670, 556, 672, 674, 675, 677, 678, 627, 627, 681, 683, 684, 685, 0, 0, 688, 0, 0,
-        691, 693, 693, 697, 697, 0, 0, 697, 703, 705, 707, 708, 709, 710, 711, 675, 713, 714, 499, 483, 717, 718, 719, 720,
-        721, 722, 723, 724, 725, 726, 727, 556, 556, 556, 0, 731, 732, 733, 0, 736, 737, 738, 739, 741, 742, 743, 744, 745,
-        746, 0, 748, 749, 556, 556, 752, 753, 754, 499, 499, 499, 758, 759];
-    constant [278] short TEMPLATE_PIECE1 = [
-        0, 7, 0, 430, 0, 432, 433, 4, 436, 438, 0, 0, 0, 443, 0, 446, 434, 448, 448, 448, 448, 448, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 473, 4, 475, 476, 477, 0, 0, 480, 482,
-        438, 485, 487, 489, 490, 491, 492, 493, 494, 496, 497, 498, 438, 500, 502, 0, 0, 506, 438, 507, 509, 510, 511, 0,
-        0, 515, 516, 517, 518, 0, 438, 521, 522, 524, 525, 0, 529, 531, 476, 532, 534, 0, 0, 0, 0, 0, 0, 0,
-        438, 510, 544, 438, 546, 547, 548, 0, 551, 488, 554, 0, 557, 0, 0, 560, 561, 0, 0, 0, 0, 0, 568, 488,
-        570, 572, 0, 574, 576, 577, 578, 579, 580, 581, 582, 0, 0, 438, 585, 438, 586, 0, 0, 589, 591, 0, 448, 594,
-        595, 0, 0, 598, 0, 0, 0, 603, 604, 606, 608, 609, 610, 612, 614, 615, 617, 0, 0, 0, 0, 0, 624, 0,
-        626, 0, 0, 0, 572, 0, 635, 0, 0, 639, 641, 0, 644, 645, 646, 647, 649, 0, 0, 572, 655, 0, 657, 0,
-        0, 661, 663, 664, 0, 668, 488, 671, 673, 673, 676, 0, 0, 679, 680, 682, 0, 0, 0, 686, 687, 0, 689, 690,
-        692, 694, 695, 698, 699, 700, 701, 702, 704, 706, 0, 0, 0, 0, 0, 712, 0, 0, 715, 716, 0, 0, 0, 0,
-        488, 488, 0, 0, 0, 0, 0, 728, 729, 730, 729, 0, 0, 734, 735, 0, 0, 0, 740, 0, 0, 0, 0, 0,
-        0, 747, 0, 0, 750, 751, 0, 0, 0, 448, 448, 448, 712, 0];
-    constant [278] short TEMPLATE_PIECE2 = [
-        0, 0, 0, 0, 0, 0, 0, 434, 0, 0, 0, 0, 0, 0, 0, 0, 0, 449, 450, 451, 452, 453, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 474, 0, 4, 0, 0, 0, 0, 0,
-        0, 0, 488, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 510, 488, 512, 0,
-        0, 0, 0, 488, 0, 0, 0, 0, 523, 0, 526, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 542, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 572, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 452, 0,
-        0, 0, 0, 0, 0, 0, 0, 572, 0, 0, 0, 0, 0, 613, 613, 613, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 631, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 653, 0, 0, 0, 0,
-        0, 0, 0, 509, 0, 669, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 696, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    constant [304] short TEMPLATE_PIECE0 = [
+        0, 428, 429, 430, 432, 0, 0, 0, 436, 438, 440, 441, 442, 443, 445, 446, 448, 438, 438, 438, 438, 438, 456, 457,
+        458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 0, 0, 372, 0, 479, 480, 0, 482,
+        484, 485, 487, 484, 0, 0, 0, 485, 0, 496, 496, 0, 500, 484, 502, 504, 505, 506, 496, 0, 509, 509, 0, 514,
+        515, 0, 0, 509, 0, 520, 521, 0, 0, 496, 496, 528, 529, 531, 0, 484, 534, 536, 537, 538, 539, 540, 541, 542,
+        500, 0, 544, 443, 546, 0, 544, 550, 551, 553, 554, 556, 557, 559, 560, 0, 0, 563, 564, 565, 566, 567, 568, 570,
+        557, 572, 574, 0, 576, 557, 557, 557, 557, 557, 557, 584, 585, 448, 448, 443, 443, 588, 589, 500, 591, 593, 500, 594,
+        500, 597, 598, 500, 600, 601, 602, 603, 603, 606, 608, 603, 594, 612, 612, 612, 617, 619, 620, 621, 622, 623, 624, 626,
+        603, 628, 629, 630, 631, 634, 635, 637, 638, 639, 641, 643, 644, 594, 594, 594, 649, 651, 652, 653, 655, 657, 639, 659,
+        660, 661, 663, 500, 667, 668, 671, 557, 673, 675, 676, 678, 679, 628, 628, 682, 684, 685, 686, 0, 0, 689, 0, 0,
+        692, 693, 695, 0, 693, 699, 700, 702, 703, 704, 705, 706, 0, 708, 709, 710, 711, 712, 0, 0, 716, 717, 718, 721,
+        0, 0, 724, 726, 726, 730, 730, 0, 0, 730, 736, 738, 740, 741, 742, 743, 744, 676, 746, 747, 500, 484, 750, 751,
+        752, 753, 754, 755, 756, 757, 758, 759, 760, 557, 557, 557, 0, 764, 765, 766, 0, 769, 770, 771, 772, 774, 775, 776,
+        777, 778, 779, 0, 781, 782, 557, 557, 785, 786, 787, 500, 500, 500, 791, 792];
+    constant [304] short TEMPLATE_PIECE1 = [
+        0, 7, 0, 431, 0, 433, 434, 4, 437, 439, 0, 0, 0, 444, 0, 447, 435, 449, 449, 449, 449, 449, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 474, 4, 476, 477, 478, 0, 0, 481, 483,
+        439, 486, 488, 490, 491, 492, 493, 494, 495, 497, 498, 499, 439, 501, 503, 0, 0, 507, 439, 508, 510, 511, 512, 0,
+        0, 516, 517, 518, 519, 0, 439, 522, 523, 525, 526, 0, 530, 532, 477, 533, 535, 0, 0, 0, 0, 0, 0, 0,
+        439, 511, 545, 439, 547, 548, 549, 0, 552, 489, 555, 0, 558, 0, 0, 561, 562, 0, 0, 0, 0, 0, 569, 489,
+        571, 573, 0, 575, 577, 578, 579, 580, 581, 582, 583, 0, 0, 439, 586, 439, 587, 0, 0, 590, 592, 0, 449, 595,
+        596, 0, 0, 599, 0, 0, 0, 604, 605, 607, 609, 610, 611, 613, 615, 616, 618, 0, 0, 0, 0, 0, 625, 0,
+        627, 0, 0, 0, 573, 0, 636, 0, 0, 640, 642, 0, 645, 646, 647, 648, 650, 0, 0, 573, 656, 0, 658, 0,
+        0, 662, 664, 665, 0, 669, 489, 672, 674, 674, 677, 0, 0, 680, 681, 683, 0, 0, 0, 687, 688, 0, 690, 691,
+        0, 694, 696, 697, 698, 0, 701, 0, 0, 0, 0, 0, 707, 435, 0, 0, 0, 713, 573, 715, 0, 0, 719, 0,
+        722, 723, 725, 727, 728, 731, 732, 733, 734, 735, 737, 739, 0, 0, 0, 0, 0, 745, 0, 0, 748, 749, 0, 0,
+        0, 0, 489, 489, 0, 0, 0, 0, 0, 761, 762, 763, 762, 0, 0, 767, 768, 0, 0, 0, 773, 0, 0, 0,
+        0, 0, 0, 780, 0, 0, 783, 784, 0, 0, 0, 449, 449, 449, 745, 0];
+    constant [304] short TEMPLATE_PIECE2 = [
+        0, 0, 0, 0, 0, 0, 0, 435, 0, 0, 0, 0, 0, 0, 0, 0, 0, 450, 451, 452, 453, 454, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 475, 0, 4, 0, 0, 0, 0, 0,
+        0, 0, 489, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 511, 489, 513, 0,
+        0, 0, 0, 489, 0, 0, 0, 0, 524, 0, 527, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 543, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 573, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 453, 0,
+        0, 0, 0, 0, 0, 0, 0, 573, 0, 0, 0, 0, 0, 614, 614, 614, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 632, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 654, 0, 0, 0, 0,
+        0, 0, 0, 510, 0, 670, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 526, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 714, 0, 0, 0, 720, 0,
+        0, 0, 0, 0, 729, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 755, 756, 757, 0, 0];
-    constant [278] short TEMPLATE_PIECE3 = [
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 454, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 788, 789, 790, 0, 0];
+    constant [304] short TEMPLATE_PIECE3 = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 455, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 632, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 665, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 633, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 666, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 454, 0, 0];
-    constant [278] short TEMPLATE_KIND0 = [
+        0, 0, 0, 0, 401, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 455, 0, 0];
+    constant [304] short TEMPLATE_KIND0 = [
         0, 8, 7, 6, 1, 3, 3, 7, 2, 3, 1, 0, 1, 4, 0, 1, 3, 3, 3, 3, 3, 3, 0, 0,
         0, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 4, 1, 1, 6, 13, 3, 1, 0, 0, 1, 1,
         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 3, 3, 3, 3, 3, 3, 0,
@@ -10621,11 +11952,12 @@ process SIGC =
         7, 4, 0, 3, 4, 7, 7, 7, 7, 7, 7, 0, 0, 3, 3, 3, 3, 0, 9, 9, 9, 0, 9, 9,
         9, 0, 0, 9, 0, 0, 0, 12, 12, 12, 12, 12, 9, 12, 12, 12, 12, 12, 0, 0, 0, 0, 12, 0,
         12, 12, 12, 0, 12, 0, 3, 1, 1, 1, 5, 0, 3, 3, 3, 3, 12, 0, 0, 3, 1, 0, 1, 0,
-        0, 8, 5, 3, 0, 3, 4, 7, 5, 5, 3, 0, 0, 12, 12, 12, 0, 0, 0, 1, 1, 0, 9, 9,
-        9, 12, 12, 9, 9, 12, 9, 9, 9, 12, 0, 0, 0, 0, 0, 3, 0, 0, 9, 9, 0, 0, 0, 0,
-        4, 4, 0, 0, 0, 0, 0, 7, 7, 7, 3, 0, 0, 11, 3, 0, 0, 0, 9, 0, 0, 0, 0, 0,
-        0, 3, 0, 0, 7, 7, 0, 0, 0, 3, 3, 3, 3, 0];
-    constant [278] short TEMPLATE_KIND1 = [
+        0, 8, 5, 3, 0, 3, 4, 7, 5, 5, 3, 0, 0, 12, 12, 12, 0, 0, 0, 1, 1, 0, 3, 3,
+        0, 3, 5, 3, 3, 0, 3, 0, 3, 0, 0, 0, 3, 3, 0, 0, 0, 3, 3, 3, 0, 0, 3, 3,
+        9, 9, 9, 12, 12, 9, 9, 12, 9, 9, 9, 12, 0, 0, 0, 0, 0, 3, 0, 0, 9, 9, 0, 0,
+        0, 0, 4, 4, 0, 0, 0, 0, 0, 7, 7, 7, 3, 0, 0, 11, 3, 0, 0, 0, 9, 0, 0, 0,
+        0, 0, 0, 3, 0, 0, 7, 7, 0, 0, 0, 3, 3, 3, 3, 0];
+    constant [304] short TEMPLATE_KIND1 = [
         0, 0, 0, 1, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 4, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1, 6, 0, 0, 0, 0, 0,
         0, 0, 5, 3, 0, 3, 3, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 6, 0, 0, 3, 4, 3, 0,
@@ -10634,11 +11966,12 @@ process SIGC =
         0, 4, 0, 0, 4, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 4, 0,
         0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 12, 0, 12, 12, 12, 0, 0, 0, 0, 0, 0, 12, 0,
         0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0,
-        0, 0, 0, 7, 0, 3, 4, 4, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 12, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 0, 0];
-    constant [278] short TEMPLATE_KIND2 = [
+        0, 0, 0, 7, 0, 3, 4, 4, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3,
+        0, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 3, 0,
+        0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 0, 0];
+    constant [304] short TEMPLATE_KIND2 = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0,
         0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 7, 4, 0, 0,
@@ -10648,9 +11981,10 @@ process SIGC =
         0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, 0, 0];
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, 0, 0];
     constant integer LAYOUT_NONE = 0;
     constant integer LAYOUT_OS = 1;
     constant integer LAYOUT_COMPILE = 2;
@@ -10697,8 +12031,8 @@ process SIGC =
         ulong(1000000), ulong(10000000), ulong(100000000), ulong(1000000000), ulong(10000000000), ulong(100000000000),
         ulong(1000000000000), ulong(10000000000000), ulong(100000000000000), ulong(1000000000000000), ulong(10000000000000000), ulong(100000000000000000),
         ulong(1000000000000000000), ulong(-8446744073709551616)];
-    constant [16248] ubyte FRAGMENTS = ":: error: error  sigc: error: [Errno ] '...'end of file'none[][[]]]]][][nonenone][CONST [[ENUMCONST ['stateDEFINESEED#.'call[expression at  at error 1 1 program exceeds compiler capacity: OUTPUT:0:0: error:  operand out of range: [, presence inputs: sigc: error: 'utf-8' codec can't decode byte 0xsigc: error: 'utf-8' codec can't decode bytes in position  in position : -memory reservation failedkinds texts lines columns keywordnamesymbolnumberstringeofCONSTSIGNALENUMCONSTCALLDELAYPREVINDEXNEGNOTUWHENCLOCKIFBRANCHDEFAULTWHENXORORANDEQNELTLEGTGEADDSUBMULDIVMODSHLSHRNEXTPAIRRANGEOPEN_PARENOPEN_SQUAREIF_MARKTHEN_MARKEFFECTINPUTCOPYCONVERTTABLEELEMENTGATHERITERARGCLOCK_PLUSCLOCK_TIMESOPEN_COLONOPEN_SLASH_COLONLEFT_TTCLOCK_MINUSABSOPERANDZERORECOVERRECOVER_SQUAREINDEX_OPERANDSIZESIZE_LESSCELLVARAFTERFROMCOUNTREPEATONERIGHT_OPERANDTARGET_SIGNALINDEX_SIGNALREPEAT_RANGEARRAY_RANGEREPEAT_BODYSLOTPOWAFFINE_SAMPLEAFFINE_RELATIONAFFINE_UNSAMPLESTATEFLATSQUARE_FLATSLICEDIM_CALLSIZE_CALLSIZE_ONE_CALLBOUNDS_CALLDIMDIM_SIZEBOUNDSBOUNDS_PAIRRECOVER_SQUARE_FLATENUMDEFAULTSPUTSPANSTEPTARGET_INDEXRESTRUCTURESQUARE_FLAT_TARGETCONCATARRAY_EQRANGE_TABLEFLATVEACHEACH_STOREGDELAYWINDOWLAGSQUARE_FLAT_NEXTELEMENT_PAIRAXISSEQ_RANGESEQ_SPANSEQ_LISTSEQ_HEAD1SEQ_HEAD2SEQ_HEAD3SEQ_HEAD4SEQ_ELEMENTSEQ_TAILSEQ_TAIL_PAIRSEQ_FINALSEQ_FROMSEQ_TOSEQ_BYSEQ_HIDDENSEQ_PREVIOUSSEQ_INDEXTUPLE_HEADTUPLE_TAILTUPLE_TARGETTUPLE_OUTPUTTRANSPOSEMATPRODEVENTBOOLEANINTPOINTERARRAYEXTERNALinputoutputlocalname types.kind types.bytes types.signed types.name types.values types.element types.size models.name models.kind models.parent models.line models.column models.labels signal_names signal_roles signal_types signal_models signal_positions constant_names constant_types constant_values table_types table_values equation_targets equation_ops equation_args equation_positions equation_loops equation_kinds equation_models equation_labels equation_guards guard_models guard_ops guard_args guard_positions guard_context guard_labels guard_signals label_names label_uses loop_names loop_positions loop_models constraint_groups constraint_positions constraint_models constraint_guards dependence_from dependence_to dependence_positions dependence_models dependence_guards rows.op rows.left rows.right rows.value rows.type rows.ctx rows.line rows.column rows.owner rows.loop rows.guard rows.groups rows.group_positions rows.dependence_from rows.dependence_to rows.war rows.snapshotted rows.effects.kind rows.effects.resource rows.effects.param loops.index loops.size loops.defined loops.snapshots loops.count parent sample_rows def_kind def_target def_left def_right def_line def_column def_pending ob_small ob_big ob_line ob_column node_kind node_parent node_depth node_root node_left node_right roots order loop_orders snapshots snapshotted signaltypemodelconstantlabelparametermodulea value, found a valuea value, found a typea value, found a modela value, found a signala type, found a valuea type, found a typea type, found a modela type, found a signala model, found a valuea model, found a typea model, found a modela model, found a signala signal, found a valuea signal, found a typea signal, found a modela signal, found a signalSRCTOKENSNAMESTYPESVALUESMODELSSIGNALSCONSTANTSTABLESEQUATIONSENTRIESGUARDSLABELSLOOPSGROUPSDEPENDENCESSTACKPATHSLOCALSPARSEFINISHITEMSOUTPUTINSTANCESINSTANTIATELOOKUPSROWSROW_DEPENDENCESSEGMENTSLOWERCLOCKSDEFINITIONSOBLIGATIONSBDDCLOCK_NAMESCLOCK_TEXTCLOCK_SORTEDGESSCHEDULE_NODESEFFECTSEFFECT_ORDERSPLITUNITSMICRO_OPSCODECODE_LABELSDATACODE_TEXTsafe process safe procedure safe node function safe automaton safe action deterministic process deterministic procedure deterministic node deterministic automaton deterministic action unsafe process unsafe procedure unsafe node unsafe automaton unsafe action (||)-->:::=^=/=<=>=..|$+*/()=;,?!<>^{}^+^*^-==<<=[:[/:|***^<^>^#:=:::=|+*.unexpected character 'program exceeds compiler capacity: expected '', found expected a name, found  is a reserved name is the name of a model is declared twiceinteger literal  does not fit in longconstant  is not declaredexpected an integer constant, found array capacity must be strictly positiveexpected a type, found type  is external; signals cannot have that typearrays cannot be passed to modelsunexpected  after the process modelenumerated value  has type  but its definition is a string but its definition is a list but its definition has an element of type  but its definition has type  but its definition has  elementsa conversion in a constant must name an integer typea constant must be defined by an integer literal, a conversion of one, or a list of themonly definitions are allowed inside iterateiterate cannot be nestediterate is not allowed inside a guarded process--> requires signal namesexpected ':=' or '^=', found the initial value of a delay must be a literal or a constant nameexpected a static parameter, found expected an expression, found expected 'then'expected 'else'unbalanced parenthesisexpected an operator, found expected an array access before abs expects a signed integer, found a case value must be a literal, found value  is listed twice in this case must declare at least one output cannot contain  cannot call  can only be the whole definition of a signalvar takes a signal namevar is supported only where its context clock is the defined signal's clock cannot be used inside a guard, case branch, label or state actionthe bound of  must be a positive integer literal or constant namelabel automaton  has no input; its control clock is the upper bound of its inputswrong number of arguments for : expected , found  cannot be placed on  cannot be guarded expects a state name of automaton  is not a label of automaton  needs exactly one Automaton_Initial_State is allowed only in an automatonmodel  has no output and cannot be used in an expression has an output and cannot be called as a process is not a state of automaton signal  cannot be used as a signalconversion to  expects one argumentindices expects a positive constantmodel calls are not allowed inside iterateunsafe model  is called from  is not a constant, a type or a modelparameter  of  expects  is a parameter of  and cannot be defineda formal type cannot be an array or an element typea module cannot be declared here is a model type and cannot be called is not a model type expects the interface of  has static parameters and cannot be an actual modelprivate is allowed only in a modulemodule  is private to module  is declared in module , which is not used here calls itself has  outputs; the definition names a call with several outputs cannot be guardedaction  is called outside a labelled processa  cannot be  has no tickref  names no signal of an enclosing modelref must precede the embedded modelsthe priority of a transition must be a constant integeran automaton sets its clock oncethe exponent of ** must be at least 1the exponent of ** must be a constant integera chain of ** needs parenthesesprivate must be followed by constant, type or a model class static parameters, found the word of  must be an integer constantthe resource of  must be an external type accesses an integer or pointer type, found  must fit in 32 bits':' is supported only as the right operand of nextinput 1 of  must be a pointer, found input 2 of store must have type input  of syscall must be an integer or a pointer, found input 1 of instruction must have type ulong, found operator  is not allowed inside iteratean array value can only be the whole definition of a signal[?] applies only to a signal name[?] is allowed only inside iterate[?] refers to a signal the iterate body does not defineindexing a value that is not an arraya range must start at a constantthe bound of a range must be an integeran array index must be an integernext expects 'index : value' on its rightconstant index  is outside 0..next expects a value of type  expects scalar operandsoperator if expects operands of comparable types, found  and the condition of if must be boolean cannot be inside an if; gate it by its clock or its inputsno conversion from  to  expects a pointer and an integer offset expects integer operands expects operands of comparable types, found  expects operands of one type expects boolean operands expects unsigned operandsthe condition of when must be booleanthe initial value of a delay must match its type is ambiguous has no value the index of iterate must be an array of integersiterate body cannot define its index  in with is not defined by the iterate bodythe initial value of  cannot read a signal the iterate defineswith initializes an array only from an array constant or an array signalinput signal  cannot be defined is defined twicea range defines an array of integersan array signal must be defined by a constant, indices, a gather, or next is never defineda range can only be the index of iteratea constant has no clockthe argument of $ cannot be a constantclock of  fits no tree: it relates root clocks  has two definitions that cannot be shown equalclocks of  are defined in terms of each otherthe clocks of guards  depend on each other cannot be shown inside the clock  must have a root of its ownclock relation  ^<  cannot be shown ^>  ^# assertion on  is not booleanmin_clock finds no instant for min_clock expects a signal name:=: joins signals whose clocks cannot be shown equaldependence condition is not booleanspec must be followed by the model's bodymembers of guard  do not tick at every assert accepts only clock relations and :=: is undefined: its definition is a constantcausality cycle between signals causality cycle between effects at causality cycle between clockseffects  on resource  have no order between them; order them with -->arrays need more than 2^64 bytes of address spacepragma  is allowed on the top model onlyexpected 'end pragmas', found Interrupt expects an interrupt number in quotes, found interrupt number  must be a decimal from 16 to 31interrupt  is used twicepragma Boot is used twicepragma object  is not an input signal named by a pragma must be event is named by two pragmas must be named by an Interrupt or Boot pragmathe root clock of  is not the clock of an Interrupt or Boot inputsyscall is not available on QEMU virta program with Interrupt pragmas needs a Boot pragma to enable theminput signals  share one root clock; each Interrupt or Boot input needs its ownmachine  is not supported; use mps2-an385pragma Machine is used twice must be a decimal from 15 to 47syscall is not available on mps2-an385the program needs more than the 4 MiB of RAM on mps2-an385unknown escape '' in a stringescape value  does not fit in a byte is an  and cannot be hiddena model cannot be declared in an inner whereinitial value of  is unused:  is not defined by $, cell or var'|*' expects a value of type  expects event operands, found '|*' produces  elements but the array has the index range has the definition of constant  is not a constant expressionthe initial value of a delay is not a constant expressiona constant expression divides by zero needs more than 4 splits cannot be split by a signal it definesmin_clock of  has more than one clock relation{ } when takes one signal on each side of -->affine phase must be a non-negative integeraffine period must be a positive integer takes integer constant parameters and signal name operands can only be used in the top-level processtuple partial definitions are not supported has both := and ::= definitions has two defaultvalue definitionspartial definition of  is a constantpartial definitions of  may coincide need a clock for ; add a clock equation or min_clock(state variable  is read without ? cannot be defined by :=? needs a context clock is not a state variable has no defaultvalueoutput  cannot have partial definitionspartial definition  cannot be shown inside the clock of an array type has more than 4 dimensionsthe access has more indices than the array has dimensionsa sub-array cannot be defined; define its elementsan extraction with fewer index arrays than the array has dimensions is not supportedan array type has 2^31 or more elements is not nested as its typethe dimension of size must be a constant between 1 and the number of dimensionsthe operands of bounds have no common scalar type is not an array and has no elements has no elementsa dependence endpoint cannot be a range of elementsan enumeration does not match the shape of its arraya range with step needs constant bounds and a constant stepa range with step must have a nonzero step and at least one elementan enumeration element must have type a restructuration value must have type a range used as an index needs constant bounds and at least one elementan extraction supports at most two index arraysthe index arrays of an extraction must have one size and one integer type|+ expects two arrays of one element typea restructuration needs an integer index array and a value array of one size expects arrays of one shape is not allowed inside an operator on arrays on arrays must be the whole definition of an array signalthe number of instants of a delay must be a positive constantthe size of a window must be a positive constantthe initial value of the delay must be a constant array of  elements of type  is already the index of an enclosing iteratean iterate has at most 4 index levelsthe iterations of a nested iterate number more than 2147483647only the outermost range of a nested iterate can have a bound that is not constant$ cannot apply to , which the iterate definesa range that does not start at 0 must end at a constantwith on an element must index it by the indices of the iterate, one per dimensionthe arguments of indices and the ranges of << >> must be constantseach target of indices or << >> must be an integer array whose dimensions are its rangesa sequential enumeration cannot be used inside an iterate, guard, case branch, label or state actioneach index of a sequential enumeration needs a to bound, in, to and step that are integer literals or constant names, a positive step and at least one value is called inside iterate but is not a function without iteratea tuple with an element target must be defined by a call inside iteratetr expects an array of two dimensions expects arrays of one element type and matching shapes must be the whole definition of an array signal outside iteratean inner iterate must directly follow ofthe initial values in with cannot call a modelthe previous value of an array can only be indexed or be the left operand of next but its initial value is a list but its initial value has an element of type  but its initial value has the initial value of signal the initial value of a delay must be a list of one shapenotwhenifdefaultxororandmoduloshlshrnextcellvarafterfromcountwindowtrROOTSAMPLEPRODUCTSUMNULLinvalid start byteinvalid continuation byteunexpected end of data000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeffmovz xmovz wmovk xmovk wadd x immadd w immsub x immsub w immsubs x immsubs w immadd xadds xsub xsubs xand xand worr xorr weor xorn xeor x onelslv xlsrv xsdiv xudiv xmul xmsub xumulh xcsel xcsinc wcsneg xldr xldr wldrsw xldrh wldrsh xldrb wstr xstr wstrh wstrb wldr x regldr w regldrsw x regldrh w regldrsh x regldrb w regstr x regstr w regstrh w regstrb w regldr x poststr x poststr w poststrb w postldrb w prebblb.condcbz wcbz xcbnz xadrpretsvc 0x80wordwfimovwmovtmovw addressmovt addressaddwsubwand.worr.worrs.weor.wadd.w shiftedadds.wadc.wadcs.wsbc.wsbcs.wsubs.wmov.wmvn.wlsl.wlsr.wlsl.w immlsr.w immasr.w immumullmlamlsudivsubs.w immadds.w immadc.w immsbcs.w immrsb.w immeor.w immorr.w immldr.wldrb.wldrh.wldrsh.wstr.wstrb.wstrh.wldrdstrdldrd poststrd poststrb postldrb postldrb prestr preldr postb.wb.n skipbx lrwfi.wmsr primaskthumb word";
-    constant [1166] short FRAGMENT_START = [
+    constant [17255] ubyte FRAGMENTS = ":: error: error  sigc: error: [Errno ] '...'end of file'none[][[]]]]][][nonenone][CONST [[ENUMCONST ['stateDEFINESEED#.'call[expression at  at error 1 1 program exceeds compiler capacity: OUTPUT:0:0: error:  operand out of range: [, presence inputs: sigc: error: 'utf-8' codec can't decode byte 0xsigc: error: 'utf-8' codec can't decode bytes in position  in position : -memory reservation failedkinds texts lines columns keywordnamesymbolnumberstringeofCONSTSIGNALENUMCONSTCALLDELAYPREVINDEXNEGNOTUWHENCLOCKIFBRANCHDEFAULTWHENXORORANDEQNELTLEGTGEADDSUBMULDIVMODSHLSHRNEXTPAIRRANGEOPEN_PARENOPEN_SQUAREIF_MARKTHEN_MARKEFFECTINPUTCOPYCONVERTTABLEELEMENTGATHERITERARGCLOCK_PLUSCLOCK_TIMESOPEN_COLONOPEN_SLASH_COLONLEFT_TTCLOCK_MINUSABSOPERANDZERORECOVERRECOVER_SQUAREINDEX_OPERANDSIZESIZE_LESSCELLVARAFTERFROMCOUNTREPEATONERIGHT_OPERANDTARGET_SIGNALINDEX_SIGNALREPEAT_RANGEARRAY_RANGEREPEAT_BODYSLOTPOWAFFINE_SAMPLEAFFINE_RELATIONAFFINE_UNSAMPLESTATEFLATSQUARE_FLATSLICEDIM_CALLSIZE_CALLSIZE_ONE_CALLBOUNDS_CALLDIMDIM_SIZEBOUNDSBOUNDS_PAIRRECOVER_SQUARE_FLATENUMDEFAULTSPUTSPANSTEPTARGET_INDEXRESTRUCTURESQUARE_FLAT_TARGETCONCATARRAY_EQRANGE_TABLEFLATVEACHEACH_STOREGDELAYWINDOWLAGSQUARE_FLAT_NEXTELEMENT_PAIRAXISSEQ_RANGESEQ_SPANSEQ_LISTSEQ_HEAD1SEQ_HEAD2SEQ_HEAD3SEQ_HEAD4SEQ_ELEMENTSEQ_TAILSEQ_TAIL_PAIRSEQ_FINALSEQ_FROMSEQ_TOSEQ_BYSEQ_HIDDENSEQ_PREVIOUSSEQ_INDEXTUPLE_HEADTUPLE_TAILTUPLE_TARGETTUPLE_OUTPUTTRANSPOSEMATPRODEVENTBOOLEANINTPOINTERARRAYEXTERNALinputoutputlocalname types.kind types.bytes types.signed types.name types.values types.element types.size models.name models.kind models.parent models.line models.column models.labels signal_names signal_roles signal_types signal_models signal_positions constant_names constant_types constant_values table_types table_values equation_targets equation_ops equation_args equation_positions equation_loops equation_kinds equation_models equation_labels equation_guards guard_models guard_ops guard_args guard_positions guard_context guard_labels guard_signals label_names label_uses loop_names loop_positions loop_models constraint_groups constraint_positions constraint_models constraint_guards dependence_from dependence_to dependence_positions dependence_models dependence_guards rows.op rows.left rows.right rows.value rows.type rows.ctx rows.line rows.column rows.owner rows.loop rows.guard rows.groups rows.group_positions rows.dependence_from rows.dependence_to rows.war rows.snapshotted rows.effects.kind rows.effects.resource rows.effects.param loops.index loops.size loops.defined loops.snapshots loops.count parent sample_rows def_kind def_target def_left def_right def_line def_column def_pending ob_small ob_big ob_line ob_column node_kind node_parent node_depth node_root node_left node_right roots order loop_orders snapshots snapshotted signaltypemodelconstantlabelparametermodulea value, found a valuea value, found a typea value, found a modela value, found a signala type, found a valuea type, found a typea type, found a modela type, found a signala model, found a valuea model, found a typea model, found a modela model, found a signala signal, found a valuea signal, found a typea signal, found a modela signal, found a signalSRCTOKENSNAMESTYPESVALUESMODELSSIGNALSCONSTANTSTABLESEQUATIONSENTRIESGUARDSLABELSLOOPSGROUPSDEPENDENCESSTACKPATHSLOCALSPARSEFINISHITEMSOUTPUTINSTANCESINSTANTIATELOOKUPSROWSROW_DEPENDENCESSEGMENTSLOWERCLOCKSDEFINITIONSOBLIGATIONSBDDCLOCK_NAMESCLOCK_TEXTCLOCK_SORTEDGESSCHEDULE_NODESEFFECTSEFFECT_ORDERSPLITUNITSMICRO_OPSCODECODE_LABELSDATACODE_TEXTTUPLESsafe process safe procedure safe node function safe automaton safe action deterministic process deterministic procedure deterministic node deterministic automaton deterministic action unsafe process unsafe procedure unsafe node unsafe automaton unsafe action (||)-->:::=^=/=<=>=..|$+*/()=;,?!<>^{}^+^*^-==<<=[:[/:|***^<^>^#:=:::=|+*.unexpected character 'program exceeds compiler capacity: expected '', found expected a name, found  is a reserved name is the name of a model is declared twiceinteger literal  does not fit in longconstant  is not declaredexpected an integer constant, found array capacity must be strictly positiveexpected a type, found type  is external; signals cannot have that typearrays cannot be passed to modelsunexpected  after the process modelenumerated value  has type  but its definition is a string but its definition is a list but its definition has an element of type  but its definition has type  but its definition has  elementsa conversion in a constant must name an integer typea constant must be defined by an integer literal, a conversion of one, or a list of themonly definitions are allowed inside iterateiterate cannot be nestediterate is not allowed inside a guarded process--> requires signal namesexpected ':=' or '^=', found the initial value of a delay must be a literal or a constant nameexpected a static parameter, found expected an expression, found expected 'then'expected 'else'unbalanced parenthesisexpected an operator, found expected an array access before abs expects a signed integer, found a case value must be a literal, found value  is listed twice in this case must declare at least one output cannot contain  cannot call  can only be the whole definition of a signalvar takes a signal namevar is supported only where its context clock is the defined signal's clock cannot be used inside a guard, case branch, label or state actionthe bound of  must be a positive integer literal or constant namelabel automaton  has no input; its control clock is the upper bound of its inputswrong number of arguments for : expected , found  cannot be placed on  cannot be guarded expects a state name of automaton  is not a label of automaton  needs exactly one Automaton_Initial_State is allowed only in an automatonmodel  has no output and cannot be used in an expression has an output and cannot be called as a process is not a state of automaton signal  cannot be used as a signalconversion to  expects one argumentindices expects a positive constantmodel calls are not allowed inside iterateunsafe model  is called from  is not a constant, a type or a modelparameter  of  expects  is a parameter of  and cannot be defineda formal type cannot be an array or an element typea module cannot be declared here is a model type and cannot be called is not a model type expects the interface of  has static parameters and cannot be an actual modelprivate is allowed only in a modulemodule  is private to module  is declared in module , which is not used here calls itself has  outputs; the definition names a call with several outputs cannot be guardedaction  is called outside a labelled processa  cannot be  has no tickref  names no signal of an enclosing modelref must precede the embedded modelsthe priority of a transition must be a constant integeran automaton sets its clock oncethe exponent of ** must be at least 1the exponent of ** must be a constant integera chain of ** needs parenthesesprivate must be followed by constant, type or a model class static parameters, found the word of  must be an integer constantthe resource of  must be an external type accesses an integer or pointer type, found  must fit in 32 bits':' is supported only as the right operand of nextinput 1 of  must be a pointer, found input 2 of store must have type input  of syscall must be an integer or a pointer, found input 1 of instruction must have type ulong, found operator  is not allowed inside iteratean array value can only be the whole definition of a signal[?] applies only to a signal name[?] is allowed only inside iterate[?] refers to a signal the iterate body does not defineindexing a value that is not an arraya range must start at a constantthe bound of a range must be an integeran array index must be an integernext expects 'index : value' on its rightconstant index  is outside 0..next expects a value of type  expects scalar operandsoperator if expects operands of comparable types, found  and the condition of if must be boolean cannot be inside an if; gate it by its clock or its inputsno conversion from  to  expects a pointer and an integer offset expects integer operands expects operands of comparable types, found  expects operands of one type expects boolean operands expects unsigned operandsthe condition of when must be booleanthe initial value of a delay must match its type is ambiguous has no value the index of iterate must be an array of integersiterate body cannot define its index  in with is not defined by the iterate bodythe initial value of  cannot read a signal the iterate defineswith initializes an array only from an array constant or an array signalinput signal  cannot be defined is defined twicea range defines an array of integersan array signal must be defined by a constant, indices, a gather, or next is never defineda range can only be the index of iteratea constant has no clockthe argument of $ cannot be a constantclock of  fits no tree: it relates root clocks  has two definitions that cannot be shown equalclocks of  are defined in terms of each otherthe clocks of guards  depend on each other cannot be shown inside the clock  must have a root of its ownclock relation  ^<  cannot be shown ^>  ^# assertion on  is not booleanmin_clock finds no instant for min_clock expects a signal name:=: joins signals whose clocks cannot be shown equaldependence condition is not booleanspec must be followed by the model's bodymembers of guard  do not tick at every assert accepts only clock relations and :=: is undefined: its definition is a constantcausality cycle between signals causality cycle between effects at causality cycle between clockseffects  on resource  have no order between them; order them with -->arrays need more than 2^64 bytes of address spacepragma  is allowed on the top model onlyexpected 'end pragmas', found Interrupt expects an interrupt number in quotes, found interrupt number  must be a decimal from 16 to 31interrupt  is used twicepragma Boot is used twicepragma object  is not an input signal named by a pragma must be event is named by two pragmas must be named by an Interrupt or Boot pragmathe root clock of  is not the clock of an Interrupt or Boot inputsyscall is not available on QEMU virta program with Interrupt pragmas needs a Boot pragma to enable theminput signals  share one root clock; each Interrupt or Boot input needs its ownmachine  is not supported; use mps2-an385pragma Machine is used twice must be a decimal from 15 to 47syscall is not available on mps2-an385the program needs more than the 4 MiB of RAM on mps2-an385unknown escape '' in a stringescape value  does not fit in a byte is an  and cannot be hiddena model cannot be declared in an inner whereinitial value of  is unused:  is not defined by $, cell or var'|*' expects a value of type  expects event operands, found '|*' produces  elements but the array has the index range has the definition of constant  is not a constant expressionthe initial value of a delay is not a constant expressiona constant expression divides by zero needs more than 4 splits cannot be split by a signal it definesmin_clock of  has more than one clock relation{ } when takes one signal on each side of -->affine phase must be a non-negative integeraffine period must be a positive integer takes integer constant parameters and signal name operands can only be used in the top-level processtuple partial definitions are not supported has no field  is not a tuple and has no field an array element cannot be a bundletuple  is used where a scalar is expectedthe tuple has  components but  returns a tuple and must be the whole definition cannot be an operand of a tuple type is nested more than 4 levelsbundle  has no clocka tuple signal cannot have an initial valueoperator <<= is not defined on struct a tuple type cannot be used herea bundle cannot be the type of a fielda tuple value is used where a scalar is expected cannot be called inside a tuple expressionfield a field of tuple type cannot be an arraya tuple type needs at least one fielda field can only be selected from a signal nametuple type  is used before its declaration are not the same kind of tuple in a spec is not a field of the bundle== on elements of an array of structs is not supportedinit on a delay of a tuple is accepted only for $ 1an element of  is a tuple and cannot be a target; define its fields, as in .F[I] := Ea tuple value cannot be an argument of  has both := and ::= definitions has two defaultvalue definitionspartial definition of  is a constantpartial definitions of  may coincide need a clock for ; add a clock equation or min_clock(state variable  is read without ? cannot be defined by :=? needs a context clock is not a state variable has no defaultvalueoutput  cannot have partial definitionspartial definition  cannot be shown inside the clock of an array type has more than 4 dimensionsthe access has more indices than the array has dimensionsa sub-array cannot be defined; define its elementsan extraction with fewer index arrays than the array has dimensions is not supportedan array type has 2^31 or more elements is not nested as its typethe dimension of size must be a constant between 1 and the number of dimensionsthe operands of bounds have no common scalar type is not an array and has no elements has no elementsa dependence endpoint cannot be a range of elementsan enumeration does not match the shape of its arraya range with step needs constant bounds and a constant stepa range with step must have a nonzero step and at least one elementan enumeration element must have type a restructuration value must have type a range used as an index needs constant bounds and at least one elementan extraction supports at most two index arraysthe index arrays of an extraction must have one size and one integer type|+ expects two arrays of one element typea restructuration needs an integer index array and a value array of one size expects arrays of one shape is not allowed inside an operator on arrays on arrays must be the whole definition of an array signalthe number of instants of a delay must be a positive constantthe size of a window must be a positive constantthe initial value of the delay must be a constant array of  elements of type  is already the index of an enclosing iteratean iterate has at most 4 index levelsthe iterations of a nested iterate number more than 2147483647only the outermost range of a nested iterate can have a bound that is not constant$ cannot apply to , which the iterate definesa range that does not start at 0 must end at a constantwith on an element must index it by the indices of the iterate, one per dimensionthe arguments of indices and the ranges of << >> must be constantseach target of indices or << >> must be an integer array whose dimensions are its rangesa sequential enumeration cannot be used inside an iterate, guard, case branch, label or state actioneach index of a sequential enumeration needs a to bound, in, to and step that are integer literals or constant names, a positive step and at least one value is called inside iterate but is not a function without iteratea tuple with an element target must be defined by a call inside iteratetr expects an array of two dimensions expects arrays of one element type and matching shapes must be the whole definition of an array signal outside iteratean inner iterate must directly follow ofthe initial values in with cannot call a modelthe previous value of an array can only be indexed or be the left operand of next but its initial value is a list but its initial value has an element of type  but its initial value has the initial value of signal the initial value of a delay must be a list of one shapenotwhenifdefaultxororandmoduloshlshrnextcellvarafterfromcountwindowtrROOTSAMPLEPRODUCTSUMNULLinvalid start byteinvalid continuation byteunexpected end of data000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeffmovz xmovz wmovk xmovk wadd x immadd w immsub x immsub w immsubs x immsubs w immadd xadds xsub xsubs xand xand worr xorr weor xorn xeor x onelslv xlsrv xsdiv xudiv xmul xmsub xumulh xcsel xcsinc wcsneg xldr xldr wldrsw xldrh wldrsh xldrb wstr xstr wstrh wstrb wldr x regldr w regldrsw x regldrh w regldrsh x regldrb w regstr x regstr w regstrh w regstrb w regldr x poststr x poststr w poststrb w postldrb w prebblb.condcbz wcbz xcbnz xadrpretsvc 0x80wordwfimovwmovtmovw addressmovt addressaddwsubwand.worr.worrs.weor.wadd.w shiftedadds.wadc.wadcs.wsbc.wsbcs.wsubs.wmov.wmvn.wlsl.wlsr.wlsl.w immlsr.w immasr.w immumullmlamlsudivsubs.w immadds.w immadc.w immsbcs.w immrsb.w immeor.w immorr.w immldr.wldrb.wldrh.wldrsh.wstr.wstrb.wstrh.wldrdstrdldrd poststrd poststrb postldrb postldrb prestr preldr postb.wb.n skipbx lrwfi.wmsr primaskthumb word";
+    constant [1199] short FRAGMENT_START = [
         0, 0, 1, 10, 16, 17, 37, 39, 40, 43, 56, 60, 61, 62, 64, 66, 69, 71, 76, 81, 89, 101, 107, 113,
         117, 118, 119, 124, 139, 143, 194, 207, 231, 233, 250, 297, 355, 368, 370, 371, 396, 402, 408, 414, 422, 429, 433, 439,
         445, 451, 454, 459, 465, 474, 478, 483, 487, 492, 495, 498, 503, 508, 510, 516, 523, 527, 530, 532, 535, 537, 539, 541,
@@ -10714,41 +12048,42 @@ process SIGC =
         2721, 2732, 2742, 2752, 2763, 2769, 2775, 2787, 2797, 2809, 2815, 2819, 2824, 2832, 2837, 2846, 2852, 2874, 2895, 2917, 2940, 2961, 2981, 3002,
         3024, 3046, 3067, 3089, 3112, 3135, 3157, 3180, 3204, 3207, 3213, 3218, 3223, 3229, 3235, 3242, 3251, 3257, 3266, 3273, 3279, 3285, 3290, 3296,
         3307, 3312, 3317, 3323, 3328, 3334, 3339, 3345, 3354, 3365, 3372, 3376, 3391, 3399, 3404, 3410, 3421, 3432, 3435, 3446, 3456, 3466, 3471, 3485,
-        3492, 3504, 3509, 3514, 3523, 3527, 3538, 3542, 3551, 3564, 3579, 3589, 3598, 3613, 3625, 3647, 3671, 3690, 3714, 3735, 3750, 3767, 3779, 3796,
-        3810, 3812, 3814, 3817, 3819, 3821, 3823, 3825, 3827, 3829, 3831, 3832, 3833, 3834, 3835, 3836, 3837, 3838, 3839, 3840, 3841, 3842, 3843, 3844,
-        3845, 3846, 3847, 3848, 3850, 3852, 3854, 3856, 3859, 3861, 3864, 3866, 3868, 3870, 3872, 3874, 3877, 3880, 3882, 3884, 3906, 3941, 3951, 3960,
-        3983, 4002, 4025, 4043, 4059, 4080, 4089, 4105, 4141, 4181, 4204, 4209, 4252, 4285, 4296, 4320, 4337, 4347, 4378, 4407, 4450, 4479, 4503, 4512,
-        4564, 4652, 4695, 4719, 4766, 4791, 4820, 4885, 4920, 4950, 4965, 4980, 5002, 5030, 5062, 5098, 5136, 5142, 5171, 5204, 5220, 5233, 5278, 5301,
-        5376, 5442, 5455, 5507, 5513, 5523, 5588, 5618, 5629, 5637, 5658, 5676, 5711, 5740, 5782, 5814, 5820, 5870, 5918, 5947, 5954, 5981, 5995, 6016,
-        6051, 6093, 6106, 6122, 6159, 6169, 6173, 6182, 6201, 6223, 6274, 6306, 6343, 6363, 6389, 6441, 6476, 6483, 6505, 6528, 6552, 6565, 6570, 6601,
-        6646, 6653, 6690, 6692, 6703, 6715, 6719, 6757, 6793, 6848, 6880, 6917, 6962, 6993, 7052, 7078, 7090, 7118, 7134, 7159, 7203, 7223, 7273, 7284,
-        7310, 7342, 7348, 7399, 7450, 7459, 7489, 7548, 7581, 7615, 7670, 7707, 7739, 7778, 7811, 7852, 7867, 7882, 7911, 7935, 7991, 7996, 8031, 8090,
-        8109, 8113, 8153, 8178, 8223, 8252, 8277, 8303, 8340, 8388, 8401, 8415, 8464, 8501, 8544, 8565, 8606, 8678, 8691, 8709, 8726, 8762, 8835, 8852,
-        8892, 8915, 8953, 8962, 9000, 9047, 9057, 9092, 9113, 9134, 9168, 9196, 9211, 9215, 9231, 9235, 9239, 9252, 9267, 9298, 9329, 9381, 9416, 9457,
-        9474, 9496, 9539, 9582, 9614, 9649, 9679, 9687, 9700, 9748, 9797, 9804, 9837, 9867, 9922, 9939, 9971, 9981, 9995, 10020, 10034, 10057, 10089, 10113,
-        10158, 10176, 10223, 10260, 10327, 10341, 10406, 10414, 10447, 10475, 10507, 10545, 10603, 10619, 10632, 10645, 10668, 10675, 10696, 10740, 10757, 10769, 10802, 10831,
-        10862, 10876, 10904, 10924, 10951, 10980, 11037, 11074, 11099, 11138, 11151, 11184, 11229, 11272, 11312, 11371, 11413, 11456, 11488, 11521, 11543, 11557, 11580, 11593,
-        11611, 11647, 11662, 11680, 11704, 11727, 11751, 11771, 11778, 11810, 11829, 11866, 11906, 11963, 12013, 12097, 12136, 12162, 12241, 12290, 12326, 12342, 12393, 12445,
-        12504, 12571, 12609, 12648, 12719, 12766, 12839, 12880, 12956, 12984, 13028, 13086, 13147, 13195, 13254, 13272, 13317, 13354, 13416, 13498, 13516, 13543, 13598, 13679,
-        13745, 13833, 13933, 14089, 14152, 14223, 14260, 14315, 14379, 14419, 14465, 14546, 14578, 14624, 14651, 14679, 14735, 14738, 14742, 14744, 14751, 14754, 14756, 14759,
-        14765, 14768, 14771, 14775, 14779, 14782, 14787, 14791, 14796, 14802, 14804, 14808, 14814, 14821, 14824, 14828, 14846, 14871, 14893, 14895, 14897, 14899, 14901, 14903,
-        14905, 14907, 14909, 14911, 14913, 14915, 14917, 14919, 14921, 14923, 14925, 14927, 14929, 14931, 14933, 14935, 14937, 14939, 14941, 14943, 14945, 14947, 14949, 14951,
-        14953, 14955, 14957, 14959, 14961, 14963, 14965, 14967, 14969, 14971, 14973, 14975, 14977, 14979, 14981, 14983, 14985, 14987, 14989, 14991, 14993, 14995, 14997, 14999,
-        15001, 15003, 15005, 15007, 15009, 15011, 15013, 15015, 15017, 15019, 15021, 15023, 15025, 15027, 15029, 15031, 15033, 15035, 15037, 15039, 15041, 15043, 15045, 15047,
-        15049, 15051, 15053, 15055, 15057, 15059, 15061, 15063, 15065, 15067, 15069, 15071, 15073, 15075, 15077, 15079, 15081, 15083, 15085, 15087, 15089, 15091, 15093, 15095,
-        15097, 15099, 15101, 15103, 15105, 15107, 15109, 15111, 15113, 15115, 15117, 15119, 15121, 15123, 15125, 15127, 15129, 15131, 15133, 15135, 15137, 15139, 15141, 15143,
-        15145, 15147, 15149, 15151, 15153, 15155, 15157, 15159, 15161, 15163, 15165, 15167, 15169, 15171, 15173, 15175, 15177, 15179, 15181, 15183, 15185, 15187, 15189, 15191,
-        15193, 15195, 15197, 15199, 15201, 15203, 15205, 15207, 15209, 15211, 15213, 15215, 15217, 15219, 15221, 15223, 15225, 15227, 15229, 15231, 15233, 15235, 15237, 15239,
-        15241, 15243, 15245, 15247, 15249, 15251, 15253, 15255, 15257, 15259, 15261, 15263, 15265, 15267, 15269, 15271, 15273, 15275, 15277, 15279, 15281, 15283, 15285, 15287,
-        15289, 15291, 15293, 15295, 15297, 15299, 15301, 15303, 15305, 15307, 15309, 15311, 15313, 15315, 15317, 15319, 15321, 15323, 15325, 15327, 15329, 15331, 15333, 15335,
-        15337, 15339, 15341, 15343, 15345, 15347, 15349, 15351, 15353, 15355, 15357, 15359, 15361, 15363, 15365, 15367, 15369, 15371, 15373, 15375, 15377, 15379, 15381, 15383,
-        15385, 15387, 15389, 15391, 15393, 15395, 15397, 15399, 15401, 15403, 15405, 15411, 15417, 15423, 15429, 15438, 15447, 15456, 15465, 15475, 15485, 15490, 15496, 15501,
-        15507, 15512, 15517, 15522, 15527, 15532, 15537, 15546, 15552, 15558, 15564, 15570, 15575, 15581, 15588, 15594, 15601, 15608, 15613, 15618, 15625, 15631, 15638, 15644,
-        15649, 15654, 15660, 15666, 15675, 15684, 15695, 15705, 15716, 15726, 15735, 15744, 15754, 15764, 15774, 15784, 15794, 15805, 15815, 15816, 15818, 15824, 15829, 15834,
-        15840, 15844, 15847, 15855, 15859, 15862, 15866, 15870, 15882, 15894, 15898, 15902, 15907, 15912, 15918, 15923, 15936, 15942, 15947, 15953, 15958, 15964, 15970, 15975,
-        15980, 15985, 15990, 15999, 16008, 16017, 16022, 16025, 16028, 16032, 16042, 16052, 16061, 16071, 16080, 16089, 16098, 16103, 16109, 16115, 16122, 16127, 16133, 16139,
-        16143, 16147, 16156, 16165, 16174, 16183, 16191, 16198, 16206, 16209, 16217, 16222, 16227, 16238];
-    constant [1166] short FRAGMENT_LENGTH = [
+        3492, 3504, 3509, 3514, 3523, 3527, 3538, 3542, 3551, 3557, 3570, 3585, 3595, 3604, 3619, 3631, 3653, 3677, 3696, 3720, 3741, 3756, 3773, 3785,
+        3802, 3816, 3818, 3820, 3823, 3825, 3827, 3829, 3831, 3833, 3835, 3837, 3838, 3839, 3840, 3841, 3842, 3843, 3844, 3845, 3846, 3847, 3848, 3849,
+        3850, 3851, 3852, 3853, 3854, 3856, 3858, 3860, 3862, 3865, 3867, 3870, 3872, 3874, 3876, 3878, 3880, 3883, 3886, 3888, 3890, 3912, 3947, 3957,
+        3966, 3989, 4008, 4031, 4049, 4065, 4086, 4095, 4111, 4147, 4187, 4210, 4215, 4258, 4291, 4302, 4326, 4343, 4353, 4384, 4413, 4456, 4485, 4509,
+        4518, 4570, 4658, 4701, 4725, 4772, 4797, 4826, 4891, 4926, 4956, 4971, 4986, 5008, 5036, 5068, 5104, 5142, 5148, 5177, 5210, 5226, 5239, 5284,
+        5307, 5382, 5448, 5461, 5513, 5519, 5529, 5594, 5624, 5635, 5643, 5664, 5682, 5717, 5746, 5788, 5820, 5826, 5876, 5924, 5953, 5960, 5987, 6001,
+        6022, 6057, 6099, 6112, 6128, 6165, 6175, 6179, 6188, 6207, 6229, 6280, 6312, 6349, 6369, 6395, 6447, 6482, 6489, 6511, 6534, 6558, 6571, 6576,
+        6607, 6652, 6659, 6696, 6698, 6709, 6721, 6725, 6763, 6799, 6854, 6886, 6923, 6968, 6999, 7058, 7084, 7096, 7124, 7140, 7165, 7209, 7229, 7279,
+        7290, 7316, 7348, 7354, 7405, 7456, 7465, 7495, 7554, 7587, 7621, 7676, 7713, 7745, 7784, 7817, 7858, 7873, 7888, 7917, 7941, 7997, 8002, 8037,
+        8096, 8115, 8119, 8159, 8184, 8229, 8258, 8283, 8309, 8346, 8394, 8407, 8421, 8470, 8507, 8550, 8571, 8612, 8684, 8697, 8715, 8732, 8768, 8841,
+        8858, 8898, 8921, 8959, 8968, 9006, 9053, 9063, 9098, 9119, 9140, 9174, 9202, 9217, 9221, 9237, 9241, 9245, 9258, 9273, 9304, 9335, 9387, 9422,
+        9463, 9480, 9502, 9545, 9588, 9620, 9655, 9685, 9693, 9706, 9754, 9803, 9810, 9843, 9873, 9928, 9945, 9977, 9987, 10001, 10026, 10040, 10063, 10095,
+        10119, 10164, 10182, 10229, 10266, 10333, 10347, 10412, 10420, 10453, 10481, 10513, 10551, 10609, 10625, 10638, 10651, 10674, 10681, 10702, 10746, 10763, 10775, 10808,
+        10837, 10868, 10882, 10910, 10930, 10957, 10986, 11043, 11080, 11105, 11144, 11157, 11190, 11235, 11278, 11318, 11377, 11419, 11462, 11476, 11509, 11544, 11550, 11585,
+        11599, 11615, 11664, 11689, 11730, 11737, 11750, 11793, 11831, 11863, 11901, 11949, 11992, 11998, 12038, 12075, 12122, 12133, 12164, 12195, 12234, 12288, 12339, 12353,
+        12414, 12424, 12463, 12495, 12528, 12550, 12564, 12587, 12600, 12618, 12654, 12669, 12687, 12711, 12734, 12758, 12778, 12785, 12817, 12836, 12873, 12913, 12970, 13020,
+        13104, 13143, 13169, 13248, 13297, 13333, 13349, 13400, 13452, 13511, 13578, 13616, 13655, 13726, 13773, 13846, 13887, 13963, 13991, 14035, 14093, 14154, 14202, 14261,
+        14279, 14324, 14361, 14423, 14505, 14523, 14550, 14605, 14686, 14752, 14840, 14940, 15096, 15159, 15230, 15267, 15322, 15386, 15426, 15472, 15553, 15585, 15631, 15658,
+        15686, 15742, 15745, 15749, 15751, 15758, 15761, 15763, 15766, 15772, 15775, 15778, 15782, 15786, 15789, 15794, 15798, 15803, 15809, 15811, 15815, 15821, 15828, 15831,
+        15835, 15853, 15878, 15900, 15902, 15904, 15906, 15908, 15910, 15912, 15914, 15916, 15918, 15920, 15922, 15924, 15926, 15928, 15930, 15932, 15934, 15936, 15938, 15940,
+        15942, 15944, 15946, 15948, 15950, 15952, 15954, 15956, 15958, 15960, 15962, 15964, 15966, 15968, 15970, 15972, 15974, 15976, 15978, 15980, 15982, 15984, 15986, 15988,
+        15990, 15992, 15994, 15996, 15998, 16000, 16002, 16004, 16006, 16008, 16010, 16012, 16014, 16016, 16018, 16020, 16022, 16024, 16026, 16028, 16030, 16032, 16034, 16036,
+        16038, 16040, 16042, 16044, 16046, 16048, 16050, 16052, 16054, 16056, 16058, 16060, 16062, 16064, 16066, 16068, 16070, 16072, 16074, 16076, 16078, 16080, 16082, 16084,
+        16086, 16088, 16090, 16092, 16094, 16096, 16098, 16100, 16102, 16104, 16106, 16108, 16110, 16112, 16114, 16116, 16118, 16120, 16122, 16124, 16126, 16128, 16130, 16132,
+        16134, 16136, 16138, 16140, 16142, 16144, 16146, 16148, 16150, 16152, 16154, 16156, 16158, 16160, 16162, 16164, 16166, 16168, 16170, 16172, 16174, 16176, 16178, 16180,
+        16182, 16184, 16186, 16188, 16190, 16192, 16194, 16196, 16198, 16200, 16202, 16204, 16206, 16208, 16210, 16212, 16214, 16216, 16218, 16220, 16222, 16224, 16226, 16228,
+        16230, 16232, 16234, 16236, 16238, 16240, 16242, 16244, 16246, 16248, 16250, 16252, 16254, 16256, 16258, 16260, 16262, 16264, 16266, 16268, 16270, 16272, 16274, 16276,
+        16278, 16280, 16282, 16284, 16286, 16288, 16290, 16292, 16294, 16296, 16298, 16300, 16302, 16304, 16306, 16308, 16310, 16312, 16314, 16316, 16318, 16320, 16322, 16324,
+        16326, 16328, 16330, 16332, 16334, 16336, 16338, 16340, 16342, 16344, 16346, 16348, 16350, 16352, 16354, 16356, 16358, 16360, 16362, 16364, 16366, 16368, 16370, 16372,
+        16374, 16376, 16378, 16380, 16382, 16384, 16386, 16388, 16390, 16392, 16394, 16396, 16398, 16400, 16402, 16404, 16406, 16408, 16410, 16412, 16418, 16424, 16430, 16436,
+        16445, 16454, 16463, 16472, 16482, 16492, 16497, 16503, 16508, 16514, 16519, 16524, 16529, 16534, 16539, 16544, 16553, 16559, 16565, 16571, 16577, 16582, 16588, 16595,
+        16601, 16608, 16615, 16620, 16625, 16632, 16638, 16645, 16651, 16656, 16661, 16667, 16673, 16682, 16691, 16702, 16712, 16723, 16733, 16742, 16751, 16761, 16771, 16781,
+        16791, 16801, 16812, 16822, 16823, 16825, 16831, 16836, 16841, 16847, 16851, 16854, 16862, 16866, 16869, 16873, 16877, 16889, 16901, 16905, 16909, 16914, 16919, 16925,
+        16930, 16943, 16949, 16954, 16960, 16965, 16971, 16977, 16982, 16987, 16992, 16997, 17006, 17015, 17024, 17029, 17032, 17035, 17039, 17049, 17059, 17068, 17078, 17087,
+        17096, 17105, 17110, 17116, 17122, 17129, 17134, 17140, 17146, 17150, 17154, 17163, 17172, 17181, 17190, 17198, 17205, 17213, 17216, 17224, 17229, 17234, 17245];
+    constant [1199] short FRAGMENT_LENGTH = [
         0, 1, 9, 6, 1, 20, 2, 1, 3, 13, 4, 1, 1, 2, 2, 3, 2, 5, 5, 8, 12, 6, 6, 4,
         1, 1, 5, 15, 4, 51, 13, 24, 2, 17, 47, 58, 13, 2, 1, 25, 6, 6, 6, 8, 7, 4, 6, 6,
         6, 3, 5, 6, 9, 4, 5, 4, 5, 3, 3, 5, 5, 2, 6, 7, 4, 3, 2, 3, 2, 2, 2, 2,
@@ -10764,24 +12099,26 @@ process SIGC =
         11, 10, 10, 11, 6, 6, 12, 10, 12, 6, 4, 5, 8, 5, 9, 6, 22, 21, 22, 23, 21, 20, 21, 22,
         22, 21, 22, 23, 23, 22, 23, 24, 3, 6, 5, 5, 6, 6, 7, 9, 6, 9, 7, 6, 6, 5, 6, 11,
         5, 5, 6, 5, 6, 5, 6, 9, 11, 7, 4, 15, 8, 5, 6, 11, 11, 3, 11, 10, 10, 5, 14, 7,
-        12, 5, 5, 9, 4, 11, 4, 9, 13, 15, 10, 9, 15, 12, 22, 24, 19, 24, 21, 15, 17, 12, 17, 14,
-        2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 2, 2, 2, 2, 3, 2, 3, 2, 2, 2, 2, 2, 3, 3, 2, 2, 22, 35, 10, 9, 23,
-        19, 23, 18, 16, 21, 9, 16, 36, 40, 23, 5, 43, 33, 11, 24, 17, 10, 31, 29, 43, 29, 24, 9, 52,
-        88, 43, 24, 47, 25, 29, 65, 35, 30, 15, 15, 22, 28, 32, 36, 38, 6, 29, 33, 16, 13, 45, 23, 75,
-        66, 13, 52, 6, 10, 65, 30, 11, 8, 21, 18, 35, 29, 42, 32, 6, 50, 48, 29, 7, 27, 14, 21, 35,
-        42, 13, 16, 37, 10, 4, 9, 19, 22, 51, 32, 37, 20, 26, 52, 35, 7, 22, 23, 24, 13, 5, 31, 45,
-        7, 37, 2, 11, 12, 4, 38, 36, 55, 32, 37, 45, 31, 59, 26, 12, 28, 16, 25, 44, 20, 50, 11, 26,
-        32, 6, 51, 51, 9, 30, 59, 33, 34, 55, 37, 32, 39, 33, 41, 15, 15, 29, 24, 56, 5, 35, 59, 19,
-        4, 40, 25, 45, 29, 25, 26, 37, 48, 13, 14, 49, 37, 43, 21, 41, 72, 13, 18, 17, 36, 73, 17, 40,
-        23, 38, 9, 38, 47, 10, 35, 21, 21, 34, 28, 15, 4, 16, 4, 4, 13, 15, 31, 31, 52, 35, 41, 17,
-        22, 43, 43, 32, 35, 30, 8, 13, 48, 49, 7, 33, 30, 55, 17, 32, 10, 14, 25, 14, 23, 32, 24, 45,
-        18, 47, 37, 67, 14, 65, 8, 33, 28, 32, 38, 58, 16, 13, 13, 23, 7, 21, 44, 17, 12, 33, 29, 31,
-        14, 28, 20, 27, 29, 57, 37, 25, 39, 13, 33, 45, 43, 40, 59, 42, 43, 32, 33, 22, 14, 23, 13, 18,
-        36, 15, 18, 24, 23, 24, 20, 7, 32, 19, 37, 40, 57, 50, 84, 39, 26, 79, 49, 36, 16, 51, 52, 59,
-        67, 38, 39, 71, 47, 73, 41, 76, 28, 44, 58, 61, 48, 59, 18, 45, 37, 62, 82, 18, 27, 55, 81, 66,
-        88, 100, 156, 63, 71, 37, 55, 64, 40, 46, 81, 32, 46, 27, 28, 56, 3, 4, 2, 7, 3, 2, 3, 6,
-        3, 3, 4, 4, 3, 5, 4, 5, 6, 2, 4, 6, 7, 3, 4, 18, 25, 22, 2, 2, 2, 2, 2, 2,
+        12, 5, 5, 9, 4, 11, 4, 9, 6, 13, 15, 10, 9, 15, 12, 22, 24, 19, 24, 21, 15, 17, 12, 17,
+        14, 2, 2, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 2, 2, 2, 2, 3, 2, 3, 2, 2, 2, 2, 2, 3, 3, 2, 2, 22, 35, 10, 9,
+        23, 19, 23, 18, 16, 21, 9, 16, 36, 40, 23, 5, 43, 33, 11, 24, 17, 10, 31, 29, 43, 29, 24, 9,
+        52, 88, 43, 24, 47, 25, 29, 65, 35, 30, 15, 15, 22, 28, 32, 36, 38, 6, 29, 33, 16, 13, 45, 23,
+        75, 66, 13, 52, 6, 10, 65, 30, 11, 8, 21, 18, 35, 29, 42, 32, 6, 50, 48, 29, 7, 27, 14, 21,
+        35, 42, 13, 16, 37, 10, 4, 9, 19, 22, 51, 32, 37, 20, 26, 52, 35, 7, 22, 23, 24, 13, 5, 31,
+        45, 7, 37, 2, 11, 12, 4, 38, 36, 55, 32, 37, 45, 31, 59, 26, 12, 28, 16, 25, 44, 20, 50, 11,
+        26, 32, 6, 51, 51, 9, 30, 59, 33, 34, 55, 37, 32, 39, 33, 41, 15, 15, 29, 24, 56, 5, 35, 59,
+        19, 4, 40, 25, 45, 29, 25, 26, 37, 48, 13, 14, 49, 37, 43, 21, 41, 72, 13, 18, 17, 36, 73, 17,
+        40, 23, 38, 9, 38, 47, 10, 35, 21, 21, 34, 28, 15, 4, 16, 4, 4, 13, 15, 31, 31, 52, 35, 41,
+        17, 22, 43, 43, 32, 35, 30, 8, 13, 48, 49, 7, 33, 30, 55, 17, 32, 10, 14, 25, 14, 23, 32, 24,
+        45, 18, 47, 37, 67, 14, 65, 8, 33, 28, 32, 38, 58, 16, 13, 13, 23, 7, 21, 44, 17, 12, 33, 29,
+        31, 14, 28, 20, 27, 29, 57, 37, 25, 39, 13, 33, 45, 43, 40, 59, 42, 43, 14, 33, 35, 6, 35, 14,
+        16, 49, 25, 41, 7, 13, 43, 38, 32, 38, 48, 43, 6, 40, 37, 47, 11, 31, 31, 39, 54, 51, 14, 61,
+        10, 39, 32, 33, 22, 14, 23, 13, 18, 36, 15, 18, 24, 23, 24, 20, 7, 32, 19, 37, 40, 57, 50, 84,
+        39, 26, 79, 49, 36, 16, 51, 52, 59, 67, 38, 39, 71, 47, 73, 41, 76, 28, 44, 58, 61, 48, 59, 18,
+        45, 37, 62, 82, 18, 27, 55, 81, 66, 88, 100, 156, 63, 71, 37, 55, 64, 40, 46, 81, 32, 46, 27, 28,
+        56, 3, 4, 2, 7, 3, 2, 3, 6, 3, 3, 4, 4, 3, 5, 4, 5, 6, 2, 4, 6, 7, 3, 4,
+        18, 25, 22, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
@@ -10791,13 +12128,12 @@ process SIGC =
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 6, 6, 6, 6, 9, 9, 9, 9, 10, 10, 5, 6, 5, 6,
-        5, 5, 5, 5, 5, 5, 9, 6, 6, 6, 6, 5, 6, 7, 6, 7, 7, 5, 5, 7, 6, 7, 6, 5,
-        5, 6, 6, 9, 9, 11, 10, 11, 10, 9, 9, 10, 10, 10, 10, 10, 11, 10, 1, 2, 6, 5, 5, 6,
-        4, 3, 8, 4, 3, 4, 4, 12, 12, 4, 4, 5, 5, 6, 5, 13, 6, 5, 6, 5, 6, 6, 5, 5,
-        5, 5, 9, 9, 9, 5, 3, 3, 4, 10, 10, 9, 10, 9, 9, 9, 5, 6, 6, 7, 5, 6, 6, 4,
-        4, 9, 9, 9, 9, 8, 7, 8, 3, 8, 5, 5, 11, 10];
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 6, 6, 6, 6, 9,
+        9, 9, 9, 10, 10, 5, 6, 5, 6, 5, 5, 5, 5, 5, 5, 9, 6, 6, 6, 6, 5, 6, 7, 6,
+        7, 7, 5, 5, 7, 6, 7, 6, 5, 5, 6, 6, 9, 9, 11, 10, 11, 10, 9, 9, 10, 10, 10, 10,
+        10, 11, 10, 1, 2, 6, 5, 5, 6, 4, 3, 8, 4, 3, 4, 4, 12, 12, 4, 4, 5, 5, 6, 5,
+        13, 6, 5, 6, 5, 6, 6, 5, 5, 5, 5, 9, 9, 9, 5, 3, 3, 4, 10, 10, 9, 10, 9, 9,
+        9, 5, 6, 6, 7, 5, 6, 6, 4, 4, 9, 9, 9, 9, 8, 7, 8, 3, 8, 5, 5, 11, 10];
     constant integer BUILTIN_EVENT = 0;
     constant integer BUILTIN_BOOLEAN = 1;
     constant integer BUILTIN_SHORT = 2;
@@ -11120,12 +12456,12 @@ process SIGC =
         1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1];
     constant [136] short OP_TEXT_FRAGMENT = [
-        0, 0, 0, 0, 395, 0, 0, 38, 760, 761, 408, 762, 762, 763, 761, 764, 765, 766, 401, 390, 406, 391, 407, 392,
-        396, 38, 397, 398, 767, 768, 769, 770, 1, 393, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 771, 772, 773, 774, 775, 418, 0, 0, 0, 0,
+        0, 0, 0, 0, 396, 0, 0, 38, 793, 794, 409, 795, 795, 796, 794, 797, 798, 799, 402, 391, 407, 392, 408, 393,
+        397, 38, 398, 399, 800, 801, 802, 803, 1, 394, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 804, 805, 806, 807, 808, 419, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 425, 0, 0, 0, 0, 0, 395, 776, 395, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 777, 426];
+        0, 0, 0, 0, 0, 426, 0, 0, 0, 0, 0, 396, 809, 396, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 810, 427];
     constant integer COL_ROWS_OP = 54;
     constant integer COL_ROWS_LEFT = 55;
     constant integer COL_ROWS_RIGHT = 56;
@@ -11261,7 +12597,7 @@ process SIGC =
         72, 73, 74, 75, 76, 77, 78, 1, 2, 3, 4, 5, 6, 7, 22, 23, 79, 80, 81, 82, 83, 84, 85, 86,
         87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102];
     constant [6] short CLOCK_KIND_FRAGMENT = [
-        10, 778, 779, 780, 781, 782];
+        10, 811, 812, 813, 814, 815];
     constant integer ORDER_CLOCKS_START = 88;
     constant integer ORDER_CLOCKS_END = 108;
     constant integer COL_PARENT = 79;
@@ -12969,12 +14305,12 @@ process SIGC =
         0];
     constant integer FORM_FIELD_SLOTS = 5;
     constant [125] short FORM_NAME_FRAGMENT = [
-        1042, 1043, 1044, 1045, 1046, 1047, 1048, 1049, 1050, 1051, 1052, 1053, 1054, 1055, 1056, 1057, 1058, 1059, 1060, 1061, 1062, 1063, 1064, 1065,
-        1066, 1067, 1068, 1069, 1070, 1071, 1072, 1073, 1074, 1075, 1076, 1077, 1078, 1079, 1080, 1081, 1082, 1083, 1084, 1085, 1086, 1087, 1088, 1089,
-        1090, 1091, 1092, 1093, 1094, 1095, 1096, 1097, 1098, 1099, 1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108, 1109, 1110, 1111, 1112, 1113,
-        1114, 1115, 1116, 1117, 1118, 1119, 1120, 1121, 1122, 1123, 1124, 1125, 1126, 1127, 1128, 1129, 1130, 1131, 1132, 1133, 1134, 1135, 1136, 1137,
-        1138, 1139, 1140, 1141, 1142, 1143, 1144, 1145, 1146, 1147, 1148, 1149, 1150, 1151, 1152, 1153, 1154, 1155, 1156, 1157, 1158, 1159, 1160, 1099,
-        1161, 1162, 1163, 1164, 1165];
+        1075, 1076, 1077, 1078, 1079, 1080, 1081, 1082, 1083, 1084, 1085, 1086, 1087, 1088, 1089, 1090, 1091, 1092, 1093, 1094, 1095, 1096, 1097, 1098,
+        1099, 1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108, 1109, 1110, 1111, 1112, 1113, 1114, 1115, 1116, 1117, 1118, 1119, 1120, 1121, 1122,
+        1123, 1124, 1125, 1126, 1127, 1128, 1129, 1130, 1131, 1132, 1133, 1134, 1135, 1136, 1137, 1138, 1139, 1140, 1141, 1142, 1143, 1144, 1145, 1146,
+        1147, 1148, 1149, 1150, 1151, 1152, 1153, 1154, 1155, 1156, 1157, 1158, 1159, 1160, 1161, 1162, 1163, 1164, 1165, 1166, 1167, 1168, 1169, 1170,
+        1171, 1172, 1173, 1174, 1175, 1176, 1177, 1178, 1179, 1180, 1181, 1182, 1183, 1184, 1185, 1186, 1187, 1188, 1189, 1190, 1191, 1192, 1193, 1132,
+        1194, 1195, 1196, 1197, 1198];
     constant integer ROW_PREFIX_FORM_NAME = -1;
     constant integer TEXT_OFFSET = 392;
     constant integer SEGMENT_BYTES = 16384;
@@ -13056,19 +14392,19 @@ process SIGC =
     constant integer UTF8_INVALID_CONTINUATION = 1;
     constant integer UTF8_UNEXPECTED_END = 2;
     constant [3] short UTF8_REASON_FRAGMENT = [
-        783, 784, 785];
+        816, 817, 818];
     constant [256] short HEX_FRAGMENT = [
-        786, 787, 788, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 800, 801, 802, 803, 804, 805, 806, 807, 808, 809,
-        810, 811, 812, 813, 814, 815, 816, 817, 818, 819, 820, 821, 822, 823, 824, 825, 826, 827, 828, 829, 830, 831, 832, 833,
-        834, 835, 836, 837, 838, 839, 840, 841, 842, 843, 844, 845, 846, 847, 848, 849, 850, 851, 852, 853, 854, 855, 856, 857,
-        858, 859, 860, 861, 862, 863, 864, 865, 866, 867, 868, 869, 870, 871, 872, 873, 874, 875, 876, 877, 878, 879, 880, 881,
-        882, 883, 884, 885, 886, 887, 888, 889, 890, 891, 892, 893, 894, 895, 896, 897, 898, 899, 900, 901, 902, 903, 904, 905,
-        906, 907, 908, 909, 910, 911, 912, 913, 914, 915, 916, 917, 918, 919, 920, 921, 922, 923, 924, 925, 926, 927, 928, 929,
-        930, 931, 932, 933, 934, 935, 936, 937, 938, 939, 940, 941, 942, 943, 944, 945, 946, 947, 948, 949, 950, 951, 952, 953,
-        954, 955, 956, 957, 958, 959, 960, 961, 962, 963, 964, 965, 966, 967, 968, 969, 970, 971, 972, 973, 974, 975, 976, 977,
-        978, 979, 980, 981, 982, 983, 984, 985, 986, 987, 988, 989, 990, 991, 992, 993, 994, 995, 996, 997, 998, 999, 1000, 1001,
-        1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014, 1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023, 1024, 1025,
-        1026, 1027, 1028, 1029, 1030, 1031, 1032, 1033, 1034, 1035, 1036, 1037, 1038, 1039, 1040, 1041];
+        819, 820, 821, 822, 823, 824, 825, 826, 827, 828, 829, 830, 831, 832, 833, 834, 835, 836, 837, 838, 839, 840, 841, 842,
+        843, 844, 845, 846, 847, 848, 849, 850, 851, 852, 853, 854, 855, 856, 857, 858, 859, 860, 861, 862, 863, 864, 865, 866,
+        867, 868, 869, 870, 871, 872, 873, 874, 875, 876, 877, 878, 879, 880, 881, 882, 883, 884, 885, 886, 887, 888, 889, 890,
+        891, 892, 893, 894, 895, 896, 897, 898, 899, 900, 901, 902, 903, 904, 905, 906, 907, 908, 909, 910, 911, 912, 913, 914,
+        915, 916, 917, 918, 919, 920, 921, 922, 923, 924, 925, 926, 927, 928, 929, 930, 931, 932, 933, 934, 935, 936, 937, 938,
+        939, 940, 941, 942, 943, 944, 945, 946, 947, 948, 949, 950, 951, 952, 953, 954, 955, 956, 957, 958, 959, 960, 961, 962,
+        963, 964, 965, 966, 967, 968, 969, 970, 971, 972, 973, 974, 975, 976, 977, 978, 979, 980, 981, 982, 983, 984, 985, 986,
+        987, 988, 989, 990, 991, 992, 993, 994, 995, 996, 997, 998, 999, 1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010,
+        1011, 1012, 1013, 1014, 1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023, 1024, 1025, 1026, 1027, 1028, 1029, 1030, 1031, 1032, 1033, 1034,
+        1035, 1036, 1037, 1038, 1039, 1040, 1041, 1042, 1043, 1044, 1045, 1046, 1047, 1048, 1049, 1050, 1051, 1052, 1053, 1054, 1055, 1056, 1057, 1058,
+        1059, 1060, 1061, 1062, 1063, 1064, 1065, 1066, 1067, 1068, 1069, 1070, 1071, 1072, 1073, 1074];
     constant integer N_PRAGMAS = 59;
     constant integer N_INTERRUPT = 60;
     constant integer N_BOOT = 61;
@@ -13740,26 +15076,26 @@ process SIGC =
     constant integer P_PARAMETER_MODEL_NAME = 106;
     constant integer T_OUTPUT_COUNT = 82;
     constant integer T_TUPLE_CALL_PLACED = 83;
-    constant [137] short CLASS_INDEX = [
+    constant [138] short CLASS_INDEX = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     constant integer CLASS_COUNT = 6;
-    constant [137] short ATTRIBUTE_OF_CODE = [
+    constant [138] short ATTRIBUTE_OF_CODE = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     constant integer ATTRIBUTE_SAFE = 0;
     constant integer ATTRIBUTE_DETERMINISTIC = 1;
     constant integer ATTRIBUTE_UNSAFE = 2;
     constant [18] short MODEL_DESCRIPTION_FRAGMENT = [
-        368, 369, 370, 371, 372, 373, 374, 375, 376, 371, 377, 378, 379, 380, 381, 371, 382, 383];
+        369, 370, 371, 372, 373, 374, 375, 376, 377, 372, 378, 379, 380, 381, 382, 372, 383, 384];
     constant integer A_MODEL = 13;
     constant integer T_ACTION_UNLABELLED = 84;
     constant integer T_ATTRIBUTE_CLASS = 85;
@@ -13811,18 +15147,18 @@ process SIGC =
     constant integer OB_BOOLEAN = 5;
     constant integer CLK_NULL = 5;
     constant integer N_ASSERT = 84;
-    constant integer RELATION_ASSERT = 137;
+    constant integer RELATION_ASSERT = 138;
     constant integer T_ASSERT_TYPE = 160;
     constant integer T_ASSERT_MEMBER = 167;
     constant integer T_GUARD_TICK = 166;
     constant integer OB_TICK = 6;
     constant integer N_MIN_CLOCK = 85;
-    constant integer RELATION_MIN = 138;
+    constant integer RELATION_MIN = 139;
     constant integer T_MIN_CLOCK_EMPTY = 161;
     constant integer T_MIN_CLOCK_NAME = 162;
     constant integer T_IDENTITY_CLOCKS = 163;
     constant integer OB_IDENTITY = 7;
-    constant integer RELATION_CONDITION = 139;
+    constant integer RELATION_CONDITION = 140;
     constant integer T_CONDITION_TYPE = 164;
     constant integer N_SPEC = 86;
     constant integer T_SPEC_BODY = 165;
@@ -13908,38 +15244,38 @@ process SIGC =
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     constant integer TRIPLE_WIDTH = 6;
     constant integer T_PARTIAL_TUPLE = 213;
-    constant integer T_PARTIAL_MIXED = 214;
-    constant integer T_PARTIAL_TWO_DEFAULTS = 215;
-    constant integer T_PARTIAL_CONSTANT = 216;
-    constant integer T_PARTIAL_OVERLAP = 217;
-    constant integer T_PARTIAL_NO_CLOCK = 218;
+    constant integer T_PARTIAL_MIXED = 240;
+    constant integer T_PARTIAL_TWO_DEFAULTS = 241;
+    constant integer T_PARTIAL_CONSTANT = 242;
+    constant integer T_PARTIAL_OVERLAP = 243;
+    constant integer T_PARTIAL_NO_CLOCK = 244;
     constant integer LS_PARTIAL = 14;
     constant integer KS_PAIRS = 3;
     constant integer OB_PARTIAL = 8;
     constant integer OP_STATE = 80;
-    constant integer T_STATEVAR_DIRECT = 219;
-    constant integer T_STATEVAR_ASSIGNED = 220;
-    constant integer T_STATEVAR_CONTEXT = 221;
-    constant integer T_STATEVAR_NOT = 222;
+    constant integer T_STATEVAR_DIRECT = 245;
+    constant integer T_STATEVAR_ASSIGNED = 246;
+    constant integer T_STATEVAR_CONTEXT = 247;
+    constant integer T_STATEVAR_NOT = 248;
     constant integer LS_STATEVAR = 6;
     constant integer ET_ROW_STATE = 45;
     constant integer ET_ROW_STATE_THUMB = 120;
     constant integer X_STATE = 21;
-    constant integer T_STATEVAR_DEFAULT = 223;
-    constant integer T_PARTIAL_OUTPUT = 224;
-    constant integer T_PARTIAL_INSIDE = 225;
-    constant integer T_RANK = 226;
-    constant integer T_CONSTANT_SHAPE = 231;
+    constant integer T_STATEVAR_DEFAULT = 249;
+    constant integer T_PARTIAL_OUTPUT = 250;
+    constant integer T_PARTIAL_INSIDE = 251;
+    constant integer T_RANK = 252;
+    constant integer T_CONSTANT_SHAPE = 257;
     constant integer OP_FLAT = 81;
     constant integer OP_SQUARE_FLAT = 82;
-    constant integer T_INDEX_COUNT = 227;
+    constant integer T_INDEX_COUNT = 253;
     constant integer T_SUBARRAY_VALUE = 232;
-    constant integer T_ARRAY_TOTAL = 230;
+    constant integer T_ARRAY_TOTAL = 256;
     constant integer ET_ROW_FLAT = 147;
     constant integer ET_ROW_FLAT_THUMB = 148;
     constant integer OP_SLICE = 83;
-    constant integer T_SUBARRAY_TARGET = 228;
-    constant integer T_EXTRACT_SUBARRAY = 229;
+    constant integer T_SUBARRAY_TARGET = 254;
+    constant integer T_EXTRACT_SUBARRAY = 255;
     constant integer ET_ROW_SLICE = 155;
     constant integer ET_ROW_SLICE_THUMB = 156;
     constant integer N_DIM = 116;
@@ -13953,20 +15289,20 @@ process SIGC =
     constant integer OP_DIM_SIZE = 89;
     constant integer OP_BOUNDS = 90;
     constant integer OP_BOUNDS_PAIR = 91;
-    constant integer T_SIZE_AXIS = 232;
-    constant integer T_BOUNDS_TYPES = 233;
+    constant integer T_SIZE_AXIS = 258;
+    constant integer T_BOUNDS_TYPES = 259;
     constant integer ET_ROW_BOUNDS = 151;
     constant integer ET_ROW_BOUNDS_SIGNED = 152;
     constant integer ET_ROW_BOUNDS_THUMB = 153;
     constant integer ET_ROW_BOUNDS_SIGNED_THUMB = 154;
     constant integer ET_ROW_FOLD = 149;
     constant integer ET_ROW_FOLD_THUMB = 150;
-    constant integer T_ELEMENT_ENDPOINT = 234;
+    constant integer T_ELEMENT_ENDPOINT = 260;
     constant integer ES_KEY_ROW = 82;
     constant integer ET_OUTPUT_ARRAY = 64;
     constant integer ET_OUTPUT_ARRAY_THUMB = 139;
-    constant integer T_ELEMENT_LABEL = 235;
-    constant integer T_ELEMENT_RANGE = 236;
+    constant integer T_ELEMENT_LABEL = 261;
+    constant integer T_ELEMENT_RANGE = 262;
     constant integer ET_VALUE_INPUT_ARRAY = 9;
     constant integer OP_RECOVER_SQUARE_FLAT = 92;
     constant integer INIT_SIZE2 = 5;
@@ -13975,21 +15311,21 @@ process SIGC =
     constant integer OP_ENUM = 93;
     constant integer OP_DEFAULTS = 94;
     constant integer OP_PUT = 95;
-    constant integer T_ENUM_SHAPE = 237;
+    constant integer T_ENUM_SHAPE = 263;
     constant integer ET_ROW_PUT = 32;
     constant integer ET_ROW_PUT_THUMB = 107;
     constant integer X_ENUM = 22;
     constant integer X_INIT_LIST = 23;
-    constant integer T_ENUM_TYPE = 240;
+    constant integer T_ENUM_TYPE = 266;
     constant integer N_STEP = 119;
     constant integer OP_SPAN = 96;
     constant integer OP_STEP = 97;
-    constant integer T_STEP_CONSTANT = 238;
-    constant integer T_STEP_EMPTY = 239;
+    constant integer T_STEP_CONSTANT = 264;
+    constant integer T_STEP_EMPTY = 265;
     constant integer OP_TARGET_INDEX = 98;
     constant integer OP_RESTRUCTURE = 99;
-    constant integer T_RESTRUCTURE_TYPE = 241;
-    constant integer T_RESTRUCTURE_SHAPE = 246;
+    constant integer T_RESTRUCTURE_TYPE = 267;
+    constant integer T_RESTRUCTURE_SHAPE = 272;
     constant integer ET_ROW_RESTRUCTURE = 33;
     constant integer ET_ROW_SCATTER = 34;
     constant integer ET_ROW_RESTRUCTURE_THUMB = 108;
@@ -13997,7 +15333,7 @@ process SIGC =
     constant integer OP_SQUARE_FLAT_TARGET = 100;
     constant integer C_BAR_PLUS = 132;
     constant integer OP_CONCAT = 101;
-    constant integer T_CONCAT_TYPE = 245;
+    constant integer T_CONCAT_TYPE = 271;
     constant integer ET_ROW_CONCAT = 35;
     constant integer ET_ROW_CONCAT_THUMB = 110;
     constant integer OP_ARRAY_EQ = 102;
@@ -14005,9 +15341,9 @@ process SIGC =
     constant integer ET_ROW_ARRAY_EQ_THUMB = 111;
     constant integer OP_RANGE_TABLE = 103;
     constant integer OP_FLATV = 104;
-    constant integer T_RANGE_TABLE_BOUNDS = 242;
-    constant integer T_EXTRACT_RANK = 243;
-    constant integer T_EXTRACT_INDEX = 244;
+    constant integer T_RANGE_TABLE_BOUNDS = 268;
+    constant integer T_EXTRACT_RANK = 269;
+    constant integer T_EXTRACT_INDEX = 270;
     constant integer ES_KEY_RIGHT_LEFT = 83;
     constant integer ES_KEY_RIGHT_RIGHT = 84;
     constant integer ET_ROW_GATHER2 = 37;
@@ -14021,21 +15357,21 @@ process SIGC =
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    constant integer T_EXTENSION_SHAPE = 247;
-    constant integer T_NOT_IN_EXTENSION = 248;
+    constant integer T_EXTENSION_SHAPE = 273;
+    constant integer T_NOT_IN_EXTENSION = 274;
     constant integer ET_ROW_EACH_STORE = 38;
     constant integer ET_ROW_DEFAULT_ARRAY = 39;
     constant integer ET_ROW_EACH_STORE_THUMB = 113;
     constant integer ET_ROW_DEFAULT_ARRAY_THUMB = 114;
-    constant integer T_EFFECT_IN_EXTENSION = 250;
-    constant integer T_EXTENSION_WHOLE = 249;
+    constant integer T_EFFECT_IN_EXTENSION = 276;
+    constant integer T_EXTENSION_WHOLE = 275;
     constant integer N_WINDOW = 120;
     constant integer OP_GDELAY = 107;
     constant integer OP_WINDOW = 108;
     constant integer OP_LAG = 109;
-    constant integer T_DELAY_COUNT = 251;
-    constant integer T_WINDOW_SIZE = 252;
-    constant integer T_DELAY_INIT_SHAPE = 253;
+    constant integer T_DELAY_COUNT = 277;
+    constant integer T_WINDOW_SIZE = 278;
+    constant integer T_DELAY_INIT_SHAPE = 279;
     constant integer ES_KEY_MEM = 85;
     constant integer ES_KEY_INIT = 86;
     constant integer ES_SPAN = 87;
@@ -14064,11 +15400,11 @@ process SIGC =
     constant integer ET_WINDOW_STEP_THUMB = 172;
     constant integer UPH_SEED_MEMORY = 3;
     constant integer UPH_LAG = 17;
-    constant integer T_ITERATE_INDEX_TWICE = 254;
-    constant integer T_ITERATE_RANK = 255;
-    constant integer T_LOOP_PRODUCT = 256;
-    constant integer T_LOOP_COUNT_INNER = 257;
-    constant integer T_DELAY_IN_ITERATE = 258;
+    constant integer T_ITERATE_INDEX_TWICE = 280;
+    constant integer T_ITERATE_RANK = 281;
+    constant integer T_LOOP_PRODUCT = 282;
+    constant integer T_LOOP_COUNT_INNER = 283;
+    constant integer T_DELAY_IN_ITERATE = 284;
     constant integer FORM_MLS_T = 93;
     constant integer FORM_UDIV_T = 94;
     constant integer ES_ITER_STRIDE = 95;
@@ -14084,15 +15420,15 @@ process SIGC =
     constant integer EP_ITER_PLAIN = 26;
     constant integer EP_ITER_DERIVED = 27;
     constant integer EP_ITER_DERIVED_WHOLE = 28;
-    constant integer T_RANGE_END = 259;
+    constant integer T_RANGE_END = 285;
     constant integer OP_SQUARE_FLAT_NEXT = 110;
     constant integer OP_ELEMENT_PAIR = 111;
-    constant integer T_SEED_ELEMENT = 260;
+    constant integer T_SEED_ELEMENT = 286;
     constant integer ET_ROW_SEED_FILL = 21;
     constant integer ET_ROW_SEED_FILL_THUMB = 97;
     constant integer OP_AXIS = 112;
-    constant integer T_AXIS_CONSTANT = 261;
-    constant integer T_AXIS_SHAPE = 262;
+    constant integer T_AXIS_CONSTANT = 287;
+    constant integer T_AXIS_SHAPE = 288;
     constant integer N_SEQ_MARK = 114;
     constant integer OP_SEQ_RANGE = 113;
     constant integer OP_SEQ_SPAN = 114;
@@ -14111,17 +15447,17 @@ process SIGC =
     constant integer OP_SEQ_HIDDEN = 127;
     constant integer OP_SEQ_PREVIOUS = 128;
     constant integer OP_SEQ_INDEX = 129;
-    constant integer T_SEQ_PLACED = 263;
-    constant integer T_SEQ_RANGE = 264;
+    constant integer T_SEQ_PLACED = 289;
+    constant integer T_SEQ_RANGE = 290;
     constant integer P_SEQ_HEAD = 89;
     constant integer P_SEQ_EMIT = 90;
-    constant integer T_CALL_IN_ITERATE_STATE = 265;
+    constant integer T_CALL_IN_ITERATE_STATE = 291;
     constant integer N_TUPLE_MARK = 115;
     constant integer OP_TUPLE_HEAD = 130;
     constant integer OP_TUPLE_TAIL = 131;
     constant integer OP_TUPLE_TARGET = 132;
     constant integer OP_TUPLE_OUTPUT = 133;
-    constant integer T_TUPLE_ELEMENT = 266;
+    constant integer T_TUPLE_ELEMENT = 292;
     constant integer P_TUPLE_SKIP = 91;
     constant integer P_TUPLE_SEEK = 92;
     constant integer P_TUPLE_EMIT = 93;
@@ -14129,9 +15465,9 @@ process SIGC =
     constant integer C_STAR_DOT = 133;
     constant integer OP_TRANSPOSE = 134;
     constant integer OP_MATPROD = 135;
-    constant integer T_RANK_TWO = 267;
-    constant integer T_MATRIX_SHAPE = 268;
-    constant integer T_MATRIX_PLACED = 269;
+    constant integer T_RANK_TWO = 293;
+    constant integer T_MATRIX_SHAPE = 294;
+    constant integer T_MATRIX_PLACED = 295;
     constant integer ES_SIZE_RIGHT = 99;
     constant integer ET_ROW_TRANSPOSE = 40;
     constant integer ET_ROW_MATPROD = 41;
@@ -14139,17 +15475,47 @@ process SIGC =
     constant integer ET_ROW_TRANSPOSE_THUMB = 115;
     constant integer ET_ROW_MATPROD_THUMB = 116;
     constant integer ET_ROW_DOT_THUMB = 117;
-    constant integer T_ITERATE_PLACED = 270;
-    constant integer T_SEED_CALL = 271;
-    constant integer T_PREV_ARRAY = 272;
-    constant integer T_SIGNAL_INIT_LIST = 273;
-    constant integer T_SIGNAL_INIT_ELEMENT = 274;
-    constant integer T_SIGNAL_INIT_COUNT = 275;
-    constant integer T_SIGNAL_INIT_SHAPE = 276;
-    constant integer T_DELAY_INIT_LIST = 277;
+    constant integer T_ITERATE_PLACED = 296;
+    constant integer T_SEED_CALL = 297;
+    constant integer T_PREV_ARRAY = 298;
+    constant integer T_SIGNAL_INIT_LIST = 299;
+    constant integer T_SIGNAL_INIT_ELEMENT = 300;
+    constant integer T_SIGNAL_INIT_COUNT = 301;
+    constant integer T_SIGNAL_INIT_SHAPE = 302;
+    constant integer T_DELAY_INIT_LIST = 303;
     constant integer P_DELAY_ELEMENT = 110;
     constant integer P_DELAY_LIST_SIZE = 111;
     constant integer P_DELAY_LIST_END = 112;
+    constant integer N_STRUCT = 121;
+    constant integer N_BUNDLE = 122;
+    constant integer C_DOT = 134;
+    constant integer F_CAP_TUPLES = 368;
+    constant integer T_FIELD_UNKNOWN = 214;
+    constant integer T_NOT_TUPLE = 215;
+    constant integer T_BUNDLE_ELEMENT = 216;
+    constant integer T_TUPLE_EXPRESSION = 217;
+    constant integer T_TUPLE_SHAPE = 218;
+    constant integer T_TUPLE_CALL = 219;
+    constant integer T_TUPLE_EFFECT = 220;
+    constant integer T_TUPLE_DEPTH = 221;
+    constant integer T_BUNDLE_CLOCK = 222;
+    constant integer T_TUPLE_INIT = 223;
+    constant integer T_STRUCT_ORDER = 224;
+    constant integer T_TUPLE_PLACE = 225;
+    constant integer T_BUNDLE_FIELD = 226;
+    constant integer T_TUPLE_VALUE = 227;
+    constant integer T_TUPLE_SPREAD = 228;
+    constant integer T_FIELD_TWICE = 229;
+    constant integer T_TUPLE_FIELD_ARRAY = 230;
+    constant integer T_TUPLE_EMPTY = 231;
+    constant integer T_FIELD_ACCESS = 232;
+    constant integer T_TUPLE_FORWARD = 233;
+    constant integer T_TUPLE_KIND_MIX = 234;
+    constant integer T_SPEC_FIELD = 235;
+    constant integer T_STRUCT_ELEMENT_EQUAL = 236;
+    constant integer T_TUPLE_DELAY_INIT = 237;
+    constant integer T_STRUCT_ELEMENT_TARGET = 238;
+    constant integer T_TUPLE_ARGUMENT = 239;
     type ARGS = external;
     type OS = external;
     type FILE = external;
@@ -14165,7 +15531,7 @@ process SIGC =
     type RESERVE = external;
     integer ARGC, PATH_LENGTH, ERRNO, LENGTH, CLASS, PREVIOUS_MODE, SYMBOL_LENGTH, TRIPLE_SLOT, OPENED_KIND, REMAINING, MODE, COLUMN,
       CODE_POINTS, LINE_START, LINE, OPEN_AT, OPEN_LINE, OPEN_COLUMN, OPEN_KIND, PENDING, LETTER, FINISHED_LENGTH,
-      FINISHED_SLOT, OPENED_SLOT, TOKEN_COUNT, FOUND, LEX_ERROR, LEX_ERROR_LINE, LEX_ERROR_COLUMN, LEX_ERROR_AT,
+      FINISHED_SLOT, OPENED_SLOT, RAW_TOKEN_COUNT, TOKEN_COUNT, FOUND, LEX_ERROR, LEX_ERROR_LINE, LEX_ERROR_COLUMN, LEX_ERROR_AT,
       SEQUENCE, SEQUENCE_DIGITS, SEQUENCE_VALUE, STRING_BASE, STRING_AT, STRING_FILL, ESCAPE_AT, ESCAPE_LINE, ESCAPE_COLUMN,
       LEX_ERROR_VALUE,
       ERROR, ERROR_CHARACTER_LENGTH, MESSAGE, MESSAGE_LINE, MESSAGE_COLUMN, MESSAGE_ARGUMENT0, MESSAGE_ARGUMENT1,
@@ -14201,11 +15567,121 @@ process SIGC =
     [SRC_CAP] integer COPY_INDEX, LEX_INDEX, INTERN_INDEX;
     [SRC_CAP] ubyte SRC;
     [SRC_CAP] ubyte STRING_TEXT;
-    [TOKEN_CAP] ubyte TOKEN_KIND;
-    [TOKEN_CAP] ubyte TOKEN_CODE;
+    [TOKEN_CAP] ubyte RAW_TOKEN_KIND, TOKEN_KIND;
+    [TOKEN_CAP] ubyte RAW_TOKEN_CODE, TOKEN_CODE;
+    [TOKEN_CAP] integer RAW_TOKEN_LENGTH, RAW_TOKEN_START, RAW_TOKEN_TEXT, RAW_TOKEN_LINE, RAW_TOKEN_COLUMN, RAW_TOKEN_NAME;
     [TOKEN_CAP] integer TOKEN_LENGTH, TOKEN_START, TOKEN_TEXT, TOKEN_LINE, TOKEN_COLUMN, TOKEN_NAME, PRESCAN_INDEX;
-    [TOKEN_CAP] long TOKEN_VALUE;
-    [TOKEN_CAP] boolean TOKEN_BIG, VALUE_BRACE;
+    [TOKEN_CAP] long RAW_TOKEN_VALUE, TOKEN_VALUE;
+    [TOKEN_CAP] boolean RAW_TOKEN_BIG, TOKEN_BIG, VALUE_BRACE;
+    integer UB_CODE, UB_DEPTH, UB_OPENER, UP_C, UP_N, UP_L, UP_PC, UP_PN, UP_NC, UP_NN, UP_NNC, UP_CLOSE, UP_F, UP_FS, UP_CUR_MODEL,
+      UP_CUR_LEVEL, UP_CUR_DIR, UP_MF_TOP, UP_MODEL_NEW, UM_COUNT, UP_PUSH_SLOT, UP_DECL_START, UP_FP_H, UP_FP_E0, UP_FP_E1, UP_FP_E2,
+      UP_FP_E3, UP_FP_E4, UP_FP_E5, UP_FP_E6, UP_FP_E7, UP_FP_FOUND, UP_FP_FREE, UP_T, UP_TS, UP_TL, UP_TYPE_NOW, UP_FSTATE, UP_FSTART,
+      UP_FNESTED, UP_ALIAS_HERE, UP_NEW_TYPE, UY_COUNT, UP_FIELD_NEW, UD_COUNT, UP_FIELD_LEAVES, UP_FIELD_DEPTH, UP_FIELD_TYPELEN,
+      UP_FIELD_SLOT, UP_TC_TYPE, UP_TC_FIELDS, UP_TC_LEAVES, UP_TC_DEPTH, UP_TC_SLOT, UP_FIELD_SLOTS, UP_LEAF_SLOTS, UP_CLOSED, UP_SPEC_AT,
+      UP_SPEC_CLOSE, UP_AFTER_TYPE, UP_TS_TOP, UP_FS_SLOT, UP_ACC_SLOT, UP_DECL_NEW, UC_COUNT, UP_DECL_SLOT, UP_ROLE, UP_ROLE_START,
+      UP_ROLE_NAME, UP_ROLE_DECL, UP_NAMES_FROM, UP_ALIAS_END, UP_DECL_NAMES, UZ_COUNT, UP_SP_H, UP_SP_E0, UP_SP_E1, UP_SP_E2, UP_SP_E3,
+      UP_SP_E4, UP_SP_E5, UP_SP_E6, UP_SP_E7, UP_SP_FOUND, UP_SP_FREE, UP_SIG_NEW, US_COUNT, UP_SIG_SLOT, UP_MODEL_LAST, UP_SCALAR_BEFORE,
+      UP_SF_H, UP_SF_E0, UP_SF_E1, UP_SF_E2, UP_SF_E3, UP_SF_E4, UP_SF_E5, UP_SF_E6, UP_SF_E7, UP_SF_FOUND, UP_SF_FREE, UP_SPEC_TYPE,
+      UP_SPEC_END, UP_SPEC_OPENED, UP_EQ_NEW, UQ_COUNT, UP_EQ_SLOT, UP_EQ_HERE, UP_EQ_INNER, UP_EQ_ENDS, UP_COMMA_OPENER, UP_COMMAS_BEFORE,
+      UP_BEFORE_DOT, UP_GROUP, UP_HEAD, UP_CHAIN_SLOT, UP_FOUND_MESSAGE, UP_FOUND_ARGUMENT0, UP_FOUND_ARGUMENT1, UP_FOUND_ARGUMENT2,
+      UP_MESSAGE, UP_TOKEN, UP_ARGUMENT0, UP_ARGUMENT1, UP_ARGUMENT2, UZ_NAME, UZ_FOUND_MESSAGE, UZ_FOUND_ARGUMENT0, UZ_FOUND_ARGUMENT1,
+      UZ_FOUND_ARGUMENT2, UZ_MESSAGE, UZ_TOKEN, UZ_ARGUMENT0, UZ_ARGUMENT1, UZ_ARGUMENT2, UK_DUP, UK_D, UK_NAMED, UK_TYPE, UK_TS, UK_LEAVES,
+      UK_HIDDEN, UK_TUPLES, UK_MAXLEAF, UK_SPEC, UK_SPEC_LENGTH, UK_PREFIX_LENGTH, UK_FOUND_MESSAGE, UK_FOUND_ARGUMENT0, UK_FOUND_ARGUMENT1,
+      UK_FOUND_ARGUMENT2, UK_MESSAGE, UK_TOKEN, UK_ARGUMENT0, UK_ARGUMENT1, UK_ARGUMENT2, UR_SP_H, UR_SP_E0, UR_SP_E1, UR_SP_E2, UR_SP_E3,
+      UR_SP_E4, UR_SP_E5, UR_SP_E6, UR_SP_E7, UR_SP_FOUND, UR_SP_FREE, UR_C, UR_N, UR_PC, UR_MODEL, UR_SIG, UR_NF, UR_GROUP, UR_GROUP_OPEN,
+      UR_FIELD0, UR_T0, UR_OFF0, UR_PREV0, UR_FP0_H, UR_FP0_E0, UR_FP0_E1, UR_FP0_E2, UR_FP0_E3, UR_FP0_E4, UR_FP0_E5, UR_FP0_E6, UR_FP0_E7,
+      UR_FP0_FOUND, UR_FP0_FREE, UR_FN0, UR_F0, UR_FS0, UR_T1, UR_OFF1, UR_PREV1, UR_FP1_H, UR_FP1_E0, UR_FP1_E1, UR_FP1_E2, UR_FP1_E3,
+      UR_FP1_E4, UR_FP1_E5, UR_FP1_E6, UR_FP1_E7, UR_FP1_FOUND, UR_FP1_FREE, UR_FN1, UR_F1, UR_FS1, UR_T2, UR_OFF2, UR_PREV2, UR_FP2_H,
+      UR_FP2_E0, UR_FP2_E1, UR_FP2_E2, UR_FP2_E3, UR_FP2_E4, UR_FP2_E5, UR_FP2_E6, UR_FP2_E7, UR_FP2_FOUND, UR_FP2_FREE, UR_FN2, UR_F2,
+      UR_FS2, UR_T3, UR_OFF3, UR_PREV3, UR_FP3_H, UR_FP3_E0, UR_FP3_E1, UR_FP3_E2, UR_FP3_E3, UR_FP3_E4, UR_FP3_E5, UR_FP3_E6, UR_FP3_E7,
+      UR_FP3_FOUND, UR_FP3_FREE, UR_FN3, UR_F3, UR_FS3, UR_T4, UR_OFF4, UR_PREV4, UR_FP4_H, UR_FP4_E0, UR_FP4_E1, UR_FP4_E2, UR_FP4_E3,
+      UR_FP4_E4, UR_FP4_E5, UR_FP4_E6, UR_FP4_E7, UR_FP4_FOUND, UR_FP4_FREE, UR_FN4, UR_F4, UR_FS4, UR_T5, UR_OFF5, UR_PREV5, UR_END,
+      UR_NODE_SLOT, UR_LEAVES_HERE, UR_BEGIN, UR_E, UR_ES, UR_DEFINE_AT, UR_ITEM_LEAVES, UR_SKIP, UR_ITEMS, UR_LEAVES, UR_TLEAF,
+      UR_ITEM_SLOT, UI_COUNT_ALL, UR_ACC_E, UR_RHS, UR_RHS_END, UR_RHS_NEXT, UR_BRACE_CLOSE, UR_CALL_PAREN, UR_KIND, UR_CALLEE,
+      UR_COMPONENTS, UR_OWNER, UR_OWNER_BASE, UR_FOUND_MESSAGE, UR_FOUND_ARGUMENT0, UR_FOUND_ARGUMENT1, UR_FOUND_ARGUMENT2, UR_MESSAGE,
+      UR_TOKEN, UR_ARGUMENT0, UR_ARGUMENT1, UR_ARGUMENT2, UF_TYPE, UF_NESTED, UF_GROUP_NEW, UA_COUNT, UF_GROUP_SLOT, UF_LAST, UL_CTYPE, UL_C,
+      UL_TYPE, UL_K, UL_JF, UL_JNEST, UL_JEND, UL_J, UL_F, UG_D_F, UG_D_COMP, UG_D_COUNT, UG_D_NT, UG_D_NJ, UG_G, UG_LEVEL, UG_CI, UG_C,
+      UG_HEAD, UG_E, UG_J0, UG_SIG, UG_NODE_T, UG_FROM_T, UG_FROM_J, UG_COMP_HERE, UG_COUNT_HERE, UG_T, UG_J, UG_LENGTH_RUN, UH_F0, UH_T1,
+      UH_J1, UH_LENGTH0, UH_F1, UH_T2, UH_J2, UH_LENGTH1, UH_F2, UH_T3, UH_J3, UH_LENGTH2, UH_F3, UH_T4, UH_J4, UH_LENGTH3, UH_SP, UH_SIG,
+      UH_SI, UH_S, UH_K, UH_T0, UH_J0, UH_BASE_LENGTH, UH_TOTAL_HERE, UH_TOTAL, UX_H, UX_O, UX_B0, UX_B1, UX_B2, UX_B3, UX_B4, UX_AT,
+      UE_STEPS, UE_MODE0, UE_R, UE_RS, UE_C, UE_PC, UE_EQ0, UE_ES, UE_KIND, UE_LV, UE_PATH, UE_TLS, UE_W5_DECL, UE_LVS, UE_BODY_MODEL,
+      UE_EQ_HERE, UE_EQ_HERE_KIND, UE_SIG, UE_SIGS, UE_NT, UE_NTS, UE_FIRST, UE_CEND_HERE, UE_IDX, UE_HNAME, UE_HBASE, UE_LEAFCOUNT,
+      UE_AFTER, UE_ARG_OPEN, UE_ARG_OS, UE_ARG_CALLEE, UE_B_HEAD, UE_B_SIG, UE_B_T, UE_PT0, UE_POFF0, UE_PQ0, UE_PCOMP0, UE_PCOUNT0, UE_PTS0,
+      UE_PNF0, UE_PF0, UE_PT1, UE_POFF1, UE_PQ1, UE_PCOMP1, UE_PCOUNT1, UE_PTS1, UE_PNF1, UE_PF1, UE_PT2, UE_POFF2, UE_PQ2, UE_PCOMP2,
+      UE_PCOUNT2, UE_PTS2, UE_PNF2, UE_PF2, UE_PT3, UE_POFF3, UE_PQ3, UE_PCOMP3, UE_PCOUNT3, UE_PTS3, UE_PNF3, UE_PF3, UE_PT4, UE_POFF4,
+      UE_PQ4, UE_PCOMP4, UE_PCOUNT4, UE_PTS4, UE_PNF4, UE_PF4, UE_PT5, UE_POFF5, UE_SHAPE_FOUND, UE_SHAPE_WANT, UE_N1, UE_TV_AFTER, UE_TQ,
+      UE_TV_COMP, UE_TV_WANT, UE_TV_HAVE, UE_TV_BASE, UE_TV_START, UE_TV_END, UE_CALLEE, UE_CALLEE_MODEL, UE_ERROR_HERE, UE_ERROR_ARG0,
+      UE_ERROR_ARG1, UE_ERROR_ARG2, UE_LEAF_ID, UE_LEAF_END, UE_D0, UE_D, UE_DPREFIX, UE_DTYPE, UE_DLEAVES, UE_DK, UE_DT0, UE_DJ0,
+      UE_DLASTF0, UE_DF0, UE_DT1, UE_DJ1, UE_DLASTF1, UE_DF1, UE_DT2, UE_DJ2, UE_DLASTF2, UE_DF2, UE_DT3, UE_DJ3, UE_DLASTF3, UE_DF3, UE_DT4,
+      UE_DJ4, UE_DLASTF4, UE_DFS, UE_DTSTART, UE_DTLEN, UE_DPART, UE_DJ, UE_DSIG, UE_DNAME_AT, UE_DOFF, UE_RSIG, UE_RSIGS, UE_RTYPE, UE_RTS,
+      UE_RPH, UE_RG, UE_RGS, UE_RJ, UE_RP, UE_RSPEC, UE_RSPEC_CLOSE, UE_ROFF, UE_RTOKEN, UE_RFIELD, UE_RNEXT_SIG, UE_RNEXT_TYPE, UE_FJ,
+      UE_XP, UE_XJ, UE_QTL, UE_SRC, UE_SYN_CODE, UE_SYN_KIND, UE_SYN_NAME, UE_ORIGIN, UE_ORIGIN_END, UE_SRCS, UE_SLOT, UE_COUNT, UE_MODE,
+      UE_POS, UE_JUMP_FROM, UE_JUMP_TO, UE_EQ, UE_CF_CLOSE, UE_LEVEL, UE_LEAF, UE_TL, UE_PATHLEN, UE_TARGET_NAME, UE_RDONE, UE_DEC,
+      UE_DPART0, UE_DOFFSET, UE_DLEAF, UE_DNAME, UE_W6_SIG, UE_W6_TYPE, UE_RELSIG, UE_RPHASE, UE_RGROUP, UE_RLEAF, UE_RPART, UE_ROFFSET,
+      UE_REL_CLOSE, UE_REL_ORIGIN, UE_FLAT_BASE, UE_FLAT_COUNT, UE_FLAT_J, UE_FLAT_PART, UE_FLAT_RESUME, UE_FLAT_ORIGIN, UE_EQX_A, UE_EQX_B,
+      UE_EQX_COUNT, UE_EQX_J, UE_EQX_PART, UE_EQX_RESUME, UE_EQX_ORIGIN, UE_FOUND_MESSAGE, UE_FOUND_ARGUMENT0, UE_FOUND_ARGUMENT1,
+      UE_FOUND_ARGUMENT2, UE_MESSAGE, UE_TOKEN, UE_ARGUMENT0, UE_ARGUMENT1, UE_ARGUMENT2, U_MESSAGE, U_TOKEN, U_ARGUMENT0, U_ARGUMENT1,
+      U_ARGUMENT2;
+    boolean U_SEEN, TUPLE_SEEN, UB_OPENS, UB_CLOSES, UP_IS_NAME, UP_OPENS, UP_CLOSES, UP_CUR_WHERE, UP_CUR_BODY, UP_MODEL_OPENS, UP_AT_MODEL,
+      UP_WHERE_OPENS, UP_WHERE_CLOSES, UP_MODEL_CLOSES, UP_BODY_OPENS, UP_DIR_SETS, UP_BOUNDARY_TOKEN, UP_PREFIX_TOKEN, UP_PREFIX_OK,
+      UP_PREFIX_ARRAY, UP_DECL_PLACE_OK, UP_FP_HIT0, UP_FP_HIT1, UP_FP_HIT2, UP_FP_HIT3, UP_FP_HIT4, UP_FP_HIT5, UP_FP_HIT6, UP_FP_HIT7,
+      UP_STRUCT_OPENS, UP_IN_FIELDS, UP_TYPE_CLOSES, UP_ALIAS_TYPE_USE, UP_TYPE_FULL, UP_PUSHES, UP_EXPECT_ARRAY, UP_EXPECT_ALIAS,
+      UP_EXPECT_SCALAR, UP_NAMES_FIELD, UP_NAMES_END, UP_NAMES_BAD, UP_FIELD_FULL, UP_FIELD_ADDS, UP_FIELD_TWICE, UP_FIELD_HASH_FULL,
+      UP_NESTED_BUNDLE, UP_NESTED_ARRAY, UP_OUTER_CLOSES, UP_TYPE_NAMED, UP_TYPE_TWICE, UP_ALIAS_DEF, UP_COPY_SHAPE, UP_ALIAS_COPY,
+      UP_ALIAS_COPY_OK, UP_NAME_DECL, UP_ALIAS_MISPLACED, UP_DECL_OPENS, UP_ROLE_ARRAY, UP_ALIAS_SEMICOLON_OK, UP_IN_NAMES, UP_DECL_NAME,
+      UP_DECL_ENDS, UP_FORWARD, UP_SP_HIT0, UP_SP_HIT1, UP_SP_HIT2, UP_SP_HIT3, UP_SP_HIT4, UP_SP_HIT5, UP_SP_HIT6, UP_SP_HIT7, UP_SIG_ADDS,
+      UP_SCALAR_TYPE, UP_SCALAR_DECL, UP_SCALAR_RUN, UP_SCALAR_TWICE, UP_TUPLE_AFTER_SCALAR, UP_SF_HIT0, UP_SF_HIT1, UP_SF_HIT2, UP_SF_HIT3,
+      UP_SF_HIT4, UP_SF_HIT5, UP_SF_HIT6, UP_SF_HIT7, UP_SPEC_LOOKS, UP_STMT_SETS, UP_DEFINES, UP_EQ_TERMINATES, UP_HEAD_IS, UP_FIELD_IS,
+      UP_GROUP_HEAD, UP_DOT_BAD, UP_FIRST_ERROR, UP_OK, UZ_TUPLE, UZ_FIRST_ERROR, UZ_OK, UK_DUP_TUPLE, UK_TUPLE, UK_FIRST_ERROR, UK_OK,
+      UR_SP_HIT0, UR_SP_HIT1, UR_SP_HIT2, UR_SP_HIT3, UR_SP_HIT4, UR_SP_HIT5, UR_SP_HIT6, UR_SP_HIT7, UR_HEAD, UR_ARRAY, UR_BAD0,
+      UR_FP0_HIT0, UR_FP0_HIT1, UR_FP0_HIT2, UR_FP0_HIT3, UR_FP0_HIT4, UR_FP0_HIT5, UR_FP0_HIT6, UR_FP0_HIT7, UR_ACTIVE0, UR_NOT_TUPLE0,
+      UR_UNKNOWN0, UR_BAD1, UR_FP1_HIT0, UR_FP1_HIT1, UR_FP1_HIT2, UR_FP1_HIT3, UR_FP1_HIT4, UR_FP1_HIT5, UR_FP1_HIT6, UR_FP1_HIT7,
+      UR_ACTIVE1, UR_NOT_TUPLE1, UR_UNKNOWN1, UR_BAD2, UR_FP2_HIT0, UR_FP2_HIT1, UR_FP2_HIT2, UR_FP2_HIT3, UR_FP2_HIT4, UR_FP2_HIT5,
+      UR_FP2_HIT6, UR_FP2_HIT7, UR_ACTIVE2, UR_NOT_TUPLE2, UR_UNKNOWN2, UR_BAD3, UR_FP3_HIT0, UR_FP3_HIT1, UR_FP3_HIT2, UR_FP3_HIT3,
+      UR_FP3_HIT4, UR_FP3_HIT5, UR_FP3_HIT6, UR_FP3_HIT7, UR_ACTIVE3, UR_NOT_TUPLE3, UR_UNKNOWN3, UR_BAD4, UR_FP4_HIT0, UR_FP4_HIT1,
+      UR_FP4_HIT2, UR_FP4_HIT3, UR_FP4_HIT4, UR_FP4_HIT5, UR_FP4_HIT6, UR_FP4_HIT7, UR_ACTIVE4, UR_NOT_TUPLE4, UR_UNKNOWN4, UR_BAD5, UR_NODE,
+      UR_IN_TARGET, UR_AT_DEFINE, UR_LIST, UR_INSIDE, UR_ITEM, UR_OK_TOKEN, UR_VALID, UR_TUPLE, UR_WHOLE, UR_TV, UR_OWNER_TV, UR_FIRST_ERROR,
+      UR_OK, UF_STRUCT_GROUP, UF_FIELD_GROUP, UF_GROUPS, UG_D_ON, UG_LIST, UG_START, UG_TAKES_LIST, UH_ON0, UH_ON1, UH_ON2, UH_ON3, UE_PROJ,
+      UE_CF, UE_TOP, UE_WALKS, UE_W1, UE_W1C, UE_W2, UE_W3, UE_PRE, UE_CFC, UE_PRE2, UE_DONE_NOW, UE_LIVE, UE_W4, UE_W5, UE_W6, UE_W7,
+      UE_W7_SINGLE, UE_REST, UE_CHAIN, UE_CLOCK_OP, UE_WHOLE_ARG, UE_ARG_EFFECT, UE_ARG_MODEL, UE_EQX_OK, UE_BUNDLE, UE_B_TUPLE, UE_IDENT,
+      UE_KIND_MIX, UE_SHAPE_CALL, UE_A, UE_B, UE_C1, UE_C2, UE_C_REST, UE_C3, UE_C4, UE_C5, UE_C6, UE_PSHAPE0, UE_PON0, UE_PBAD0, UE_PSHAPE1,
+      UE_PON1, UE_PBAD1, UE_PSHAPE2, UE_PON2, UE_PBAD2, UE_PSHAPE3, UE_PON3, UE_PBAD3, UE_PSHAPE4, UE_PON4, UE_PBAD4, UE_PSHAPE5,
+      UE_C2_STILL, UE_DELAY_INIT, UE_TV_ARGUMENT, UE_TV, UE_TV_SELECT, UE_TV_BAD, UE_TV_GO, UE_TV_BARE, UE_TUPLE_CALL, UE_SPREAD, UE_COPY,
+      UE_FLAT_STARTS, UE_EQX_STARTS, UE_LEAF_EMIT, UE_ENTER_DECL, UE_DM, UE_DON0, UE_DON1, UE_DON2, UE_DON3, UE_DPART_DONE, UE_DLEAF_LAST,
+      UE_DNAME_LAST, UE_DFINISH, UE_RM, UE_RSPEC_EMPTY, UE_RFINISH, UE_RGROUP_SKIP, UE_RSPEC_SKIP, UE_RACTIVE, UE_RSEP, UE_RSEP_EMITS,
+      UE_RLEAF_EMITS, UE_RCLOCK_EMITS, UE_RSPEC_EMITS, UE_RGROUP_DONE, UE_RSPEC_DONE, UE_FM, UE_FLEAF, UE_FDONE, UE_XM, UE_XDONE, UE_QOPEN,
+      UE_QTARGET, UE_QDEFINE, UE_QSEP, UE_QMORE, UE_EMITS, UE_OVERFLOW, UE_COPIES, UE_FINISHED, UE_RNEED, UE_EQX_IDENT, UE_FIRST_ERROR,
+      U_READY;
+    long UE_LIMIT, UK_ESTIMATE, UR_ESTIMATE;
+    [TOKEN_CAP] integer UB_INDEX, UB_STACK, U_LEVEL, U_CLOSE_OF, U_OPEN_OF, U_ENCLOSING, UP_INDEX, U_BODY_CLOSE_MODEL, U_TOKEN_MODEL,
+      UP_BOUNDARY, UP_LAST_OTHER, UP_LAST_BRACKET, U_DECL_AT, U_REMOVE_TO, UZ_AT, U_SPEC_FIELD, UP_STMT, UP_IFS, UQ_DEFINE, UQ_START,
+      U_EQ_AT, UQ_END, UP_EQ_OPEN, U_COMMAS, U_COMMA_ORD, U_HEAD_OF, U_CHAIN_FIELDS, U_CHAIN_LAST, U_CHAIN_GROUP, UZ_INDEX, UR_INDEX,
+      U_NODE_SIG, U_NODE_TYPE, U_NODE_FIRST, U_NODE_INDEX, U_CHAIN_END, UQ_TLEAF_BASE, UQ_KIND, UQ_LEAVES, UQ_ITEMS, U_CALLEE, U_TV_BASE;
+    [U_NEST_CAP] integer UP_MF_MODEL, UP_MF_LEVEL, UP_MF_DIR, UP_TS_TYPE, UP_TS_LEVEL, UP_TS_STATE, UP_TS_FNESTED, UP_TS_FSTART, UP_TS_FEND,
+      UP_TS_NFIELDS, UP_TS_LEAVES, UP_TS_DEPTH, UP_TS_TYPELEN;
+    [U_NEST_CAP] boolean UP_MF_WHERE, UP_MF_BODY;
+    [MODEL_CAP] integer UM_NAME, UM_BODY_CLOSE, UM_SIG_FIRST, UM_SIG_LAST;
+    [NAME_CAP] integer U_MODEL_OF_NAME, U_ALIAS, U_SCALAR_AT, UH_INDEX, UH_AT, UH_LENGTH, UH_NAME0, UH_NAME1, UH_NAME2, UH_NAME3, UH_NAME4;
+    [U_TYPE_CAP] boolean UY_KIND;
+    [U_FIELD_CAP] integer UD_TYPE_OF, UD_NAME, UD_ORD, UD_NESTED, UD_FSTART, UD_FEND, UD_LEAF_OFFSET, UF_INDEX, UF_AT, UA_LEAF, UA_LEAVES,
+      UA_NEXT;
+    [U_HASH_SLOTS] integer U_FIELD_HASH, U_SIG_HASH;
+    [U_TYPE_CAP] integer UY_FIELD_COUNT, UY_LEAF_COUNT, UY_DEPTH, UY_TYPELEN, UY_FIELD_BASE, UY_LEAF_BASE, UY_CLOSE_ORDER, UY_SPEC_OPEN,
+      UY_GROUP_FIRST, UY_GROUP_LAST;
+    [NAME_CAP] boolean U_TYPE_SEEN;
+    [U_SIG_CAP] integer UC_START, UC_TYPE_START, UC_TYPE, UC_TYPE_NAME, UC_DIR, UC_MODEL, UC_INIT_AT, UC_END, UC_NAME_COUNT, UC_NAMES,
+      UC_SIG_FIRST, US_NAME, US_MODEL, US_DECL, US_TOKEN, US_NEXT, US_DUP, UK_INDEX, US_TYPE, US_HIDDEN_BASE, UK_TUPLE_SIG, UC_FINAL;
+    [U_SIG_CAP] boolean UC_PLACE_OK, UC_ARRAY, US_ARRAY;
+    [MODEL_CAP] boolean UM_TUPLE_OUT;
+    [U_TLEAF_CAP] integer UI_HEAD, UI_EQ, UI_ORD, UI_SLOT, UI_COUNT, U_COMPONENT_AT, UG_LENGTH, UG_NAME, UG_ORIGIN;
+    [TOKEN_CAP] boolean UQ_LIST, U_WHOLE_CALL, U_TV;
+    [U_LEAF_CAP] integer UL_INDEX, UL_FIELD, UL_SUB;
+    [U_TLEAF_STEPS] integer UG_INDEX, UG_COMP, UG_COUNT;
+    [U_TEXT_CAP] integer UX_INDEX;
+    [U_TEXT_CAP] ubyte U_HIDDEN_TEXT;
+    [U_EMIT_CAP] integer UE_INDEX;
+    [U_LEVEL_CAP] integer UE_CEND, UE_CCLOSE;
+    [U_LEVEL_CAP] boolean UE_CPAREN;
     [TOKEN_CAP] integer ELEMENT_SKIP, ELEMENT_INDICES;
     [TOKEN_CAP] boolean ELEMENT_RANGE, ELEMENT_TARGET;
     boolean RG_START_CONST, RG_END_CONST, PL_END_NEG0, PL_END_NEG1, PL_END_NEG2, PL_END_NEG3, PL_END_CONST0, PL_END_CONST1, PL_END_CONST2, PL_END_CONST3;
