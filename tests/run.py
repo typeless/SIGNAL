@@ -4,8 +4,11 @@ import re
 import selectors
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
 CASES = ROOT / "tests" / "cases"
@@ -19,6 +22,14 @@ QEMU_COMMANDS = {
 }
 STAGE2_ONLY = {"m5", "m6", "m7", "m8", "m9", "m10"}
 DEFAULT_JOBS = 4
+PEAK_RSS_TABLE = BUILD / "peak_rss.tsv"
+
+
+class Compiled(NamedTuple):
+    returncode: int
+    stdout: str
+    stderr: str
+    peak_rss_bytes: int
 
 
 def target_command(source):
@@ -31,13 +42,20 @@ def target_command(source):
 
 
 def compile_case(compiler, source, executable, timeout=COMPILE_TIMEOUT_SECONDS):
-    return subprocess.run(
-        [*compiler, str(source), "-o", str(executable)],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env={"PATH": ""},
-    )
+    command = [*compiler, str(source), "-o", str(executable)]
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        process = subprocess.Popen(command, stdout=stdout, stderr=stderr, env={"PATH": ""})
+        expired = threading.Event()
+        killer = threading.Timer(timeout, lambda: (expired.set(), process.kill()))
+        killer.start()
+        _, status, usage = os.wait4(process.pid, 0)
+        killer.cancel()
+        process.returncode = os.waitstatus_to_exitcode(status)
+        if expired.is_set():
+            raise subprocess.TimeoutExpired(command, timeout)
+        stdout.seek(0)
+        stderr.seek(0)
+        return Compiled(process.returncode, stdout.read().decode(errors="replace"), stderr.read().decode(errors="replace"), usage.ru_maxrss)
 
 
 def read_trace(command, line_count, input_path):
@@ -76,11 +94,8 @@ def run_to_exit(executable, input_path):
     return finished.stdout.decode(errors="replace").splitlines(), finished.returncode, finished.stderr.decode(errors="replace")
 
 
-def run_trace_case(compiler, source, expected_path):
+def run_trace_case(compiled, executable, source, expected_path):
     expected = expected_path.read_text().splitlines()
-    executable = BUILD / source.relative_to(CASES).with_suffix("")
-    executable.parent.mkdir(parents=True, exist_ok=True)
-    compiled = compile_case(compiler, source, executable)
     if compiled.returncode != 0:
         return [f"compile failed (exit {compiled.returncode}):", compiled.stderr.rstrip()]
     exit_path = source.with_suffix(".exit")
@@ -109,11 +124,8 @@ def run_trace_case(compiler, source, expected_path):
     return report
 
 
-def run_error_case(compiler, source, expected_path):
+def run_error_case(compiled, expected_path):
     expected = expected_path.read_text().strip()
-    executable = BUILD / source.relative_to(CASES).with_suffix("")
-    executable.parent.mkdir(parents=True, exist_ok=True)
-    compiled = compile_case(compiler, source, executable)
     if compiled.returncode == 0:
         return [f"expected rejection containing {expected!r}, but compilation succeeded"]
     if expected not in compiled.stderr:
@@ -135,11 +147,14 @@ def jobs_option(arguments):
 def check_case(compiler, source):
     trace_path = source.with_suffix(".out")
     error_path = source.with_suffix(".err")
+    if not trace_path.exists() and not error_path.exists():
+        return ["no .out or .err file"], 0
+    executable = BUILD / source.relative_to(CASES).with_suffix("")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    compiled = compile_case(compiler, source, executable)
     if trace_path.exists():
-        return run_trace_case(compiler, source, trace_path)
-    if error_path.exists():
-        return run_error_case(compiler, source, error_path)
-    return ["no .out or .err file"]
+        return run_trace_case(compiled, executable, source, trace_path), compiled.peak_rss_bytes
+    return run_error_case(compiled, error_path), compiled.peak_rss_bytes
 
 
 def main():
@@ -160,9 +175,11 @@ def main():
     if selected:
         sources = [s for s in sources if any(name in str(s.relative_to(CASES)) for name in selected)]
     failures = 0
+    peaks = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        for source, report in zip(sources, pool.map(lambda source: check_case(compiler, source), sources)):
+        for source, (report, peak_rss_bytes) in zip(sources, pool.map(lambda source: check_case(compiler, source), sources)):
             name = source.relative_to(CASES)
+            peaks.append((name, peak_rss_bytes))
             if report:
                 failures += 1
                 print(f"FAIL {name}")
@@ -170,6 +187,10 @@ def main():
                     print(f"  {line}")
             else:
                 print(f"PASS {name}")
+    PEAK_RSS_TABLE.write_text("".join(f"{name}\t{peak_rss_bytes}\n" for name, peak_rss_bytes in peaks))
+    if peaks:
+        name, peak_rss_bytes = max(peaks, key=lambda peak: peak[1])
+        print(f"peak compile RSS {peak_rss_bytes / 2**20:.0f} MiB ({name}); all cases in {PEAK_RSS_TABLE.relative_to(ROOT)}")
     print(f"{len(sources) - failures} passed, {failures} failed")
     return 1 if failures or not sources else 0
 

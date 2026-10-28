@@ -1,4 +1,5 @@
 import filecmp
+import os
 import subprocess
 import sys
 import time
@@ -14,9 +15,11 @@ STAGES = [BUILD / "stage1", BUILD / "stage2", BUILD / "stage3"]
 def build_stage(compiler, output):
     output.unlink(missing_ok=True)
     started = time.monotonic()
-    finished = subprocess.run([*compiler, str(SOURCE), "-o", str(output)], env={"PATH": ""})
-    print(f"{output.name}: exit {finished.returncode}, {time.monotonic() - started:.1f} s")
-    return finished.returncode == 0
+    process = subprocess.Popen([*compiler, str(SOURCE), "-o", str(output)], env={"PATH": ""})
+    _, status, usage = os.wait4(process.pid, 0)
+    process.returncode = os.waitstatus_to_exitcode(status)
+    print(f"{output.name}: exit {process.returncode}, {time.monotonic() - started:.1f} s, peak RSS {usage.ru_maxrss / 2**20:.0f} MiB")
+    return process.returncode == 0
 
 
 def main():
