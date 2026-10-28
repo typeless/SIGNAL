@@ -39,6 +39,6 @@ process TWO =
     constant ulong TIMER0_BASE = ulong(1073741824);
     constant ulong TIMER1_BASE = TIMER0_BASE + ulong(4096);
     constant integer RELOAD0 = 100000;
-    constant integer RELOAD1 = 300000;
+    constant integer RELOAD1 = 1250000;
     label ENABLE;
   end;
