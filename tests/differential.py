@@ -1,3 +1,4 @@
+import concurrent.futures
 import functools
 import random
 import re
@@ -6,7 +7,7 @@ import sys
 from pathlib import Path
 
 import run
-from run import QEMU_COMMANDS, read_trace
+from run import QEMU_COMMANDS, jobs_option, read_trace
 
 COMPILE_TIMEOUT_SECONDS = 180
 compile_case = functools.partial(run.compile_case, timeout=COMPILE_TIMEOUT_SECONDS)
@@ -487,22 +488,21 @@ def check_m9b(compiler, seed):
     return [], "cycle" if program.cycle and macos_kind == "trace" else macos_kind
 
 
-def m9b(compiler, count):
-    seeds = [random.SystemRandom().randrange(2**32) for _ in range(count)]
+def m9b(compiler, seeds, jobs):
     print(f"m9b seeds: {' '.join(map(str, seeds))}")
     failures = 0
     accepted = 0
     cycles = 0
-    for seed in seeds:
-        report, kind = check_m9b([str(compiler)], seed)
-        accepted += kind in ("trace", "cycle")
-        cycles += kind == "cycle"
-        if report:
-            failures += 1
-            print(f"FAIL seed {seed}")
-            for line in report:
-                print(f"  {line}")
-    print(f"{count - failures} seeds passed ({accepted} accepted, {cycles} with an exclusive cycle), {failures} failed")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for seed, (report, kind) in zip(seeds, pool.map(lambda seed: check_m9b([str(compiler)], seed), seeds)):
+            accepted += kind in ("trace", "cycle")
+            cycles += kind == "cycle"
+            if report:
+                failures += 1
+                print(f"FAIL seed {seed}")
+                for line in report:
+                    print(f"  {line}")
+    print(f"{len(seeds) - failures} seeds passed ({accepted} accepted, {cycles} with an exclusive cycle), {failures} failed")
     return 1 if failures else 0
 
 
@@ -581,18 +581,17 @@ def check_m9c(compiler, seed):
     return report
 
 
-def m9c(compiler, count):
-    seeds = [random.SystemRandom().randrange(2**32) for _ in range(count)]
+def m9c(compiler, seeds, jobs):
     print(f"m9c seeds: {' '.join(map(str, seeds))}")
     failures = 0
-    for seed in seeds:
-        report = check_m9c([str(compiler)], seed)
-        if report:
-            failures += 1
-            print(f"FAIL seed {seed}")
-            for line in report:
-                print(f"  {line}")
-    print(f"{count - failures} seeds passed, {failures} failed")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for seed, report in zip(seeds, pool.map(lambda seed: check_m9c([str(compiler)], seed), seeds)):
+            if report:
+                failures += 1
+                print(f"FAIL seed {seed}")
+                for line in report:
+                    print(f"  {line}")
+    print(f"{len(seeds) - failures} seeds passed, {failures} failed")
     return 1 if failures else 0
 
 
@@ -812,18 +811,17 @@ def m10a_matches(lines, expected, width):
     return True
 
 
-def m10a(compiler, count):
-    seeds = [random.SystemRandom().randrange(2**32) for _ in range(count)]
+def m10a(compiler, seeds, jobs):
     print(f"m10a seeds: {' '.join(map(str, seeds))}")
     failures = 0
-    for seed in seeds:
-        report = check_m10a([str(compiler)], seed)
-        if report:
-            failures += 1
-            print(f"FAIL seed {seed}")
-            for line in report:
-                print(f"  {line}")
-    print(f"{count - failures} seeds passed, {failures} failed")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for seed, report in zip(seeds, pool.map(lambda seed: check_m10a([str(compiler)], seed), seeds)):
+            if report:
+                failures += 1
+                print(f"FAIL seed {seed}")
+                for line in report:
+                    print(f"  {line}")
+    print(f"{len(seeds) - failures} seeds passed, {failures} failed")
     return 1 if failures else 0
 
 
@@ -899,7 +897,17 @@ def m9a_outcome(compiler, dumper, source, directory):
     return compiled.returncode, compiled.stdout, compiled.stderr, dump.read_bytes() if dump.exists() else None
 
 
-def m9a(compiler, against):
+def m9a_sides(compiler, against, dumpers, source):
+    name = source.relative_to(CASES).with_suffix("")
+    sides = []
+    for side, side_compiler, dumper in (("old", against, dumpers[0]), ("new", compiler, dumpers[1])):
+        directory = M9A_BUILD / "cases" / side / name
+        directory.mkdir(parents=True, exist_ok=True)
+        sides.append(m9a_outcome(side_compiler, dumper, source, directory))
+    return sides
+
+
+def m9a(compiler, against, jobs):
     M9A_BUILD.mkdir(parents=True, exist_ok=True)
     against_source = against.with_name(against.name + ".sig")
     if not against_source.exists():
@@ -910,13 +918,10 @@ def m9a(compiler, against):
                      if s.relative_to(CASES).parts[0] in M9A_SUITES or s.relative_to(CASES).as_posix() in M9A_CASES | M9A_MOVED.keys())
     differing = 0
     missing = 0
-    for source in sources:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        outcomes = list(zip(sources, pool.map(lambda source: m9a_sides(compiler, against, (old_dumper, new_dumper), source), sources)))
+    for source, sides in outcomes:
         name = source.relative_to(CASES).as_posix()
-        sides = []
-        for side, side_compiler, dumper in (("old", against, old_dumper), ("new", compiler, new_dumper)):
-            directory = M9A_BUILD / "cases" / side
-            directory.mkdir(parents=True, exist_ok=True)
-            sides.append(m9a_outcome(side_compiler, dumper, source, directory))
         (old_status, old_stdout, old_stderr, old_dump), (new_status, new_stdout, new_stderr, new_dump) = sides
         if name in M9A_REJECTED:
             if new_status == 0 or M9A_REJECTED[name] not in new_stderr:
@@ -950,8 +955,21 @@ def m9a(compiler, against):
     return 1 if differing or missing else 0
 
 
+def seeds_option(arguments):
+    if "--seeds" not in arguments:
+        return None
+    position = arguments.index("--seeds")
+    if position + 1 == len(arguments) or not all(seed.isdigit() for seed in arguments[position + 1].split(",")):
+        sys.exit("--seeds requires a comma-separated list of seeds")
+    seeds = [int(seed) for seed in arguments[position + 1].split(",")]
+    del arguments[position:position + 2]
+    return seeds
+
+
 def main():
     arguments = sys.argv[1:]
+    jobs = jobs_option(arguments)
+    explicit = seeds_option(arguments)
     compiler = COMPILER
     if "--compiler" in arguments:
         position = arguments.index("--compiler")
@@ -963,30 +981,30 @@ def main():
         del arguments[position:position + 2]
         if arguments != ["m9a"]:
             sys.exit("--against requires the method m9a")
-        return m9a(compiler, against)
-    if arguments and arguments[0] == "m9b":
-        return m9b(compiler, int(arguments[1]) if len(arguments) > 1 else FRESH_SEEDS)
-    if arguments and arguments[0] == "m9c":
-        return m9c(compiler, int(arguments[1]) if len(arguments) > 1 else FRESH_SEEDS)
-    if arguments and arguments[0] == "m10a":
-        return m10a(compiler, int(arguments[1]) if len(arguments) > 1 else FRESH_SEEDS)
+        return m9a(compiler, against, jobs)
+    methods = {"m9b": m9b, "m9c": m9c, "m10a": m10a}
+    method = methods.get(arguments[0]) if arguments else None
+    if method:
+        del arguments[0]
     fresh_count = int(arguments[0]) if arguments else FRESH_SEEDS
+    fresh = explicit if explicit is not None else [random.SystemRandom().randrange(2**32) for _ in range(fresh_count)]
+    if method:
+        return method(compiler, fresh, jobs)
     kept = [int(line) for line in SEEDS.read_text().split()] if SEEDS.exists() else []
-    fresh = [random.SystemRandom().randrange(2**32) for _ in range(fresh_count)]
     print(f"fresh seeds: {' '.join(map(str, fresh))}")
     checked = kept + fresh
     failures = 0
-    for seed in checked:
-        report, backend_difference = check([str(compiler)], seed)
-        if report:
-            failures += 1
-            print(f"FAIL seed {seed}")
-            for line in report:
-                print(f"  {line}")
-            if backend_difference and seed not in kept:
-                with SEEDS.open("a") as seeds:
-                    seeds.write(f"{seed}\n")
-                kept.append(seed)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for seed, (report, backend_difference) in zip(checked, pool.map(lambda seed: check([str(compiler)], seed), checked)):
+            if report:
+                failures += 1
+                print(f"FAIL seed {seed}")
+                for line in report:
+                    print(f"  {line}")
+                if backend_difference and seed not in kept and explicit is None:
+                    with SEEDS.open("a") as seeds:
+                        seeds.write(f"{seed}\n")
+                    kept.append(seed)
     print(f"{len(checked) - failures} seeds passed, {failures} failed")
     return 1 if failures else 0
 

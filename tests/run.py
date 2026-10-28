@@ -1,3 +1,4 @@
+import concurrent.futures
 import os
 import re
 import selectors
@@ -10,13 +11,14 @@ ROOT = Path(__file__).resolve().parent.parent
 CASES = ROOT / "tests" / "cases"
 BUILD = ROOT / "build" / "tests"
 COMPILER = ROOT / "bootstrap" / "sigc.py"
-COMPILE_TIMEOUT_SECONDS = 60
+COMPILE_TIMEOUT_SECONDS = 180
 RUN_TIMEOUT_SECONDS = 5
 QEMU_COMMANDS = {
     "virt": ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-no-reboot", "-kernel"],
     "mps2-an385": ["qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic", "-no-reboot", "-kernel"],
 }
 STAGE2_ONLY = {"m5", "m6", "m7", "m8", "m9", "m10"}
+DEFAULT_JOBS = 4
 
 
 def target_command(source):
@@ -109,7 +111,9 @@ def run_trace_case(compiler, source, expected_path):
 
 def run_error_case(compiler, source, expected_path):
     expected = expected_path.read_text().strip()
-    compiled = compile_case(compiler, source, BUILD / "rejected")
+    executable = BUILD / source.relative_to(CASES).with_suffix("")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    compiled = compile_case(compiler, source, executable)
     if compiled.returncode == 0:
         return [f"expected rejection containing {expected!r}, but compilation succeeded"]
     if expected not in compiled.stderr:
@@ -117,9 +121,31 @@ def run_error_case(compiler, source, expected_path):
     return []
 
 
+def jobs_option(arguments):
+    if "-j" not in arguments:
+        return DEFAULT_JOBS
+    position = arguments.index("-j")
+    if position + 1 == len(arguments) or not arguments[position + 1].isdigit() or int(arguments[position + 1]) < 1:
+        sys.exit("-j requires a positive count")
+    jobs = int(arguments[position + 1])
+    del arguments[position:position + 2]
+    return jobs
+
+
+def check_case(compiler, source):
+    trace_path = source.with_suffix(".out")
+    error_path = source.with_suffix(".err")
+    if trace_path.exists():
+        return run_trace_case(compiler, source, trace_path)
+    if error_path.exists():
+        return run_error_case(compiler, source, error_path)
+    return ["no .out or .err file"]
+
+
 def main():
     BUILD.mkdir(parents=True, exist_ok=True)
     selected = sys.argv[1:]
+    jobs = jobs_option(selected)
     compiler = [sys.executable, str(COMPILER)]
     if "--compiler" in selected:
         position = selected.index("--compiler")
@@ -134,23 +160,16 @@ def main():
     if selected:
         sources = [s for s in sources if any(name in str(s.relative_to(CASES)) for name in selected)]
     failures = 0
-    for source in sources:
-        name = source.relative_to(CASES)
-        trace_path = source.with_suffix(".out")
-        error_path = source.with_suffix(".err")
-        if trace_path.exists():
-            report = run_trace_case(compiler, source, trace_path)
-        elif error_path.exists():
-            report = run_error_case(compiler, source, error_path)
-        else:
-            report = ["no .out or .err file"]
-        if report:
-            failures += 1
-            print(f"FAIL {name}")
-            for line in report:
-                print(f"  {line}")
-        else:
-            print(f"PASS {name}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for source, report in zip(sources, pool.map(lambda source: check_case(compiler, source), sources)):
+            name = source.relative_to(CASES)
+            if report:
+                failures += 1
+                print(f"FAIL {name}")
+                for line in report:
+                    print(f"  {line}")
+            else:
+                print(f"PASS {name}")
     print(f"{len(sources) - failures} passed, {failures} failed")
     return 1 if failures or not sources else 0
 
