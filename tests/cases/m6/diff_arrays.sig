@@ -15,7 +15,8 @@ process ARRAYS =
    | D := TAB[short(N) - short(5)]
    | E := TAB[ubyte(N) + ubyte(250)]
    | F := TAB[integer(N) * 1000000000]
-   | G := TAB[ORDER]
+   | OI := ORDER when TICK
+   | G := TAB[OI]
    | G0 := G[0]
    | G1 := G[1]
    | G2 := G[2]
@@ -36,7 +37,7 @@ process ARRAYS =
    | K0 := KK[0]
    | K1 := KK[1]
    | K2 := KK[2]
-   | SH := SHORTS[ORDER]
+   | SH := SHORTS[OI]
    | S0 := SH[2]
    | S1 := SH[3]
    | G ^= TICK
@@ -58,7 +59,7 @@ process ARRAYS =
     constant [3] integer BASE = [5, 7, 9];
     constant [4] short SHORTS = [short(-32768), short(32767), short(-1), short(7)];
     integer ZN, N;
-    [4] integer G;
+    [4] integer G, OI;
     [4] short SH;
     [1] integer I;
     [3] integer J, M, Z, SS, KK, BR;

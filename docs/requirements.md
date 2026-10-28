@@ -128,4 +128,7 @@
     - An element definition `X[I] := E` stands directly after `|` or `(|`; a labelled one is rejected.
     - `step` is a contextual name, so a signal may still be named `step`.
     - An endpoint with more indices than its array's rank is rejected.
-    - Operators on arrays (S1 X–1) wait for M10a3, so `m1/array_operator` is still rejected.
+  - Landed 2026-10-28, M10a3: operators on arrays (S1 X–1), element by element with a scalar operand applied to every element, on arithmetic, comparison, boolean, shift, conversion, `abs` and `if`; `when` and `default` on whole arrays. `m1/array_operator` became accepted. An element-wise definition is one implicit loop over the target; array `when` reads its operand's storage, and array `default` copies the block of the present operand. A declared constant index table, a constant range or a `step` range whose values fall outside the array is rejected, like a constant scalar index (D10). Narrowings:
+    - An operator on arrays is the whole definition of an array signal; `(A + 1)[0]`, `(A + 1) when C`, a partial definition `V ::= A + 1` and an element-wise definition inside `iterate` are rejected with `operator + on arrays must be the whole definition of an array signal`. Its array operands are signals or constant tables.
+    - `when`, `default`, `$`, clock operators and ranges are rejected inside an element-wise definition, and so are `syscall` and `instruction`, as inside `iterate` (D11); `load` and `store` run once per element, ordered by D2 like any other effect.
+    - An array `default` takes operands of one size and element type. `==` and `<<=` keep their whole-array meaning, and `bounds` is not extended.

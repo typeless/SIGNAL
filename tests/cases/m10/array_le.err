@@ -1,1 +1,1 @@
-operator <= expects scalar operands
+operator <<= expects scalar operands

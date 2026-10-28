@@ -35,6 +35,8 @@ M9A_MOVED = {
     "m2/input_array.sig": "accepted",
     "m2/submodel_array_input.sig": "accepted",
     "m4/lower_array_definition.sig": "accepted",
+    "m1/array_operator.sig": "accepted", "m6/diff_arrays.sig": "accepted",
+    "m2/guard_array.sig": "clock of T is undefined: its definition is a constant",
 }
 DUMP_PASS_LINE = "constant integer DUMP_PASS = 0;"
 CLOCKS_DUMP_PASS_LINE = "constant integer DUMP_PASS = 5;"
@@ -640,6 +642,17 @@ class M10aProgram:
         self.width = self.dims[0]
         self.vector = self.values[:self.width]
         self.scatter = rng.sample(range(self.width), rng.randrange(1, self.width + 1))
+        self.pairs = [(self.index_value(rng, self.dims[0]), self.index_value(rng, self.dims[-1])) for _ in range(rng.randrange(1, 4))]
+        plain = Program.__new__(Program)
+        plain.rng = rng
+        text = plain.expression(self.element, 3, inside_iterate=True).replace(" == ", " = ").replace(" <<= ", " <= ")
+        pieces = text.split("TAB[I]")
+        self.pieces = [f"({self.element}(", f") - {text})"] if len(pieces) == 1 else pieces
+        self.operands = ["V"] + [rng.choice(["V", "VC", "LO"]) for _ in self.pieces[2:]]
+
+    def pointwise(self, position):
+        operands = [name if name == "LO" or position is None else f"{name}[{position}]" for name in self.operands]
+        return self.pieces[0] + "".join(operand + piece for operand, piece in zip(operands, self.pieces[1:]))
 
     @staticmethod
     def index_value(rng, size):
@@ -660,10 +673,15 @@ class M10aProgram:
         for position, index in enumerate(self.scatter):
             restructured[index] = self.vector[position]
         reversed_element = self.vector[self.width - 1 - first] if 0 <= first < self.width else 0
-        return [*self.vector, *restructured, *self.vector[:len(self.scatter)], reversed_element]
+        picked = self.vector[:len(self.scatter)]
+        reversed_vector = self.vector[::-1]
+        target = [reversed_element if index == first else 0 for index in range(self.width)]
+        pairs = [self.element_at((row, column)) for row, column in self.pairs] if self.rank == 2 else []
+        return [*self.vector, *restructured, *picked, reversed_element, *self.vector, *picked,
+                str(self.vector == reversed_vector).lower(), "true", *reversed_vector, *self.vector[0::2], *target, *pairs]
 
     def expected(self):
-        lines = ["- - - - - - - - - -"]
+        lines = [" ".join(["-"] * (17 + int(self.rank == 2) + self.width))]
         block = len(self.values) // self.dims[0]
         for tick in range(1, TICKS + 1):
             point = [column[tick % TICKS] for column in self.indices]
@@ -709,7 +727,22 @@ class M10aProgram:
             f"L := [{', '.join(f'V[{width - 1 - position}]' for position in range(width))}]",
             "LO := L[I1]",
             "V ^= TICK",
+            "CV := V |+ Q",
+            "EV := V == L",
+            "EC := V == VC",
+            f"SR := V[{width - 1} .. 0 step -1]",
+            f"S2 := V[0 .. {width - 1} step 2]",
+            "XT[I1] := LO",
+            f"EW := {self.pointwise(None)}",
+            *[f"EWS{position} := {self.pointwise(position)}" for position in range(width)],
         ]
+        if self.rank == 2:
+            body += ["PS := PA when TICK", "PT := PB when TICK", "X2 := M[PS, PT]"]
+            declarations += [
+                f"[{len(self.pairs)}] integer PS, PT;",
+                f"constant [{len(self.pairs)}] integer PA = [{', '.join(str(row) for row, _ in self.pairs)}];",
+                f"constant [{len(self.pairs)}] integer PB = [{', '.join(str(column) for _, column in self.pairs)}];",
+            ]
         declarations += [
             f"[{width}] {self.element} V, L;",
             f"[{picked}] {self.element} Q;",
@@ -722,7 +755,11 @@ class M10aProgram:
             declarations.append(f"constant [{TICKS}] integer P{level} = [{', '.join(map(str, column))}];")
         lines = ["process M10A =", "  ( ? event START, TICK;",
                  f"    ! {self.element} A, B, C; integer D, E; {self.spellings[0 if self.rank == 1 else 1]} {self.element} F;",
-                 f"      [{self.width}] {self.element} H, RS; [{len(self.scatter)}] {self.element} G; {self.element} LO; )"]
+                 f"      [{self.width}] {self.element} H, RS; [{len(self.scatter)}] {self.element} G; {self.element} LO;",
+                 f"      [{self.width + len(self.scatter)}] {self.element} CV; boolean EV, EC; [{self.width}] {self.element} SR;",
+                 f"      [{(self.width + 1) // 2}] {self.element} S2; [{self.width}] {self.element} XT;"
+                 + (f" [{len(self.pairs)}] {self.element} X2;" if self.rank == 2 else ""),
+                 f"      [{self.width}] {self.element} EW; {self.element} {', '.join(f'EWS{position}' for position in range(self.width))}; )"]
         if machine:
             lines.append(MACHINE_PRAGMAS.rstrip("\n"))
         lines.append("  (| " + "\n   | ".join(body))
@@ -759,9 +796,20 @@ def check_m10a(compiler, seed):
             input_path.write_text("10\n" + "01\n" * TICKS)
             command = [str(executable)]
         lines, timed_out, returncode = read_trace(command, TICKS + 1, input_path)
-        if lines != expected:
-            report.append(f"{source}: trace {lines!r}, expected {expected!r}")
+        if not m10a_matches(lines, expected, program.width):
+            report.append(f"{source}: trace {lines!r}, expected {expected!r} then two equal runs of {program.width}")
     return report
+
+
+def m10a_matches(lines, expected, width):
+    if len(lines) != len(expected) or lines[:1] != expected[:1]:
+        return False
+    for line, want in zip(lines[1:], expected[1:]):
+        tokens, known = line.split(), want.split()
+        rest = tokens[len(known):]
+        if tokens[:len(known)] != known or len(rest) != 2 * width or rest[:width] != rest[width:]:
+            return False
+    return True
 
 
 def m10a(compiler, count):

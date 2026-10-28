@@ -71,10 +71,14 @@ OPS = [
     "SLOT", "POW", "AFFINE_SAMPLE", "AFFINE_RELATION", "AFFINE_UNSAMPLE", "STATE", "FLAT", "SQUARE_FLAT", "SLICE",
     "DIM_CALL", "SIZE_CALL", "SIZE_ONE_CALL", "BOUNDS_CALL", "DIM", "DIM_SIZE", "BOUNDS", "BOUNDS_PAIR", "RECOVER_SQUARE_FLAT",
     "ENUM", "DEFAULTS", "PUT", "SPAN", "STEP", "TARGET_INDEX", "RESTRUCTURE", "SQUARE_FLAT_TARGET", "CONCAT", "ARRAY_EQ", "RANGE_TABLE", "FLATV",
+    "EACH", "EACH_STORE",
 ]
 MONOCHRONOUS = {
     "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR",
-    "CONVERT", "ELEMENT", "GATHER", "PAIR", "NEXT", "PREV", "ITER", "IF", "BRANCH", "ARG", "RANGE", "FLAT", "SLICE", "BOUNDS", "BOUNDS_PAIR", "DIM", "DIM_SIZE", "PUT", "SPAN", "TABLE", "RESTRUCTURE", "CONCAT", "ARRAY_EQ", "RANGE_TABLE", "FLATV",
+    "CONVERT", "ELEMENT", "GATHER", "PAIR", "NEXT", "PREV", "ITER", "IF", "BRANCH", "ARG", "RANGE", "FLAT", "SLICE", "BOUNDS", "BOUNDS_PAIR", "DIM", "DIM_SIZE", "PUT", "SPAN", "TABLE", "RESTRUCTURE", "CONCAT", "ARRAY_EQ", "RANGE_TABLE", "FLATV", "EACH", "EACH_STORE",
+}
+POINTWISE = {
+    "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR", "IF", "BRANCH",
 }
 OPENERS = {"CALL", "OPEN_PAREN", "OPEN_SQUARE", "IF_MARK", "THEN_MARK", "OPEN_COLON", "OPEN_SLASH_COLON", "ENUM"}
 BRACKETED = {"OPEN_SQUARE", "OPEN_COLON", "OPEN_SLASH_COLON", "ENUM"}
@@ -524,6 +528,10 @@ TEMPLATES = [
     ("EXTRACT_INDEX", "the index arrays of an extraction must have one size and one integer type", []),
     ("CONCAT_TYPE", "|+ expects two arrays of one element type", []),
     ("RESTRUCTURE_SHAPE", "a restructuration needs an integer index array and a value array of one size", []),
+    ("EXTENSION_SHAPE", "operator # expects arrays of one shape", ["FRAGMENT"]),
+    ("NOT_IN_EXTENSION", "operator # is not allowed inside an operator on arrays", ["FRAGMENT"]),
+    ("EXTENSION_WHOLE", "operator # on arrays must be the whole definition of an array signal", ["FRAGMENT"]),
+    ("EFFECT_IN_EXTENSION", "# is not allowed inside an operator on arrays", ["NAME"]),
 ]
 CAPACITY_TABLES = [
     "SRC", "TOKENS", "NAMES", "TYPES", "VALUES", "MODELS", "SIGNALS", "CONSTANTS", "TABLES", "EQUATIONS", "ENTRIES",
@@ -1200,6 +1208,12 @@ EMIT_TEMPLATES = [
         place("local2"), emit("MOVZ_X", 9), place("local3"), emit("store_indexed_element", 9, 14, 15),
         emit("ADD_X_IMM", 15, 15, 1), li(17, "size_row"), emit("SUBS_X", XZR, 15, 17), emit("B_COND", a3=CC["LO"], to=label("local1")),
     ], False)),
+    ("ROW_EACH_STORE", gated([address(12, "key_owner"), operand(9, "left"), emit("store_indexed_element", 9, 12, 23)], False)),
+    ("ROW_DEFAULT_ARRAY", gated([
+        ld(11, ("CLK", "clock_left"), UINTEGER_TYPE), emit("CBZ_W", 11, to=label("local1")),
+        *copy_words("key_left", "key_owner", "words_row", "local2"), emit("B", to=label("local3")), place("local1"),
+        *copy_words("key_right", "key_owner", "words_row", "local4"), place("local3"),
+    ], False)),
     ("ROW_CONST", gated([operand(9, "row")])),
     ("ROW_DELAY", gated([ld(9, ("MEM", "row"), "type_row")])),
     ("ROW_STATE", gated([ld(9, ("MEM", "value_row"), "type_row")])),
@@ -1596,6 +1610,12 @@ EMIT_TEMPLATES += [
         store_at(0, "element_row", 8, 9), emit("ADDW_T", 9, 9, 1), li1(LR, "size_row"), compare_registers(9, LR),
         *branch_if("LO", "local1"),
     ], False)),
+    ("ROW_EACH_STORE_THUMB", gated_thumb([address(6, "key_owner"), operand2(0, "left"), store_at(0, "element_row", 6, 12)], False)),
+    ("ROW_DEFAULT_ARRAY_THUMB", gated_thumb([
+        ld1(4, ("CLK", "clock_left"), UINTEGER_TYPE), compare(4, 0), *branch_if("EQ", "local1"),
+        *copy_pairs("key_left", "key_owner", "words_row", "local2"), branch("local3"), place("local1"),
+        *copy_pairs("key_right", "key_owner", "words_row", "local4"), place("local3"),
+    ], False)),
     ("ROW_CONST_THUMB", gated_thumb([operand2(0, "row")])),
     ("ROW_DELAY_THUMB", gated_thumb([ld2(0, ("MEM", "row"), "type_row")])),
     ("ROW_STATE_THUMB", gated_thumb([ld2(0, ("MEM", "value_row"), "type_row")])),
@@ -1987,6 +2007,7 @@ def build():
         integer(f"OP_{op}", index)
     table("OP_FRAGMENT", "short", op_ids)
     table("OP_IS_OPENER", "short", [int(op in OPENERS) for op in OPS])
+    table("OP_POINTWISE", "short", [int(op in POINTWISE) for op in OPS])
     table("OP_ARITY", "short", [0 if op in LEAVES else 1 if op in UNARY else 2 for op in OPS])
     table("OP_MONOCHRONOUS", "short", [int(op in MONOCHRONOUS) for op in OPS])
     table("OP_BRACKETED", "short", [int(op in BRACKETED) for op in OPS])

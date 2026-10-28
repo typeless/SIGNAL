@@ -1,0 +1,4 @@
+- - - - -
+1 1 2 -1 false false false 0 1 -2 32766 7 8 9
+2 4 6 -4 false true false 0 0 -4 32765 2 3 -2
+3 9 12 -9 true true false 0 -1 -6 32764 7 8 9

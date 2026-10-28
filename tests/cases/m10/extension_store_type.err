@@ -1,0 +1,1 @@
+signal C has type [3] short but its definition has type integer
