@@ -8,8 +8,8 @@ SOURCE = Path(__file__).resolve().parent / "sigc.sig"
 ANCHOR = "    type ARGS = external;\n"
 
 SEED_WORDS = [
-    "event", "boolean", "short", "integer", "long", "ubyte", "ushort", "uinteger", "ulong", "pointer",
-    "load", "store", "syscall", "instruction", "abs", "left_tt",
+    "event", "boolean", "short", "integer", "long", "ubyte", "ushort", "uinteger", "ulong", "pointer", "char", "string",
+    "load", "store", "syscall", "instruction", "read", "write", "writeString", "abs", "left_tt",
     "Automaton_Initial_State", "Automaton_Transition", "Automaton_SetClock", "Automaton_Clock",
     "Automaton_SetCurrentStateId", "Automaton_IsIn",
     "clock'", "state'", "cur'", "on'",
@@ -45,6 +45,7 @@ NAME_CONSTANTS = {
     "dim": "N_DIM", "size": "N_SIZE", "bounds": "N_BOUNDS", "step": "N_STEP",
     "window": "N_WINDOW", "seq'": "N_SEQ_MARK", "tup'": "N_TUPLE_MARK",
     "struct": "N_STRUCT", "bundle": "N_BUNDLE",
+    "string": "N_STRING", "read": "N_READ", "write": "N_WRITE", "writeString": "N_WRITE_STRING",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -58,9 +59,9 @@ SYMBOLS = [
     ("|*", "BAR_STAR"), ("**", "STAR_STAR"), ("^<", "CLOCK_LT"), ("^>", "CLOCK_GT"), ("^#", "CLOCK_SHARP"),
     (":=:", "IDENTITY"), ("::=", "PARTIAL_DEFINE"), ("|+", "BAR_PLUS"), ("*.", "STAR_DOT"), (".", "DOT"),
 ]
-SYMBOL_BASE = 85
-OTHER_CODES = [("EOF", 0), ("NAME", 135), ("NUMBER", 136), ("STRING", 137)]
-CODE_LIMIT = 138
+SYMBOL_BASE = 90
+OTHER_CODES = [("EOF", 0), ("NAME", 140), ("NUMBER", 141), ("STRING", 142)]
+CODE_LIMIT = 143
 ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34, "'": 39, "?": 63, "%": 37}
 
 OPS = [
@@ -254,12 +255,12 @@ PREFIX = [
 MODEL_CLASSES = ["process", "procedure", "node", "function", "automaton", "action"]
 ATTRIBUTES = ["safe", "deterministic", "unsafe"]
 
-TYPE_KINDS = ["EVENT", "BOOLEAN", "INT", "POINTER", "ENUM", "ARRAY", "EXTERNAL"]
-BUILTIN_KIND = [0, 1, 2, 2, 2, 2, 2, 2, 2, 3]
-BUILTIN_BYTES = [1, 1, 2, 4, 8, 1, 2, 4, 8, 8]
-BUILTIN_SIGNED = [0, 0, 1, 1, 1, 0, 0, 0, 0, 0]
+TYPE_KINDS = ["EVENT", "BOOLEAN", "INT", "POINTER", "ENUM", "ARRAY", "EXTERNAL", "STRING", "CHAR"]
+BUILTIN_KIND = [0, 1, 2, 2, 2, 2, 2, 2, 2, 3, 8, 7]
+BUILTIN_BYTES = [1, 1, 2, 4, 8, 1, 2, 4, 8, 8, 1, 8]
+BUILTIN_SIGNED = [0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]
 ROLES = ["input", "output", "local"]
-TOKEN_KIND_NAMES = ["keyword", "name", "symbol", "number", "string", "eof"]
+TOKEN_KIND_NAMES = ["keyword", "name", "symbol", "number", "string", "eof", "none", "character"]
 TOKEN_SECTIONS = ["kinds ", "texts ", "lines ", "columns "]
 
 COLUMNS = [
@@ -487,16 +488,27 @@ TEMPLATES = [
     ("PRAGMA_TWICE", "input signal # is named by two pragmas", ["NAME"]),
     ("INPUT_UNNAMED", "input signal # must be named by an Interrupt or Boot pragma", ["NAME"]),
     ("VIRT_ROOT", "the root clock of # is not the clock of an Interrupt or Boot input", ["CLOCK"]),
-    ("SYSCALL_VIRT", "syscall is not available on QEMU virt", []),
+    ("SYSCALL_VIRT", "# is not available on QEMU virt", ["NAME"]),
     ("BOOT_MISSING", "a program with Interrupt pragmas needs a Boot pragma to enable them", []),
     ("INPUT_SHARED", "input signals # and # share one root clock; each Interrupt or Boot input needs its own", ["NAME", "NAME"]),
     ("MACHINE_UNKNOWN", "machine # is not supported; use mps2-an385", ["TOKEN"]),
     ("MACHINE_TWICE", "pragma Machine is used twice", []),
     ("INTERRUPT_NUMBER_MPS2", "interrupt number # must be a decimal from 15 to 47", ["TOKEN"]),
-    ("SYSCALL_MPS2", "syscall is not available on mps2-an385", []),
+    ("SYSCALL_MPS2", "# is not available on mps2-an385", ["NAME"]),
     ("IMAGE_SIZE", "the program needs more than the 4 MiB of RAM on mps2-an385", []),
     ("ESCAPE", "unknown escape '#' in a string", ["CHARACTER"]),
     ("ESCAPE_RANGE", "escape value # does not fit in a byte", ["NUMBER"]),
+    ("CHARACTER_COUNT", "character constant must hold one character", []),
+    ("CHARACTER_RANGE", "character constant above U+00FF", []),
+    ("STRING_LONG", "string constant longer than 255 bytes", []),
+    ("STRING_ELEMENT", "string cannot be an array element or a field", []),
+    ("STRING_INTERFACE", "string # cannot be an input or output of the top model; use read or write", ["NAME"]),
+    ("IO_STRING", "input 1 of # must be a string, found #", ["NAME", "TYPE"]),
+    ("WRITE_VALUE", "input 2 of write must be a boolean, an integer, a char or a string, found #", ["TYPE"]),
+    ("READ_TYPE", "the output of read must be a boolean, an integer, a char or a string, found #", ["TYPE"]),
+    ("STRING_VALUE", "a string value can only be the whole definition of a signal", []),
+    ("STRING_BRANCHES", "only one branch of an if can build a string value; define the other as a signal", []),
+    ("CASE_STRING", "a case value cannot be a string literal; name it with a constant", []),
     ("HIDES_OUTPUT", "signal # is an # of # and cannot be hidden", ["NAME", "FRAGMENT", "NAME"]),
     ("MODEL_IN_INNER_WHERE", "a model cannot be declared in an inner where", []),
     ("INIT_UNUSED", "initial value of # is unused: # is not defined by $, cell or var", ["NAME", "NAME"]),
@@ -999,7 +1011,7 @@ OP_CONDITIONS = {
 OP_SHIFTS = {"SHL": "LSLV_X", "SHR": "LSRV_X"}
 GLOBAL_LABELS = [
     "malformed", "reserve_failed", "read_value", "put_int", "put_uint", "put_bool", "step", "read_done", "wait", "complete",
-    "divide",
+    "divide", "put_text", "put_char", "read_line", "read_number", "read_malformed",
 ]
 EMIT_SOURCES = [
     "row", "left", "right", "right_left", "right_right", "param", "value_row",
@@ -1017,13 +1029,15 @@ EMIT_SOURCES = [
 ] + GLOBAL_LABELS + [
     "copy_next", "copy_end", "key_row", "key_right_left", "key_right_right", "key_mem", "key_init", "span", "count_mem",
     "count_shift", "load_indexed_scalar", "store_indexed_scalar", "load_indexed_init", "scalar_row", "init_element",
-    "iter_stride", "iter_size", "iter_start", "loop_inner", "size_right",
+    "iter_stride", "iter_size", "iter_start", "loop_inner", "size_right", "put_param", "key_arg0", "key_arg1",
 ]
 EMIT_PREDICATES = [
     "always", "flag", "has_arg1", "has_arg2", "has_arg3", "has_arg4", "has_arg5", "has_arg6", "right_loads",
     "counted", "uncounted", "bounded", "keys_differ", "mul", "not_mul", "compare_equal", "compare_direct", "compare_swapped",
     "shift_left", "shift_right", "nested_counted", "empty", "iter_divides", "iter_whole", "iter_wraps", "iter_offset",
-    "iter_plain", "iter_derived", "iter_derived_whole",
+    "iter_plain", "iter_derived", "iter_derived_whole", "compare_negated",
+    "writes_string", "writes_char", "writes_number", "reads_string", "reads_scalar", "reads_char", "reads_number",
+    "reads_boolean",
 ]
 MICRO_KINDS = ["EMIT", "LI", "LOAD", "STORE", "OPERAND", "ADDRESS", "PLACE", "LOAD_AT", "STORE_AT"]
 TARGET_KINDS = ["NONE", "LABEL", "TABLE", "WINDOW", "SIG", "MEM", "CLK", "IN", "OUT", "MALFORMED_TEXT", "RESERVE_TEXT", "TAIL", "STACK"]
@@ -1036,6 +1050,7 @@ EMIT_TEXT = "presence input malformed at step memory reservation failed"
 UNIT_PHASES = [
     "PROLOGUE", "RESERVE", "WINDOW", "SEED_MEMORY", "JUMP_STEP", "BOOT", "WAIT", "DISPATCH", "WAIT_TAIL", "RESERVE_FAILED", "READ_VALUE",
     "STEP", "READ_LINE", "VALUE_INPUT", "READ_TAIL", "ORDER", "DELAY", "LAG", "OUTPUT_HEAD", "OUTPUT", "OUTPUT_TAIL", "FINISH",
+    "PUT_TEXT", "READ_INPUT", "READ_NUMBER",
 ]
 VIRT_SUFFIX = "_VIRT"
 VIRT_BASE = 0x40000000
@@ -1124,6 +1139,19 @@ PUT_NUMBER = [
     emit("STRB_W_POST", 14, 11, 1), emit("ORR_X", 9, XZR, 13), emit("CBNZ_X", 9, to=label("local0")), place("local1"),
     emit("LDRB_W_PRE", 14, 11, -1), emit("STRB_W_POST", 14, 20, 1), emit("SUBS_X", XZR, 11, 15),
     emit("B_COND", a3=CC["NE"], to=label("local1")), emit("ADD_X_IMM", SP, SP, 32), emit("RET"),
+]
+
+
+def put_bytes(text):
+    return [step_row for byte in text.encode() for step_row in (emit("MOVZ_W", 9, 0, byte), emit("STRB_W_POST", 9, 20, 1))]
+
+
+PUT_CHAR = [
+    place("put_char"), emit("SUBS_X_IMM", XZR, 0, 128), emit("B_COND", a3=CC["HS"], to=label("local4")),
+    emit("STRB_W_POST", 0, 20, 1), emit("RET"), place("local4"), emit("MOVZ_X", 10, 0, 6), emit("LSRV_X", 11, 0, 10),
+    emit("MOVZ_X", 12, 0, 0xC0), emit("ORR_X", 11, 11, 12), emit("STRB_W_POST", 11, 20, 1), emit("MOVZ_X", 12, 0, 63),
+    emit("AND_X", 11, 0, 12), emit("MOVZ_X", 12, 0, 0x80), emit("ORR_X", 11, 11, 12), emit("STRB_W_POST", 11, 20, 1),
+    emit("RET"),
 ]
 
 
@@ -1235,6 +1263,44 @@ EMIT_TEMPLATES = [
         operand(16, "arg0"), emit("SVC_80"), emit("CSNEG_X", 9, 0, 0, CC["HS"] ^ 1),
     ])),
     ("ROW_INSTRUCTION", gated([operand(0, "arg0"), emit("WORD", a2="param"), emit("ORR_X", 9, XZR, 0)])),
+    ("ROW_WRITE", gated([
+        address(1, "key_arg0"), emit("LDRB_W", 2, 1, 255), emit("BL", to=label("put_text")),
+        address(1, "key_arg1", "writes_string"), emit("LDRB_W", 2, 1, 255, when="writes_string"),
+        emit("BL", to=label("put_text"), when="writes_string"), emit("SUB_X_IMM", SP, SP, 32), emit("ADD_X_IMM", 20, SP, 0),
+        operand(0, "arg1", "writes_number"), emit("BL", to=label("put_param"), when="writes_number"),
+        operand(0, "arg1", "writes_char"), emit("BL", to=label("put_char"), when="writes_char"),
+        emit("MOVZ_W", 10, 0, 10), emit("STRB_W_POST", 10, 20, 1), emit("ADD_X_IMM", 1, SP, 0), emit("SUB_X", 2, 20, 1),
+        emit("BL", to=label("put_text")), emit("ADD_X_IMM", SP, SP, 32),
+    ], False)),
+    ("ROW_READ", gated([
+        address(1, "key_arg0"), emit("LDRB_W", 2, 1, 255), emit("BL", to=label("put_text")),
+        address(13, "key_owner", "reads_string"), emit("MOVZ_X", 15, 0, 32, when="reads_string"), place("local1", "reads_string"),
+        emit("STR_X_POST", XZR, 13, 8, when="reads_string"), emit("SUBS_X_IMM", 15, 15, 1, when="reads_string"),
+        emit("B_COND", a3=CC["NE"], to=label("local1"), when="reads_string"), address(1, "key_owner", "reads_string"),
+        emit("MOVZ_X", 2, 0, 255, when="reads_string"), emit("BL", to=label("read_line"), when="reads_string"),
+        address(1, "key_owner", "reads_string"), emit("STRB_W", 0, 1, 255, when="reads_string"),
+        emit("SUB_X_IMM", SP, SP, 32, when="reads_scalar"), emit("ADD_X_IMM", 1, SP, 0, when="reads_scalar"),
+        emit("MOVZ_X", 2, 0, 21, when="reads_number"), emit("MOVZ_X", 2, 0, 2, when="reads_char"),
+        emit("BL", to=label("read_line"), when="reads_scalar"), emit("ADD_X_IMM", 1, SP, 0, when="reads_scalar"),
+        emit("BL", to=label("read_number"), when="reads_number"), emit("ORR_X", 9, XZR, 0, when="reads_number"),
+        emit("SUBS_X_IMM", XZR, 9, 1, when="reads_boolean"),
+        emit("B_COND", a3=CC["HI"], to=label("read_malformed"), when="reads_boolean"),
+        emit("LDRB_W", 9, 1, 0, when="reads_char"), emit("SUBS_X_IMM", XZR, 0, 1, when="reads_char"),
+        emit("B_COND", a3=CC["NE"], to=label("local2"), when="reads_char"), emit("SUBS_X_IMM", XZR, 9, 128, when="reads_char"),
+        emit("B_COND", a3=CC["HS"], to=label("read_malformed"), when="reads_char"),
+        emit("B", to=label("local3"), when="reads_char"), place("local2", "reads_char"),
+        emit("SUBS_X_IMM", XZR, 0, 2, when="reads_char"), emit("B_COND", a3=CC["NE"], to=label("read_malformed"), when="reads_char"),
+        emit("SUBS_X_IMM", XZR, 9, 0xC2, when="reads_char"), emit("B_COND", a3=CC["LO"], to=label("read_malformed"), when="reads_char"),
+        emit("SUBS_X_IMM", XZR, 9, 0xC3, when="reads_char"), emit("B_COND", a3=CC["HI"], to=label("read_malformed"), when="reads_char"),
+        emit("LDRB_W", 10, 1, 1, when="reads_char"), emit("SUBS_X_IMM", XZR, 10, 0x80, when="reads_char"),
+        emit("B_COND", a3=CC["LO"], to=label("read_malformed"), when="reads_char"),
+        emit("SUBS_X_IMM", XZR, 10, 0xBF, when="reads_char"), emit("B_COND", a3=CC["HI"], to=label("read_malformed"), when="reads_char"),
+        emit("MOVZ_X", 11, 0, 0x1F, when="reads_char"), emit("AND_X", 9, 9, 11, when="reads_char"),
+        emit("MOVZ_X", 11, 0, 6, when="reads_char"), emit("LSLV_X", 9, 9, 11, when="reads_char"),
+        emit("MOVZ_X", 11, 0, 0x3F, when="reads_char"), emit("AND_X", 10, 10, 11, when="reads_char"),
+        emit("ORR_X", 9, 9, 10, when="reads_char"), place("local3", "reads_char"),
+        emit("ADD_X_IMM", SP, SP, 32, when="reads_scalar"), st(9, ("SIG", "row"), "type_row", "reads_scalar"),
+    ], False)),
     ("ROW_ITER_RANGE", gated([
         emit("ORR_X", 9, XZR, 23, when="iter_whole"), li(10, "iter_stride", "iter_divides"),
         emit("UDIV_X", 9, 23, 10, when="iter_divides"), li(10, "iter_size", "iter_wraps"),
@@ -1297,8 +1363,22 @@ EMIT_TEMPLATES = [
         emit("load_indexed_index", 10, 12, 15), emit("load_indexed_index", 11, 13, 15), emit("SUBS_X", XZR, 10, 11),
         emit("B_COND", a3=CC["NE"], to=label("local2")), emit("ADD_X_IMM", 15, 15, 1), emit("SUBS_X", XZR, 15, 17),
         emit("B_COND", a3=CC["LO"], to=label("local1")), emit("MOVZ_X", 9, 0, 1), emit("B", to=label("local3")),
-        place("local2"), emit("MOVZ_X", 9), place("local3"),
+        place("local2"), emit("MOVZ_X", 9), place("local3"), emit("EOR_X_ONE", 9, 9, when="compare_negated"),
     ])),
+    ("ROW_ARRAY_LT", gated([
+        address(12, "key_left", "compare_direct"), address(13, "key_right", "compare_direct"),
+        address(12, "key_right", "compare_swapped"), address(13, "key_left", "compare_swapped"), emit("MOVZ_X", 15),
+        li(17, "size_left"), place("local1"), emit("load_indexed_index", 10, 12, 15), emit("load_indexed_index", 11, 13, 15),
+        emit("SUBS_X", XZR, 10, 11), emit("B_COND", a3=CC["NE"], to=label("local2")), emit("ADD_X_IMM", 15, 15, 1),
+        emit("SUBS_X", XZR, 15, 17), emit("B_COND", a3=CC["LO"], to=label("local1")), emit("MOVZ_X", 9),
+        emit("B", to=label("local3")), place("local2"), emit("MOVZ_X", 9), emit("B_COND", a3=CC["HS"], to=label("local3")),
+        emit("MOVZ_X", 9, 0, 1), place("local3"), emit("EOR_X_ONE", 9, 9, when="compare_negated"),
+    ])),
+    ("ROW_IF_BLOCK", gated([
+        operand(9, "left"), emit("CBZ_W", 9, to=label("local1")),
+        *copy_words("key_right_left", "key_owner", "words_row", "local2"), emit("B", to=label("local3")), place("local1"),
+        *copy_words("key_right_right", "key_owner", "words_row", "local4"), place("local3"),
+    ], False)),
     ("ROW_GATHER2", gated([
         address(12, "key_left"), address(13, "key_right_left"), address(16, "key_right_right"), address(14, "key_owner"),
         emit("MOVZ_X", 15), place("local1"), emit("load_indexed_index", 10, 13, 15), emit("load_indexed_index", 11, 16, 15),
@@ -1406,12 +1486,37 @@ EMIT_TEMPLATES = [
     ("CYCLE_JUMP_FALSE", [emit("CBNZ_X", 9, to=label("copy_next"))]),
     ("CYCLE_CLOSE", [emit("B", to=label("copy_end")), place("copy_next")]),
     ("CYCLE_DONE", [place("copy_end")]),
+    ("PUT_TEXT", [place("put_text"), emit("MOVZ_X", 0, 0, 1), *system_call(4), emit("RET"), *PUT_CHAR]),
+    ("READ_INPUT", [
+        place("read_line"), emit("ORR_X", 20, XZR, 1), emit("ORR_X", 28, XZR, 2), emit("MOVZ_X", 19),
+        emit("SUB_X_IMM", SP, SP, 16), place("local0"), emit("MOVZ_X", 0), emit("ADD_X_IMM", 1, SP, 0), emit("MOVZ_X", 2, 0, 1),
+        *system_call(3), emit("B_COND", a3=CC["HS"], to=label("read_malformed")), emit("CBNZ_X", 0, to=label("local1")),
+        emit("CBNZ_X", 19, to=label("read_malformed")), emit("MOVZ_X", 0), *system_call(1), place("local1"),
+        emit("LDRB_W", 9, SP, 0), emit("SUBS_W_IMM", XZR, 9, 10), emit("B_COND", a3=CC["EQ"], to=label("local2")),
+        emit("SUBS_X", XZR, 19, 28), emit("B_COND", a3=CC["HS"], to=label("read_malformed")), emit("STRB_W_REG", 9, 20, 19),
+        emit("ADD_X_IMM", 19, 19, 1), emit("B", to=label("local0")), place("local2"), emit("ADD_X_IMM", SP, SP, 16),
+        emit("ORR_X", 0, XZR, 19), emit("RET"),
+        place("read_malformed"), emit("SUB_X_IMM", SP, SP, 64), emit("ADD_X_IMM", 20, SP, 0),
+        *put_bytes("read input malformed at step "), emit("ORR_X", 0, XZR, 22), emit("BL", to=label("put_int")),
+        emit("MOVZ_W", 10, 0, 10), emit("STRB_W_POST", 10, 20, 1), emit("MOVZ_X", 0, 0, 2), emit("ADD_X_IMM", 1, SP, 0),
+        emit("SUB_X", 2, 20, 1), *system_call(4), emit("MOVZ_X", 0, 0, 2), *system_call(1),
+    ]),
+    ("READ_NUMBER", [
+        place("read_number"), emit("ORR_X", 13, XZR, 1), emit("ORR_X", 14, XZR, 0), emit("MOVZ_X", 15), emit("MOVZ_X", 11),
+        emit("CBZ_X", 14, to=label("read_malformed")), emit("LDRB_W_REG", 9, 13, 15), emit("SUBS_W_IMM", XZR, 9, 45),
+        emit("B_COND", a3=CC["NE"], to=label("local0")), emit("MOVZ_X", 11, 0, 1), emit("ADD_X_IMM", 15, 15, 1),
+        place("local0"), emit("MOVZ_X", 0), emit("MOVZ_X", 12), emit("MOVZ_X", 10, 0, 10), place("local1"),
+        emit("SUBS_X", XZR, 15, 14), emit("B_COND", a3=CC["HS"], to=label("local2")), emit("LDRB_W_REG", 9, 13, 15),
+        emit("SUB_W_IMM", 9, 9, 48), emit("SUBS_W_IMM", XZR, 9, 9), emit("B_COND", a3=CC["HI"], to=label("read_malformed")),
+        emit("UMULH_X", 16, 0, 10), emit("CBNZ_X", 16, to=label("read_malformed")), emit("MUL_X", 0, 0, 10),
+        emit("ADDS_X", 0, 0, 9), emit("B_COND", a3=CC["HS"], to=label("read_malformed")), emit("ADD_X_IMM", 15, 15, 1),
+        emit("ADD_X_IMM", 12, 12, 1), emit("B", to=label("local1")), place("local2"),
+        emit("CBZ_X", 12, to=label("read_malformed")), emit("SUBS_X_IMM", XZR, 12, 20),
+        emit("B_COND", a3=CC["HI"], to=label("read_malformed")), emit("CBZ_X", 11, to=label("local3")), emit("SUB_X", 0, XZR, 0),
+        place("local3"), emit("RET"),
+    ]),
 ]
 
-
-
-def put_bytes(text):
-    return [step_row for byte in text.encode() for step_row in (emit("MOVZ_W", 9, 0, byte), emit("STRB_W_POST", 9, 20, 1))]
 
 
 EMIT_TEMPLATES += [
@@ -1441,6 +1546,11 @@ EMIT_TEMPLATES += [
         emit("ADD_X_IMM", 1, 1, to=("OUT", 0)), emit("SUB_X", 2, 20, 1), emit("MOVZ_X", 9, 0, UART_PAGE, 1), emit("MOVZ_X", 11),
         place("local0"), emit("LDRB_W_REG", 10, 1, 11), emit("STR_W", 10, 9, 0), emit("ADD_X_IMM", 11, 11, 1),
         emit("SUBS_X", XZR, 11, 2), emit("B_COND", a3=CC["NE"], to=label("local0")),
+    ]),
+    ("PUT_TEXT_VIRT", [
+        place("put_text"), emit("MOVZ_X", 9, 0, UART_PAGE, 1), emit("MOVZ_X", 11), place("local1"), emit("SUBS_X", XZR, 11, 2),
+        emit("B_COND", a3=CC["HS"], to=label("local2")), emit("LDRB_W_REG", 10, 1, 11), emit("STR_W", 10, 9, 0),
+        emit("ADD_X_IMM", 11, 11, 1), emit("B", to=label("local1")), place("local2"), emit("RET"), *PUT_CHAR,
     ]),
     ("FINISH_VIRT", [
         emit("B", to=label("complete")), *PUT_NUMBER,
@@ -1740,8 +1850,21 @@ EMIT_TEMPLATES += [
         load_at(2, "index_element", 7, 9), compare_registers(0, 2), *branch_if("NE", "local2"), compare_registers(1, 3),
         *branch_if("NE", "local2"), emit("ADDW_T", 9, 9, 1), li1(LR, "size_left"), compare_registers(9, LR),
         *branch_if("LO", "local1"), movw(0, 1), movw(1, 0), branch("local3"), place("local2"), movw(0, 0), movw(1, 0),
-        place("local3"),
+        place("local3"), emit("EOR_IMM_T", 0, 0, 1, when="compare_negated"),
     ])),
+    ("ROW_ARRAY_LT_THUMB", gated_thumb([
+        address(6, "key_left", "compare_direct"), address(7, "key_right", "compare_direct"),
+        address(6, "key_right", "compare_swapped"), address(7, "key_left", "compare_swapped"), movw(9, 0), place("local1"),
+        load_at(0, "index_element", 6, 9), load_at(2, "index_element", 7, 9), compare_registers(0, 2),
+        *branch_if("NE", "local2"), emit("ADDW_T", 9, 9, 1), li1(LR, "size_left"), compare_registers(9, LR),
+        *branch_if("LO", "local1"), movw(0, 0), movw(1, 0), branch("local3"), place("local2"), movw(0, 0), movw(1, 0),
+        *branch_if("HS", "local3"), movw(0, 1), place("local3"), emit("EOR_IMM_T", 0, 0, 1, when="compare_negated"),
+    ])),
+    ("ROW_IF_BLOCK_THUMB", gated_thumb([
+        operand1(0, "left"), compare(0, 0), *branch_if("EQ", "local1"),
+        *copy_pairs("key_right_left", "key_owner", "words_row", "local2"), branch("local3"), place("local1"),
+        *copy_pairs("key_right_right", "key_owner", "words_row", "local4"), place("local3"),
+    ], False)),
     ("ROW_GATHER2_THUMB", gated_thumb([
         address(6, "key_left"), address(7, "key_right_left"), address(8, "key_owner"), movw(9, 0), place("local1"),
         load_at(2, "index_element", 7, 9), address(5, "key_right_right"), load_at(4, "index_element", 5, 9),
@@ -1859,6 +1982,21 @@ EMIT_TEMPLATES += [
     ("CYCLE_JUMP_FALSE_THUMB", [compare(0, 0), *branch_if("NE", "copy_next")]),
     ("CYCLE_CLOSE_THUMB", [branch("copy_end"), place("copy_next")]),
     ("CYCLE_DONE_THUMB", [place("copy_end")]),
+    ("PUT_TEXT_THUMB", [
+        place("put_text"), *literal(7, UART0), place("local1"), compare(2, 0), *branch_if("EQ", "local2"),
+        emit("LDRB_POST_T", 3, 6, 1), emit("STR_T", 3, 7, 0), emit("SUBS_IMM_T", 2, 2, 1), branch("local1"), place("local2"),
+        emit("BX_LR_T"), place("put_char"), compare(0, 128), *branch_if("HS", "local4"), put_byte(0), emit("BX_LR_T"),
+        place("local4"), emit("LSR_IMM_T", 2, 0, 6), emit("ORR_IMM_T", 2, 2, 0xC0), put_byte(2), movw(3, 63),
+        emit("AND_T", 2, 0, 3), emit("ORR_IMM_T", 2, 2, 0x80), put_byte(2), emit("BX_LR_T"),
+    ]),
+    ("ROW_WRITE_THUMB", gated_thumb([
+        address(6, "key_arg0"), emit("LDRB_T", 2, 6, 255), emit("BL_T", to=label("put_text")),
+        address(6, "key_arg1", "writes_string"), emit("LDRB_T", 2, 6, 255, when="writes_string"),
+        emit("BL_T", to=label("put_text"), when="writes_string"), *absolute(10, ("OUT", 0)),
+        operand2(0, "arg1", "writes_number"), emit("BL_T", to=label("put_param"), when="writes_number"),
+        operand1(0, "arg1", "writes_char"), emit("BL_T", to=label("put_char"), when="writes_char"),
+        movw(2, 10), put_byte(2), *absolute(6, ("OUT", 0)), emit("SUBS_T", 2, 10, 6), emit("BL_T", to=label("put_text")),
+    ], False)),
 ]
 EMIT_TEMPLATES += [
     ("ROW_FLAT", gated([
@@ -2564,7 +2702,7 @@ def build():
         thumb_name = base + THUMB_SUFFIX
         thumb_template.append(template_names.index(thumb_name) if thumb_name in template_names
                               else template_names.index(name) if name.endswith(THUMB_SUFFIX) else -1)
-    assert all(name + THUMB_SUFFIX in template_names for name in template_names if name.startswith("ROW_") and name != "ROW_SYSCALL"
+    assert all(name + THUMB_SUFFIX in template_names for name in template_names if name.startswith("ROW_") and name not in ("ROW_SYSCALL", "ROW_READ")
                and not name.endswith(THUMB_SUFFIX))
     table("THUMB_TEMPLATE", "integer", thumb_template)
     table("THUMB_LOAD_FORM", "integer", [FORMS.index(THUMB_LOAD_FORMS[key]) if key in THUMB_LOAD_FORMS else 0

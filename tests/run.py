@@ -20,7 +20,7 @@ QEMU_COMMANDS = {
     "virt": ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-no-reboot", "-kernel"],
     "mps2-an385": ["qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic", "-no-reboot", "-kernel"],
 }
-STAGE2_ONLY = {"m5", "m6", "m7", "m8", "m9", "m10"}
+STAGE2_ONLY = {"m5", "m6", "m7", "m8", "m9", "m10", "m11"}
 DEFAULT_JOBS = 4
 PEAK_RSS_TABLE = BUILD / "peak_rss.tsv"
 
@@ -59,6 +59,11 @@ def compile_case(compiler, source, executable, timeout=COMPILE_TIMEOUT_SECONDS):
 
 
 def read_trace(command, line_count, input_path):
+    lines, timed_out, returncode = read_trace_bytes(command, line_count, input_path)
+    return [line.decode(errors="replace") for line in lines], timed_out, returncode
+
+
+def read_trace_bytes(command, line_count, input_path):
     stdin = open(input_path, "rb") if input_path.exists() else subprocess.DEVNULL
     process = subprocess.Popen(command, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     selector = selectors.DefaultSelector()
@@ -80,8 +85,7 @@ def read_trace(command, line_count, input_path):
     selector.close()
     if stdin is not subprocess.DEVNULL:
         stdin.close()
-    lines = received.decode(errors="replace").split("\n")[:line_count]
-    return lines, timed_out, process.returncode
+    return received.split(b"\n")[:line_count], timed_out, process.returncode
 
 
 def run_to_exit(executable, input_path):

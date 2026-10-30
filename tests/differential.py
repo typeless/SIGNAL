@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 import run
-from run import QEMU_COMMANDS, jobs_option, read_trace
+from run import QEMU_COMMANDS, jobs_option, read_trace, read_trace_bytes
 
 COMPILE_TIMEOUT_SECONDS = 180
 compile_case = functools.partial(run.compile_case, timeout=COMPILE_TIMEOUT_SECONDS)
@@ -1586,6 +1586,232 @@ def m10c(compiler, seeds, jobs):
     print(f"{len(seeds) - failures} seeds passed, {failures} failed")
     return 1 if failures else 0
 
+
+def char_literal(rng, code):
+    forms = [f"'\\x{code:02X}'", f"'\\{code:03o}'"]
+    if 0x20 <= code < 0x7F and chr(code) not in "'\\":
+        forms.append(f"'{chr(code)}'")
+    if code >= 0xA0:
+        forms.append(f"'{chr(code)}'")
+    return rng.choice(forms)
+
+
+def string_literal(content):
+    return '"' + "".join(chr(byte) if 0x20 <= byte < 0x7F and chr(byte) not in '"\\' else f"\\x{byte:02X}"
+                         for byte in content) + '"'
+
+
+def random_text(rng, length):
+    return bytes(rng.choice([rng.randrange(0x20, 0x7F), rng.randrange(256)]) for _ in range(length)).replace(b"\n", b"\r")
+
+
+class M11Program:
+    def __init__(self, seed):
+        rng = random.Random(seed)
+        self.char_factors = [(rng.randrange(-300, 301), rng.randrange(-300, 301)) for _ in range(2)]
+        self.constant = rng.randrange(256)
+        self.constant_text = char_literal(rng, self.constant)
+        base = random_text(rng, rng.choice([rng.randrange(1, 8), rng.randrange(1, 255)]))
+        cut = rng.randrange(len(base))
+        changed = bytearray(base)
+        changed[cut] = (changed[cut] + rng.choice([1, 255, 128])) % 256
+        if changed[cut] == 0x0A:
+            changed[cut] = 0x0B
+        pool = [base, base[:cut], b"", base + random_text(rng, 1)[:255 - len(base)], bytes(changed)]
+        self.pool = [rng.choice(pool) for _ in range(5)]
+        self.selects = [[(rng.randrange(2, 5), rng.randrange(2)) for _ in range(2)] for _ in range(2)]
+        self.prefixes = [random_text(rng, rng.randrange(0, 6)) for _ in range(6)]
+        self.writes = ["WC", "WK", "WS", "WT", "WN", "WB"]
+        rng.shuffle(self.writes)
+
+    def char_value(self, position, tick):
+        factor, offset = self.char_factors[position]
+        return (tick * factor + offset) % 256
+
+    def string_value(self, position, tick):
+        for choice, (modulus, residue) in enumerate(self.selects[position]):
+            if tick % modulus == residue:
+                return self.pool[2 * position + choice]
+        return self.pool[2 * position + 2] if position == 0 else self.pool[4]
+
+    def expected(self):
+        stream = []
+        for tick in range(1, TICKS + 1):
+            even = tick % 2 == 0
+            c1, c2 = self.char_value(0, tick), self.char_value(1, tick)
+            sa, sb = self.string_value(0, tick), self.string_value(1, tick)
+            sd = self.pool[4] if tick == 1 else self.string_value(0, tick - 1)
+            sw = sa if even else sb
+            written = {
+                "WC": self.prefixes[0] + chr(c1).encode(),
+                "WK": self.prefixes[1] + chr(self.constant).encode() if even else None,
+                "WS": sd,
+                "WT": self.prefixes[3] + sw,
+                "WN": self.prefixes[4] + str(tick).encode(),
+                "WB": self.prefixes[5] + (b"true" if even else b"false"),
+            }
+            stream += [written[name] for name in self.writes if written[name] is not None]
+            cd = self.constant if tick == 1 else self.char_value(0, tick - 1)
+            values = [tick, c1, c2, cd, c1 if even else c2, c1 - c2, c1 < c2, c1 == c2, c1 >= self.constant, c1 != self.constant,
+                      sa < sb, sa <= sb, sa == sb, sa != sb, sa > sb, sa >= sb]
+            stream.append(" ".join(map(show, values)).encode())
+        return [b" ".join([b"-"] * 16)] + b"\n".join(stream).split(b"\n")
+
+    def select_text(self, position):
+        (first_modulus, first_residue), (second_modulus, second_residue) = self.selects[position]
+        last = self.pool[2] if position == 0 else self.pool[4]
+        return (f"if N modulo {first_modulus} = {first_residue} then {string_literal(self.pool[2 * position])} "
+                f"else if N modulo {second_modulus} = {second_residue} then {string_literal(self.pool[2 * position + 1])} "
+                f"else {string_literal(last)}")
+
+    def source(self, machine):
+        writes = {
+            "WC": f"write({string_literal(self.prefixes[0])}, C1)",
+            "WK": f"write({string_literal(self.prefixes[1])}, CK when E)",
+            "WS": "writeString(SD)",
+            "WT": f"write({string_literal(self.prefixes[3])}, SW)",
+            "WN": f"write({string_literal(self.prefixes[4])}, N)",
+            "WB": f"write({string_literal(self.prefixes[5])}, E)",
+        }
+        body = ["N := ZN + 1", "ZN := N $ init 0", "N ^= TICK", "E := N modulo 2 = 0",
+                *[f"C{position + 1} := char(N * {factor} + {offset})" for position, (factor, offset) in enumerate(self.char_factors)],
+                "CD := C1 $ 1 init CK", "CW := (C1 when E) default C2", "I := integer(C1) - integer(C2)",
+                "LT := C1 < C2", "EQ := C1 = C2", "GE := C1 >= CK", "NE := C1 /= CK",
+                f"SA := {self.select_text(0)}", f"SB := {self.select_text(1)}",
+                f"SD := SA $ 1 init {string_literal(self.pool[4])}", "SW := (SA when E) default SB",
+                "SLT := SA < SB", "SLE := SA <= SB", "SEQ := SA = SB", "SNE := SA /= SB", "SGT := SA > SB", "SGE := SA >= SB",
+                *[f"{name} :: {writes[name]}" for name in self.writes], " --> ".join(self.writes)]
+        declarations = ["integer ZN;", "boolean E;", "string SA, SB, SD, SW;", f"constant char CK = {self.constant_text};",
+                        f"label {', '.join(self.writes)};"]
+        lines = ["process M11 =", "  ( ? event START, TICK;",
+                 "    ! integer N; char C1, C2, CD, CW; integer I; boolean LT, EQ, GE, NE, SLT, SLE, SEQ, SNE, SGT, SGE; )"]
+        if machine:
+            lines.append(MACHINE_PRAGMAS.rstrip("\n"))
+        lines.append("  (| " + "\n   | ".join(body))
+        if machine:
+            lines.append(SYSTICK_BODY.rstrip("\n"))
+        lines.append("   |)")
+        lines.append("  where")
+        lines += [f"    {declaration}" for declaration in declarations]
+        if machine:
+            lines.append(SYSTICK_DECLARATIONS.rstrip("\n"))
+        lines.append("  end;")
+        return "\n".join(lines) + "\n"
+
+
+M11_ROUNDTRIP_STEPS = 16
+M11_ROUNDTRIP_SOURCE = """process M11ROUNDTRIP =
+  ( )
+  (| N := ZN + 1
+   | ZN := N $ init 0
+   | RA :: A := read("" when ^N)
+   | RB :: B := read("")
+   | RC :: C := read("")
+   | RD :: D := read("")
+   | A ^= B
+   | B ^= C
+   | C ^= D
+   | WA :: write("", A)
+   | WC :: write("", C)
+   | WS :: write("", A < B)
+   | WT :: write("", A = B)
+   | WU :: write("", A <= B)
+   | WV :: write("", C < D)
+   | WW :: write("", C = D)
+   | WX :: write("", C <= D)
+   | RA --> RB --> RC --> RD --> WA --> WC --> WS --> WT --> WU --> WV --> WW --> WX
+   |)
+  where
+    integer N, ZN;
+    string A, B;
+    char C, D;
+    label RA, RB, RC, RD, WA, WC, WS, WT, WU, WV, WW, WX;
+  end;
+"""
+
+
+def m11_roundtrip_steps(seed):
+    rng = random.Random(seed)
+    steps = []
+    for _ in range(M11_ROUNDTRIP_STEPS):
+        a = bytes(rng.choice([b for b in range(256) if b != 0x0A]) for _ in range(rng.choice([0, 1, 254, 255, rng.randrange(256)])))
+        if a and rng.randrange(2):
+            cut = rng.randrange(len(a))
+            b = rng.choice([a, a[:cut], a[:cut] + bytes([(a[cut] + rng.choice([1, 255])) % 256 or 1]) + a[cut + 1:]]).replace(b"\n", b"\x0b")
+        else:
+            b = bytes(rng.choice([b for b in range(256) if b != 0x0A]) for _ in range(rng.randrange(256)))
+        c = rng.choice([code for code in range(256) if code != 0x0A])
+        d = rng.choice([c, rng.randrange(256), (c + 1) % 256])
+        d = 0x0B if d == 0x0A else d
+        steps.append((a, b, c, d))
+    return steps
+
+
+def check_m11_roundtrip(executable, directory, seed):
+    steps = m11_roundtrip_steps(seed)
+    feed = b"".join(a + b"\n" + b + b"\n" + chr(c).encode() + b"\n" + chr(d).encode() + b"\n" for a, b, c, d in steps)
+    words = {True: b"true", False: b"false"}
+    expected = b"".join(a + b"\n" + chr(c).encode() + b"\n" + b"\n".join(words[value] for value in (a < b, a == b, a <= b, c < d, c == d, c <= d)) + b"\n"
+                        for a, b, c, d in steps)
+    input_path = directory / "roundtrip.in"
+    input_path.write_bytes(feed)
+    with input_path.open("rb") as stdin:
+        finished = subprocess.run([str(executable)], stdin=stdin, capture_output=True, timeout=run.RUN_TIMEOUT_SECONDS)
+    if finished.returncode != 0 or finished.stdout != expected:
+        return [f"{input_path}: roundtrip exit {finished.returncode}, output {finished.stdout!r}, expected {expected!r}"]
+    return []
+
+
+def check_m11(compiler, roundtrip, seed):
+    program = M11Program(seed)
+    directory = BUILD / "m11" / str(seed)
+    directory.mkdir(parents=True, exist_ok=True)
+    expected = program.expected()
+    report = check_m11_roundtrip(roundtrip, directory, seed)
+    for variant, machine in (("macos", False), ("mps2", True)):
+        source = directory / f"{variant}.sig"
+        source.write_text(program.source(machine), encoding="utf-8")
+        executable = directory / variant
+        compiled = compile_case(compiler, source, executable)
+        if compiled.returncode != 0:
+            report.append(f"{source}: compile failed (exit {compiled.returncode}): {compiled.stderr.strip()}")
+            continue
+        input_path = directory / f"{variant}.in"
+        if machine:
+            input_path.unlink(missing_ok=True)
+            command = [*QEMU_COMMANDS["mps2-an385"], str(executable)]
+        else:
+            input_path.write_text("10\n" + "01\n" * TICKS)
+            command = [str(executable)]
+        lines, timed_out, returncode = read_trace_bytes(command, len(expected), input_path)
+        if lines != expected:
+            report.append(f"{source}: trace {lines!r}, expected {expected!r}")
+    return report
+
+
+def m11(compiler, seeds, jobs):
+    print(f"m11 seeds: {' '.join(map(str, seeds))}")
+    directory = BUILD / "m11"
+    directory.mkdir(parents=True, exist_ok=True)
+    source = directory / "roundtrip.sig"
+    source.write_text(M11_ROUNDTRIP_SOURCE)
+    roundtrip = directory / "roundtrip"
+    compiled = compile_case([str(compiler)], source, roundtrip)
+    if compiled.returncode != 0:
+        print(f"{source}: compile failed (exit {compiled.returncode}): {compiled.stderr.strip()}")
+        return 1
+    failures = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for seed, report in zip(seeds, pool.map(lambda seed: check_m11([str(compiler)], roundtrip, seed), seeds)):
+            if report:
+                failures += 1
+                print(f"FAIL seed {seed}")
+                for line in report:
+                    print(f"  {line}")
+    print(f"{len(seeds) - failures} seeds passed, {failures} failed")
+    return 1 if failures else 0
+
+
 def check(compiler, seed):
     program = Program(seed)
     directory = BUILD / str(seed)
@@ -1743,7 +1969,7 @@ def main():
         if arguments != ["m9a"]:
             sys.exit("--against requires the method m9a")
         return m9a(compiler, against, jobs)
-    methods = {"m9b": m9b, "m9c": m9c, "m10a": m10a, "m10b": m10b, "m10c": m10c}
+    methods = {"m9b": m9b, "m9c": m9c, "m10a": m10a, "m10b": m10b, "m10c": m10c, "m11": m11}
     method = methods.get(arguments[0]) if arguments else None
     if method:
         del arguments[0]

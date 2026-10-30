@@ -1,0 +1,14 @@
+hello from mps2
+-
+tick A
+mark ~
+early mps2
+1
+tick B
+mark é
+early mps2
+2
+tick C
+mark ~
+late mps2
+3

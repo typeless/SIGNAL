@@ -1,0 +1,10 @@
+v=small
+p=odd
+1 false
+v=small
+p=even
+small
+2 false
+v=big
+p=odd
+3 false
