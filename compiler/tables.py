@@ -9,7 +9,7 @@ ANCHOR = "    type ARGS = external;\n"
 
 SEED_WORDS = [
     "event", "boolean", "short", "integer", "long", "ubyte", "ushort", "uinteger", "ulong", "pointer", "char", "string",
-    "real", "dreal",
+    "real", "dreal", "complex", "dcomplex",
     "load", "store", "syscall", "instruction", "read", "write", "writeString", "abs", "left_tt",
     "Automaton_Initial_State", "Automaton_Transition", "Automaton_SetClock", "Automaton_Clock",
     "Automaton_SetCurrentStateId", "Automaton_IsIn",
@@ -22,6 +22,7 @@ SEED_WORDS = [
     "affine_sample", "affine_clock_relation", "affine_unsample",
     "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "tick'", "v'", "zv'", "vb'", "zvb'", "clk_x'", "clk_y'", "clk_i'", "rep'", "seq'", "tup'",
     "dim", "size", "bounds", "step", "window", "struct", "bundle",
+    "conj", "conjd", "rpart", "rpartd", "ipart", "ipartd", "modu", "modud",
 ]
 FRESH_FIRST = "cell'"
 FRESH_LAST = "tup'"
@@ -47,6 +48,8 @@ NAME_CONSTANTS = {
     "window": "N_WINDOW", "seq'": "N_SEQ_MARK", "tup'": "N_TUPLE_MARK",
     "struct": "N_STRUCT", "bundle": "N_BUNDLE",
     "string": "N_STRING", "read": "N_READ", "write": "N_WRITE", "writeString": "N_WRITE_STRING",
+    "conj": "N_CONJ", "conjd": "N_CONJD", "rpart": "N_RPART", "rpartd": "N_RPARTD", "ipart": "N_IPART",
+    "ipartd": "N_IPARTD", "modu": "N_MODU", "modud": "N_MODUD",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -59,10 +62,11 @@ SYMBOLS = [
     ("<<=", "LESS_LESS_EQUAL"), ("[:", "OPEN_COLON"), ("[/:", "OPEN_SLASH_COLON"), ("\\\\", "BACKSLASHES"),
     ("|*", "BAR_STAR"), ("**", "STAR_STAR"), ("^<", "CLOCK_LT"), ("^>", "CLOCK_GT"), ("^#", "CLOCK_SHARP"),
     (":=:", "IDENTITY"), ("::=", "PARTIAL_DEFINE"), ("|+", "BAR_PLUS"), ("*.", "STAR_DOT"), (".", "DOT"),
+    ("@", "AT"),
 ]
-SYMBOL_BASE = 92
-OTHER_CODES = [("EOF", 0), ("NAME", 142), ("NUMBER", 143), ("STRING", 144), ("REAL", 145)]
-CODE_LIMIT = 146
+SYMBOL_BASE = 94
+OTHER_CODES = [("EOF", 0), ("NAME", 145), ("NUMBER", 146), ("STRING", 147), ("REAL", 148)]
+CODE_LIMIT = 149
 ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, '"': 34, "'": 39, "?": 63, "%": 37}
 
 OPS = [
@@ -80,12 +84,224 @@ OPS = [
     "SEQ_RANGE", "SEQ_SPAN", "SEQ_LIST", "SEQ_HEAD1", "SEQ_HEAD2", "SEQ_HEAD3", "SEQ_HEAD4", "SEQ_ELEMENT", "SEQ_TAIL",
     "SEQ_TAIL_PAIR", "SEQ_FINAL", "SEQ_FROM", "SEQ_TO", "SEQ_BY", "SEQ_HIDDEN", "SEQ_PREVIOUS", "SEQ_INDEX",
     "TUPLE_HEAD", "TUPLE_TAIL", "TUPLE_TARGET", "TUPLE_OUTPUT", "TRANSPOSE", "MATPROD",
+    "CPAIR", "CONJ_CALL", "RPART_CALL", "IPART_CALL", "MODU_CALL", "CONJ", "RPART", "IPART", "MODU", "IMAG", "FMA", "COPYSIGN",
 ]
 MONOCHRONOUS = {
     "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR",
     "CONVERT", "ELEMENT", "GATHER", "PAIR", "NEXT", "PREV", "ITER", "IF", "BRANCH", "ARG", "RANGE", "FLAT", "SLICE", "BOUNDS", "BOUNDS_PAIR", "DIM", "DIM_SIZE", "PUT", "SPAN", "TABLE", "RESTRUCTURE", "CONCAT", "ARRAY_EQ", "RANGE_TABLE", "FLATV", "EACH", "EACH_STORE", "WINDOW",
-    "TRANSPOSE", "MATPROD",
+    "TRANSPOSE", "MATPROD", "CPAIR", "CONJ", "RPART", "IPART", "MODU", "IMAG", "FMA", "COPYSIGN",
 }
+CX_REFS = {"NONE": 0, "AR": 1, "AI": 2, "BR": 3, "BI": 4, "L": 5, "R": 6, "SELF": 7, "IMR": 8}
+CX_TEMP_BASE = 16
+CX_DESTS = {"RE": 0, "IM": 1, "TEMP": 2}
+CX_TYPES = {"C": 0, "K": 1, "B": 2}
+CX_VALUES = {"KEEP": 0, "PRE": 1, "PIM": 2, "ZERO": 3, "ONE": 4, "INF": 5, "NAN": 6, "STATE_IM": 7, "TABLE_IM": 8}
+
+
+class ComplexProgram:
+    def __init__(self):
+        self.steps = []
+
+    def step(self, dest, op, left="NONE", right="NONE", kind="C", value="KEEP"):
+        self.steps.append((dest, op, left, right, kind, value))
+        return CX_TEMP_BASE + len(self.steps) - 1
+
+    def temp(self, op, left="NONE", right="NONE", kind="C", value="KEEP"):
+        return self.step("TEMP", op, left, right, kind, value)
+
+    def const(self, value):
+        return self.temp("CONST", value=value)
+
+    def absolute(self, x, zero):
+        negative = self.temp("LT", x, zero, "B")
+        return self.temp("IF", negative, self.temp("BRANCH", self.temp("NEG", x), x))
+
+    def select(self, condition, when_true, when_false, dest="TEMP"):
+        return self.step(dest, "IF", condition, self.temp("BRANCH", when_true, when_false))
+
+    def fma(self, addend, x, y):
+        return self.temp("FMA", addend, self.temp("BRANCH", x, y))
+
+
+def complex_unary(op_re, op_im, left_re, left_im, right_re="NONE", right_im="NONE", value_re="KEEP", value_im="KEEP"):
+    program = ComplexProgram()
+    program.step("IM", op_im, left_im, right_im, "C", value_im)
+    program.step("RE", op_re, left_re, right_re, "C", value_re)
+    return program
+
+
+def complex_quotient():
+    program = ComplexProgram()
+    ar, ai = program.temp("CONVERT", "AR"), program.temp("CONVERT", "AI")
+    br, bi = program.temp("CONVERT", "BR"), program.temp("CONVERT", "BI")
+    zero, one, infinity, nan = program.const("ZERO"), program.const("ONE"), program.const("INF"), program.const("NAN")
+    abs_br, abs_bi = program.absolute(br, zero), program.absolute(bi, zero)
+    real_wider = program.temp("GE", abs_br, abs_bi, "B")
+    imag_wider = program.temp("GE", abs_bi, abs_br, "B")
+    real_zero = program.temp("EQ", br, zero, "B")
+    negative_ar = program.temp("NEG", ar)
+    ratio1 = program.temp("DIV", bi, br)
+    denom1 = program.fma(br, bi, ratio1)
+    re1 = program.temp("DIV", program.fma(ar, ai, ratio1), denom1)
+    im1 = program.temp("DIV", program.fma(ai, negative_ar, ratio1), denom1)
+    ratio2 = program.temp("DIV", br, bi)
+    denom2 = program.fma(bi, br, ratio2)
+    re2 = program.temp("DIV", program.fma(ai, ar, ratio2), denom2)
+    im2 = program.temp("DIV", program.fma(negative_ar, ai, ratio2), denom2)
+    first_re = program.select(real_zero, zero, re1)
+    first_im = program.select(real_zero, zero, im1)
+    second_re = program.select(imag_wider, re2, nan)
+    second_im = program.select(imag_wider, im2, nan)
+    quotient_re = program.select(real_wider, first_re, second_re)
+    quotient_im = program.select(real_wider, first_im, second_im)
+    both_nan = program.temp("AND", program.temp("NE", quotient_re, quotient_re, "B"),
+                            program.temp("NE", quotient_im, quotient_im, "B"), "B")
+    abs_ar, abs_ai = program.absolute(ar, zero), program.absolute(ai, zero)
+    inf_ar = program.temp("EQ", abs_ar, infinity, "B")
+    inf_ai = program.temp("EQ", abs_ai, infinity, "B")
+    inf_br = program.temp("EQ", abs_br, infinity, "B")
+    inf_bi = program.temp("EQ", abs_bi, infinity, "B")
+    finite_a = program.temp("AND", program.temp("LT", abs_ar, infinity, "B"), program.temp("LT", abs_ai, infinity, "B"), "B")
+    finite_b = program.temp("AND", program.temp("LT", abs_br, infinity, "B"), program.temp("LT", abs_bi, infinity, "B"), "B")
+    infinite_a = program.temp("AND", program.temp("OR", inf_ar, inf_ai, "B"), finite_b, "B")
+    infinite_b = program.temp("AND", program.temp("OR", inf_br, inf_bi, "B"), finite_a, "B")
+    xa = program.temp("COPYSIGN", program.select(inf_ar, one, zero), ar)
+    ya = program.temp("COPYSIGN", program.select(inf_ai, one, zero), ai)
+    re_a = program.temp("MUL", infinity, program.fma(program.temp("MUL", ya, bi), xa, br))
+    im_a = program.temp("MUL", infinity, program.fma(program.temp("NEG", program.temp("MUL", xa, bi)), ya, br))
+    xb = program.temp("COPYSIGN", program.select(inf_br, one, zero), br)
+    yb = program.temp("COPYSIGN", program.select(inf_bi, one, zero), bi)
+    re_b = program.temp("MUL", zero, program.fma(program.temp("MUL", ai, yb), ar, xb))
+    im_b = program.temp("MUL", zero, program.fma(program.temp("NEG", program.temp("MUL", yb, ar)), ai, xb))
+    recovered_re = program.select(infinite_a, re_a, program.select(infinite_b, re_b, quotient_re))
+    recovered_im = program.select(infinite_a, im_a, program.select(infinite_b, im_b, quotient_im))
+    program.select(both_nan, recovered_im, quotient_im, "IM")
+    program.select(both_nan, recovered_re, quotient_re, "RE")
+    return program
+
+
+def complex_product():
+    program = ComplexProgram()
+    a, b = program.temp("CONVERT", "AR"), program.temp("CONVERT", "AI")
+    c, d = program.temp("CONVERT", "BR"), program.temp("CONVERT", "BI")
+    zero, one, infinity = program.const("ZERO"), program.const("ONE"), program.const("INF")
+    ac, bd = program.temp("MUL", a, c), program.temp("MUL", b, d)
+    ad, bc = program.temp("MUL", a, d), program.temp("MUL", b, c)
+    product_re, product_im = program.temp("SUB", ac, bd), program.temp("ADD", ad, bc)
+    both_nan = program.temp("AND", program.temp("NE", product_re, product_re, "B"),
+                            program.temp("NE", product_im, product_im, "B"), "B")
+
+    def infinite(x):
+        return program.temp("EQ", program.absolute(x, zero), infinity, "B")
+
+    def boxed_or_denanned(x, x_infinite, boxes):
+        boxed = program.temp("COPYSIGN", program.select(x_infinite, one, zero), x)
+        denanned = program.select(program.temp("NE", x, x, "B"), program.temp("COPYSIGN", zero, x), x)
+        return program.select(boxes, boxed, denanned)
+
+    inf_a, inf_b, inf_c, inf_d = infinite(a), infinite(b), infinite(c), infinite(d)
+    z_infinite, w_infinite = program.temp("OR", inf_a, inf_b, "B"), program.temp("OR", inf_c, inf_d, "B")
+    overflowed = program.temp("OR", program.temp("OR", infinite(ac), infinite(bd), "B"),
+                              program.temp("OR", infinite(ad), infinite(bc), "B"), "B")
+    recalc = program.temp("AND", both_nan, program.temp("OR", program.temp("OR", z_infinite, w_infinite, "B"), overflowed, "B"), "B")
+    a, b = boxed_or_denanned(a, inf_a, z_infinite), boxed_or_denanned(b, inf_b, z_infinite)
+    c, d = boxed_or_denanned(c, inf_c, w_infinite), boxed_or_denanned(d, inf_d, w_infinite)
+    recalc_re = program.temp("MUL", infinity, program.fma(program.temp("NEG", program.temp("MUL", b, d)), a, c))
+    recalc_im = program.temp("MUL", infinity, program.fma(program.temp("MUL", b, c), a, d))
+    program.select(recalc, recalc_im, product_im, "IM")
+    program.select(recalc, recalc_re, product_re, "RE")
+    return program
+
+
+def complex_equal(negated):
+    program = ComplexProgram()
+    real_equal, imag_equal = program.temp("EQ", "AR", "BR", "B"), program.temp("EQ", "AI", "BI", "B")
+    if negated:
+        program.step("RE", "NOT", program.temp("AND", real_equal, imag_equal, "B"), kind="K")
+    else:
+        program.step("RE", "AND", real_equal, imag_equal, "K")
+    return program
+
+
+def complex_array_equal():
+    program = ComplexProgram()
+    program.step("RE", "AND", program.temp("ARRAY_EQ", "AR", "BR", "B"), program.temp("ARRAY_EQ", "AI", "BI", "B"), "K")
+    return program
+
+
+def complex_part(ref):
+    program = ComplexProgram()
+    program.step("RE", "CONVERT", ref, kind="K")
+    return program
+
+
+def complex_modulus():
+    program = ComplexProgram()
+    program.step("RE", "MODU", program.temp("CONVERT", "AR", kind="K"), program.temp("CONVERT", "AI", kind="K"), "K")
+    return program
+
+
+def complex_conjugate():
+    program = ComplexProgram()
+    program.step("IM", "NEG", program.temp("CONVERT", "AI"))
+    program.step("RE", "CONVERT", "AR")
+    return program
+
+
+def complex_input():
+    program = ComplexProgram()
+    program.step("IM", "IMAG", "SELF")
+    program.step("RE", None, "L", "R")
+    return program
+
+
+def complex_signal():
+    program = ComplexProgram()
+    program.step("IM", "IMAG", "SELF", "AI")
+    program.step("RE", None, "AR")
+    return program
+
+
+def complex_retype():
+    program = ComplexProgram()
+    program.step("IM", None, "AI", "R")
+    program.step("RE", None, "AR", "IMR")
+    return program
+
+
+CX_PROGRAMS = {
+    "INPUT": complex_input(),
+    "RETYPE": complex_retype(),
+    "SIGNAL": complex_signal(),
+    "CONST": complex_unary("CONST", "CONST", "NONE", "NONE", value_re="PRE", value_im="PIM"),
+    "DELAY": complex_unary(None, None, "AR", "AI", "R", "R", value_re="PRE", value_im="PIM"),
+    "UNARY": complex_unary(None, None, "AR", "AI"),
+    "STATE": complex_unary(None, None, "NONE", "NONE", value_im="STATE_IM"),
+    "TABLE": complex_unary(None, None, "NONE", "NONE", value_im="TABLE_IM"),
+    "BINARY": complex_unary(None, None, "AR", "AI", "BR", "BI"),
+    "WHEN": complex_unary(None, None, "AR", "AI", "R", "R"),
+    "IF": complex_unary(None, None, "L", "L", "BR", "BI"),
+    "PAIR": complex_unary("CONVERT", "CONVERT", "L", "R"),
+    "CONVERT": complex_unary("CONVERT", "CONVERT", "AR", "AI"),
+    "CONJ": complex_conjugate(),
+    "MUL": complex_product(),
+    "DIV": complex_quotient(),
+    "EQ": complex_equal(False),
+    "NE": complex_equal(True),
+    "ARRAY_EQ": complex_array_equal(),
+    "RPART": complex_part("AR"),
+    "IPART": complex_part("AI"),
+    "MODU": complex_modulus(),
+}
+CX_TYPED_PROGRAM = {
+    "INPUT": "INPUT", "EFFECT": "INPUT", "ARG": "RETYPE", "CONST": "CONST", "DELAY": "DELAY", "COPY": "SIGNAL", "NEG": "UNARY",
+    "ADD": "BINARY", "SUB": "BINARY", "DEFAULT": "BINARY", "BRANCH": "BINARY", "WHEN": "WHEN", "IF": "IF", "CPAIR": "PAIR",
+    "CONVERT": "CONVERT", "CONJ": "CONJ", "MUL": "MUL", "DIV": "DIV", "LAG": "WHEN", "PREV": "UNARY", "SEED": "BINARY", "STATE": "STATE",
+    "TABLE": "TABLE", "PUT": "BINARY", "NEXT": "BINARY", "PAIR": "IF", "ELEMENT": "WHEN", "GATHER": "WHEN", "RESTRUCTURE": "WHEN",
+    "WINDOW": "WHEN", "EACH": "UNARY", "EACH_STORE": "UNARY", "TRANSPOSE": "UNARY", "CONCAT": "BINARY",
+}
+CX_OPERAND_PROGRAM = {"EQ": "EQ", "NE": "NE", "ARRAY_EQ": "ARRAY_EQ", "CONVERT": "RPART", "RPART": "RPART", "IPART": "IPART", "MODU": "MODU"}
+
 POINTWISE = {
     "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR", "IF", "BRANCH",
 }
@@ -124,6 +340,10 @@ COMPOSITES = {
     "SEQ_FINAL": ([], ["SEQ_HIDDEN"]),
     "TUPLE_HEAD": ([], ["TUPLE_TARGET", "PREV"]),
     "TUPLE_TAIL": ([], ["TUPLE_OUTPUT", "PAIR", "NEXT"]),
+    "CONJ_CALL": ([], ["CONJ"]),
+    "RPART_CALL": ([], ["RPART"]),
+    "IPART_CALL": ([], ["IPART"]),
+    "MODU_CALL": ([], ["MODU"]),
 }
 LEAVES = {"CONST", "SIGNAL", "ENUMCONST", "SLOT", "DEFAULTS"}
 TEMPLATE_ROW_KINDS = ["EMIT", "LEFT", "RIGHT", "DEFINE", "GROUP", "END", "INPUT"]
@@ -239,7 +459,7 @@ TEMPLATE_PROGRAMS = {
         template_emit("SIGNAL", "TARGET"), template_emit("SIGNAL", "h1'"), GROUP_ROW, END_ROW,
     ]),
 }
-UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV", "VAR", "STATE", "DIM", "AXIS", "TRANSPOSE"}
+UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV", "VAR", "STATE", "DIM", "AXIS", "TRANSPOSE", "CONJ", "RPART", "IPART", "MODU"}
 BINARY = [
     ("default", "DEFAULT", 3), ("when", "WHEN", 4), ("xor", "XOR", 11), ("or", "OR", 12), ("and", "AND", 13),
     ("=", "EQ", 16), ("/=", "NE", 16), ("<", "LT", 16), ("<=", "LE", 16), (">", "GT", 16), (">=", "GE", 16),
@@ -247,7 +467,7 @@ BINARY = [
     ("shl", "SHL", 18), ("shr", "SHR", 18), ("next", "NEXT", 1), (":", "PAIR", 2), ("..", "RANGE", 1),
     ("^+", "CLOCK_PLUS", 6), ("^*", "CLOCK_TIMES", 7), ("^-", "CLOCK_MINUS", 6), ("==", "EQ", 15), ("<<=", "LE", 15),
     ("\\\\", "RECOVER", 23), ("cell", "CELL", 21), ("after", "AFTER", 5), ("from", "FROM", 5), ("count", "COUNT", 5),
-    ("|*", "REPEAT", 18), ("**", "POW", 19), ("|+", "CONCAT", 17), ("*.", "MATPROD", 18),
+    ("|*", "REPEAT", 18), ("**", "POW", 19), ("|+", "CONCAT", 17), ("*.", "MATPROD", 18), ("@", "CPAIR", 19),
 ]
 PREFIX = [
     ("when", "UWHEN", 8), ("not", "NOT", 14), ("-", "NEG", 20), ("^", "CLOCK", 24),
@@ -256,10 +476,10 @@ PREFIX = [
 MODEL_CLASSES = ["process", "procedure", "node", "function", "automaton", "action"]
 ATTRIBUTES = ["safe", "deterministic", "unsafe"]
 
-TYPE_KINDS = ["EVENT", "BOOLEAN", "INT", "POINTER", "ENUM", "ARRAY", "EXTERNAL", "STRING", "CHAR", "REAL"]
-BUILTIN_KIND = [0, 1, 2, 2, 2, 2, 2, 2, 2, 3, 8, 7, 9, 9]
-BUILTIN_BYTES = [1, 1, 2, 4, 8, 1, 2, 4, 8, 8, 1, 8, 4, 8]
-BUILTIN_SIGNED = [0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+TYPE_KINDS = ["EVENT", "BOOLEAN", "INT", "POINTER", "ENUM", "ARRAY", "EXTERNAL", "STRING", "CHAR", "REAL", "COMPLEX"]
+BUILTIN_KIND = [0, 1, 2, 2, 2, 2, 2, 2, 2, 3, 8, 7, 9, 9, 10, 10]
+BUILTIN_BYTES = [1, 1, 2, 4, 8, 1, 2, 4, 8, 8, 1, 8, 4, 8, 8, 16]
+BUILTIN_SIGNED = [0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ROLES = ["input", "output", "local"]
 TOKEN_KIND_NAMES = ["keyword", "name", "symbol", "number", "string", "eof", "none", "character", "real", "dreal"]
 TOKEN_SECTIONS = ["kinds ", "texts ", "lines ", "columns "]
@@ -400,6 +620,7 @@ TEMPLATES = [
     ("POWER_RANGE", "the exponent of ** must be at least 1", []),
     ("POWER_CONSTANT", "the exponent of ** must be a constant integer", []),
     ("POWER_CHAIN", "a chain of ** needs parentheses", []),
+    ("AT_CHAIN", "a chain of @ needs parentheses", []),
     ("PRIVATE_TARGET", "private must be followed by constant, type or a model class", []),
     ("FLAT_UNDECLARED", "signal # is not declared", ["FLAT"]),
     ("STATIC_COUNT", "# expects # static parameters, found #", ["NAME", "NUMBER", "NUMBER"]),
@@ -432,6 +653,10 @@ TEMPLATES = [
     ("NO_CONVERSION", "no conversion from # to #", ["TYPE", "TYPE"]),
     ("POINTER_OFFSET", "operator # expects a pointer and an integer offset", ["FRAGMENT"]),
     ("INTEGER_OPERANDS", "operator # expects integer operands", ["FRAGMENT"]),
+    ("REAL_OPERANDS", "operator # expects real operands", ["FRAGMENT"]),
+    ("ORDERED", "operator # expects ordered operands, found #", ["FRAGMENT", "TYPE"]),
+    ("COMPLEX_ARGUMENT", "# expects #, found #", ["NAME", "TYPE", "TYPE"]),
+    ("COMPLEX_EXPANSION", "complex values are not supported by operator #", ["FRAGMENT"]),
     ("COMPARABLE", "operator # expects operands of comparable types, found # and #", ["FRAGMENT", "TYPE", "TYPE"]),
     ("ONE_TYPE", "operator # expects operands of one type", ["FRAGMENT"]),
     ("BOOLEAN_OPERANDS", "operator # expects boolean operands", ["FRAGMENT"]),
@@ -506,8 +731,8 @@ TEMPLATES = [
     ("STRING_ELEMENT", "string cannot be an array element or a field", []),
     ("STRING_INTERFACE", "string # cannot be an input or output of the top model; use read or write", ["NAME"]),
     ("IO_STRING", "input 1 of # must be a string, found #", ["NAME", "TYPE"]),
-    ("WRITE_VALUE", "input 2 of write must be a boolean, an integer, a char, a real or a string, found #", ["TYPE"]),
-    ("READ_TYPE", "the output of read must be a boolean, an integer, a char, a real or a string, found #", ["TYPE"]),
+    ("WRITE_VALUE", "input 2 of write must be a boolean, an integer, a char, a real, a complex or a string, found #", ["TYPE"]),
+    ("READ_TYPE", "the output of read must be a boolean, an integer, a char, a real, a complex or a string, found #", ["TYPE"]),
     ("STRING_VALUE", "a string value can only be the whole definition of a signal", []),
     ("STRING_BRANCHES", "only one branch of an if can build a string value; define the other as a signal", []),
     ("CASE_STRING", "a case value cannot be a string literal; name it with a constant", []),
@@ -731,7 +956,7 @@ FINISH_PHASES = [
 TICK_STEPS = ["LABEL", "USE", "EQUATION", "SCAN", "PART", "COPY", "CLOCK", "DEFAULT", "END"]
 LOWER_STATES = [
     "SIGNAL", "LABEL", "VALUE", "ARRAY", "TABLE", "LOOP", "STATEVAR", "EQUATION", "GROUP", "START", "SCAN", "ENTRY", "NEVER",
-    "MEMBERS", "PARTIAL", "DONE", "FAILED",
+    "MEMBERS", "PARTIAL", "CXTYPE", "CXTABLE", "CXMAP", "CXEXPAND", "DONE", "FAILED",
 ]
 REAL_PHASES = ["START", "CHAR", "MULADD", "DECIDE", "SCALE", "BITS", "SHIFT", "COMPARE", "SUB", "TRIM", "ROUND", "FINISH"]
 POST_STATES = ["DEPENDENCE", "ROWS", "PREFIX", "PLACE", "WALK", "LABELSUM", "SIZE", "DONE", "FAILED"]
@@ -810,7 +1035,7 @@ FORMS = [
     "B", "BL", "B_COND", "CBZ_W", "CBZ_X", "CBNZ_X", "ADRP", "RET", "SVC_80", "WORD", "WFI",
     "FMOV_S_W", "FMOV_D_X", "FMOV_W_S", "FMOV_X_D", "FADD_S", "FADD_D", "FSUB_S", "FSUB_D", "FMUL_S", "FMUL_D",
     "FDIV_S", "FDIV_D", "FNEG_S", "FNEG_D", "FCMP_S", "FCMP_D", "SCVTF_S_X", "SCVTF_D_X", "UCVTF_S_X", "UCVTF_D_X",
-    "FCVTZS_X_S", "FCVTZS_X_D", "FCVT_D_S", "FCVT_S_D", "CLZ_X", "MSR_CPACR", "ISB",
+    "FCVTZS_X_S", "FCVTZS_X_D", "FCVT_D_S", "FCVT_S_D", "CLZ_X", "MSR_CPACR", "ISB", "FMADD_S", "FMADD_D", "FSQRT_D",
 ]
 MOVE_X = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 2, 21))
 MOVE_W = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 1, 21))
@@ -922,6 +1147,9 @@ FORM_SPECS = [
     ("clz x", 0xDAC01000, REG2, False, "NONE"),
     ("msr cpacr_el1", 0xD5181040, ((0, 0, 5, 0),), False, "NONE"),
     ("isb", 0xD5033FDF, (), False, "NONE"),
+    ("fmadd s", 0x1F000000, REG4, False, "NONE"),
+    ("fmadd d", 0x1F400000, REG4, False, "NONE"),
+    ("fsqrt d", 0x1E61C000, REG2, False, "NONE"),
 ]
 
 
@@ -1069,6 +1297,7 @@ EMIT_SOURCES = [
     "count_shift", "load_indexed_scalar", "store_indexed_scalar", "load_indexed_init", "scalar_row", "init_element",
     "iter_stride", "iter_size", "iter_start", "loop_inner", "size_right", "put_param", "key_arg0", "key_arg1",
     "real_in", "real_out", "real_op", "real_neg", "real_cmp", "real_condition", "real_from_int", "real_to_int", "real_bytes",
+    "imag_row",
 ] + [f"local{index}" for index in range(LOCAL_LABEL_COUNT)]
 EMIT_PREDICATES = [
     "always", "flag", "has_arg1", "has_arg2", "has_arg3", "has_arg4", "has_arg5", "has_arg6", "right_loads",
@@ -1077,6 +1306,7 @@ EMIT_PREDICATES = [
     "iter_plain", "iter_derived", "iter_derived_whole", "compare_negated",
     "writes_string", "writes_char", "writes_number", "reads_string", "reads_scalar", "reads_char", "reads_number",
     "reads_boolean", "left_widens", "right_widens", "reads_real", "reads_integer", "right_left_widens", "right_right_widens",
+    "writes_complex", "reads_complex", "index_real", "index_integer",
 ]
 MICRO_KINDS = ["EMIT", "LI", "LOAD", "STORE", "OPERAND", "ADDRESS", "PLACE", "LOAD_AT", "STORE_AT"]
 TARGET_KINDS = ["NONE", "LABEL", "TABLE", "WINDOW", "SIG", "MEM", "CLK", "IN", "OUT", "MALFORMED_TEXT", "RESERVE_TEXT", "TAIL", "STACK"]
@@ -1159,6 +1389,45 @@ def widen(register, when):
 
 def generic(*tail):
     return [operand(9, "left"), *widen(9, "left_widens"), operand(10, "right", "right_loads"), *widen(10, "right_widens"), *tail]
+
+
+def fused_multiply_add(width):
+    return [
+        operand(9, "left"), operand(10, "right_left"), operand(11, "right_right"), emit("real_in", 16, 9),
+        emit("real_in", 17, 10), emit("real_in", 18, 11), emit(f"FMADD_{width}", 16, 17, 18, 16), emit("real_out", 9, 16),
+    ]
+
+
+def copy_sign(sign_halfword):
+    return generic(
+        emit("MOVZ_X", 11, 0, 0x8000, sign_halfword), emit("AND_X", 10, 10, 11), emit("ORN_X", 11, XZR, 11),
+        emit("AND_X", 9, 9, 11), emit("ORR_X", 9, 9, 10),
+    )
+
+
+def complex_modulus_template(narrow):
+    widen_operands = [
+        step for register in (9, 10)
+        for step in (emit("FMOV_S_W", 16, register), emit("FCVT_D_S", 16, 16), emit("FMOV_X_D", register, 16))
+    ] if narrow else []
+    narrow_result = [emit("FMOV_D_X", 16, 9), emit("FCVT_S_D", 16, 16), emit("FMOV_W_S", 9, 16)] if narrow else []
+    return generic(
+        *widen_operands,
+        emit("MOVZ_X", 12, 0, 1), emit("LSLV_X", 9, 9, 12), emit("LSRV_X", 9, 9, 12), emit("LSLV_X", 10, 10, 12),
+        emit("LSRV_X", 10, 10, 12), emit("MOVZ_X", 13, 0, 0x7FF0, 3), emit("SUBS_X", XZR, 9, 13),
+        emit("B_COND", a3=CC["EQ"], to=label("local1")), emit("SUBS_X", XZR, 10, 13),
+        emit("B_COND", a3=CC["EQ"], to=label("local1")), emit("SUBS_X", XZR, 9, 10), emit("CSEL_X", 11, 9, 10, CC["HI"]),
+        emit("MOVZ_X", 14, 0, 52), emit("LSRV_X", 11, 11, 14), emit("SUBS_W_IMM", XZR, 11, 0),
+        emit("CSINC_W", 11, 11, XZR, CC["NE"]), emit("MOVZ_X", 15, 0, 2047), emit("SUB_X", 15, 15, 11),
+        emit("LSLV_X", 15, 15, 14), emit("LSLV_X", 11, 11, 14), emit("FMOV_D_X", 16, 9), emit("FMOV_D_X", 17, 10),
+        emit("FMOV_D_X", 18, 15), emit("FMUL_D", 16, 16, 18), emit("FMUL_D", 17, 17, 18), emit("FMUL_D", 19, 17, 17),
+        emit("FMADD_D", 19, 16, 16, 19), emit("FSQRT_D", 20, 19), emit("FMOV_X_D", 12, 20),
+        emit("CBZ_X", 12, to=label("local3")), emit("FNEG_D", 21, 20), emit("FMADD_D", 21, 21, 20, 19),
+        emit("FDIV_D", 21, 21, 20), emit("MOVZ_X", 12, 0, 0x3FE0, 3), emit("FMOV_D_X", 22, 12),
+        emit("FMADD_D", 20, 21, 22, 20), emit("FMUL_D", 20, 20, 22), emit("FMOV_D_X", 18, 11), emit("FMUL_D", 20, 20, 18),
+        emit("FMOV_X_D", 9, 20), emit("B", to=label("local4")), place("local1"), emit("MOVZ_X", 9, 0, 0x7FF0, 3),
+        emit("B", to=label("local4")), place("local3"), emit("MOVZ_X", 9), place("local4"), *narrow_result,
+    )
 
 
 def loop_bound(when):
@@ -1581,9 +1850,9 @@ EMIT_TEMPLATES = [
         emit("pair_form", 9, 9, 10), st(9, ("CLK", "row"), UINTEGER_TYPE),
     ]),
     ("ROW_SEED_ARRAY", gated(copy_words("key_left", "key_a_right", "words_row", "local1"), False)),
-    ("ROW_SEED", gated([operand(9, "left"), st(9, ("SIG", "right"), "type_row")], False)),
+    ("ROW_SEED", gated([operand(9, "left"), *widen(9, "left_widens"), st(9, ("SIG", "right"), "type_row")], False)),
     ("ROW_SEED_FILL", gated([
-        operand(9, "left"), address(12, "key_a_right"), li(10, "size_row"), place("local1"), emit("SUBS_X_IMM", 10, 10, 1),
+        operand(9, "left"), *widen(9, "left_widens"), address(12, "key_a_right"), li(10, "size_row"), place("local1"), emit("SUBS_X_IMM", 10, 10, 1),
         emit("store_indexed_element", 9, 12, 10), emit("CBNZ_X", 10, to=label("local1")),
     ], False)),
     ("ROW_LOAD", gated([operand(9, "arg0"), emit("load_param", 9, 9, 0)])),
@@ -1596,11 +1865,14 @@ EMIT_TEMPLATES = [
     ("ROW_WRITE", gated([
         address(1, "key_arg0"), emit("LDRB_W", 2, 1, 255), emit("BL", to=label("put_text")),
         address(1, "key_arg1", "writes_string"), emit("LDRB_W", 2, 1, 255, when="writes_string"),
-        emit("BL", to=label("put_text"), when="writes_string"), emit("SUB_X_IMM", SP, SP, 32), emit("ADD_X_IMM", 20, SP, 0),
+        emit("BL", to=label("put_text"), when="writes_string"), emit("SUB_X_IMM", SP, SP, 32, when="writes_complex"),
+        emit("SUB_X_IMM", SP, SP, 32), emit("ADD_X_IMM", 20, SP, 0),
         operand(0, "arg1", "writes_number"), emit("BL", to=label("put_param"), when="writes_number"),
+        emit("MOVZ_W", 10, 0, 32, when="writes_complex"), emit("STRB_W_POST", 10, 20, 1, when="writes_complex"),
+        operand(0, "arg2", "writes_complex"), emit("BL", to=label("put_param"), when="writes_complex"),
         operand(0, "arg1", "writes_char"), emit("BL", to=label("put_char"), when="writes_char"),
         emit("MOVZ_W", 10, 0, 10), emit("STRB_W_POST", 10, 20, 1), emit("ADD_X_IMM", 1, SP, 0), emit("SUB_X", 2, 20, 1),
-        emit("BL", to=label("put_text")), emit("ADD_X_IMM", SP, SP, 32),
+        emit("BL", to=label("put_text")), emit("ADD_X_IMM", SP, SP, 32), emit("ADD_X_IMM", SP, SP, 32, when="writes_complex"),
     ], False)),
     ("ROW_READ", gated([
         address(1, "key_arg0"), emit("LDRB_W", 2, 1, 255), emit("BL", to=label("put_text")),
@@ -1610,14 +1882,32 @@ EMIT_TEMPLATES = [
         emit("MOVZ_X", 2, 0, 255, when="reads_string"), emit("BL", to=label("read_line"), when="reads_string"),
         address(1, "key_owner", "reads_string"), emit("STRB_W", 0, 1, 255, when="reads_string"),
         emit("SUB_X_IMM", SP, SP, 32, when="reads_scalar"), emit("SUB_X_IMM", SP, SP, READ_REAL_BYTES, when="reads_real"),
+        emit("SUB_X_IMM", SP, SP, 2 * READ_REAL_BYTES, when="reads_complex"),
         emit("ADD_X_IMM", 1, SP, 0, when="reads_scalar"),
         emit("MOVZ_X", 2, 0, 21, when="reads_number"), emit("MOVZ_X", 2, 0, 2, when="reads_char"),
-        emit("MOVZ_X", 2, 0, READ_REAL_BYTES, when="reads_real"),
+        emit("MOVZ_X", 2, 0, READ_REAL_BYTES, when="reads_real"), emit("MOVZ_X", 2, 0, 2 * READ_REAL_BYTES + 1, when="reads_complex"),
         emit("BL", to=label("read_line"), when="reads_scalar"), emit("ADD_X_IMM", 1, SP, 0, when="reads_scalar"),
         emit("BL", to=label("read_number"), when="reads_number"), emit("ORR_X", 9, XZR, 0, when="reads_number"),
         emit("ORR_X", 13, XZR, 1, when="reads_real"), emit("ORR_X", 14, XZR, 0, when="reads_real"),
         li(12, "real_bytes", "reads_real"), emit("BL", to=label("parse_real"), when="reads_real"),
         emit("CBZ_X", 1, to=label("read_malformed"), when="reads_real"), emit("ORR_X", 9, XZR, 0, when="reads_real"),
+        emit("STR_X", 0, SP, 2 * READ_REAL_BYTES + 8, when="reads_complex"), emit("MOVZ_X", 15, when="reads_complex"),
+        place("local4", "reads_complex"), emit("SUBS_X", XZR, 15, 0, when="reads_complex"),
+        emit("B_COND", a3=CC["HS"], to=label("read_malformed"), when="reads_complex"),
+        emit("LDRB_W_REG", 9, 1, 15, when="reads_complex"), emit("SUBS_W_IMM", XZR, 9, 32, when="reads_complex"),
+        emit("B_COND", a3=CC["EQ"], to=label("local5"), when="reads_complex"), emit("ADD_X_IMM", 15, 15, 1, when="reads_complex"),
+        emit("B", to=label("local4"), when="reads_complex"), place("local5", "reads_complex"),
+        emit("STR_X", 15, SP, 2 * READ_REAL_BYTES + 16, when="reads_complex"),
+        emit("ORR_X", 13, XZR, 1, when="reads_complex"), emit("ORR_X", 14, XZR, 15, when="reads_complex"),
+        li(12, "real_bytes", "reads_complex"), emit("BL", to=label("parse_real"), when="reads_complex"),
+        emit("CBZ_X", 1, to=label("read_malformed"), when="reads_complex"),
+        emit("STR_X", 0, SP, 2 * READ_REAL_BYTES + 24, when="reads_complex"),
+        emit("LDR_X", 15, SP, 2 * READ_REAL_BYTES + 16, when="reads_complex"), emit("ADD_X_IMM", 15, 15, 1, when="reads_complex"),
+        emit("ADD_X_IMM", 13, SP, 0, when="reads_complex"), emit("ADD_X", 13, 13, 15, when="reads_complex"), emit("LDR_X", 14, SP, 2 * READ_REAL_BYTES + 8, when="reads_complex"),
+        emit("SUB_X", 14, 14, 15, when="reads_complex"),
+        li(12, "real_bytes", "reads_complex"), emit("BL", to=label("parse_real"), when="reads_complex"),
+        emit("CBZ_X", 1, to=label("read_malformed"), when="reads_complex"), st(0, ("SIG", "imag_row"), "type_row", "reads_complex"),
+        emit("LDR_X", 9, SP, 2 * READ_REAL_BYTES + 24, when="reads_complex"),
         emit("SUBS_X_IMM", XZR, 9, 1, when="reads_boolean"),
         emit("B_COND", a3=CC["HI"], to=label("read_malformed"), when="reads_boolean"),
         emit("LDRB_W", 9, 1, 0, when="reads_char"), emit("SUBS_X_IMM", XZR, 0, 1, when="reads_char"),
@@ -1634,7 +1924,8 @@ EMIT_TEMPLATES = [
         emit("MOVZ_X", 11, 0, 6, when="reads_char"), emit("LSLV_X", 9, 9, 11, when="reads_char"),
         emit("MOVZ_X", 11, 0, 0x3F, when="reads_char"), emit("AND_X", 10, 10, 11, when="reads_char"),
         emit("ORR_X", 9, 9, 10, when="reads_char"), place("local3", "reads_char"),
-        emit("ADD_X_IMM", SP, SP, READ_REAL_BYTES, when="reads_real"), emit("ADD_X_IMM", SP, SP, 32, when="reads_scalar"),
+        emit("ADD_X_IMM", SP, SP, READ_REAL_BYTES, when="reads_real"),
+        emit("ADD_X_IMM", SP, SP, 2 * READ_REAL_BYTES, when="reads_complex"), emit("ADD_X_IMM", SP, SP, 32, when="reads_scalar"),
         st(9, ("SIG", "row"), "type_row", "reads_scalar"),
     ], False)),
     ("ROW_ITER_RANGE", gated([
@@ -1697,7 +1988,9 @@ EMIT_TEMPLATES = [
     ], False)),
     ("ROW_ARRAY_EQ", gated([
         address(12, "key_left"), address(13, "key_right"), emit("MOVZ_X", 15), li(17, "size_left"), place("local1"),
-        emit("load_indexed_index", 10, 12, 15), emit("load_indexed_index", 11, 13, 15), emit("SUBS_X", XZR, 10, 11),
+        emit("load_indexed_index", 10, 12, 15), emit("load_indexed_index", 11, 13, 15),
+        emit("SUBS_X", XZR, 10, 11, when="index_integer"), emit("real_in", 16, 10, when="index_real"),
+        emit("real_in", 17, 11, when="index_real"), emit("real_cmp", 0, 16, 17, when="index_real"),
         emit("B_COND", a3=CC["NE"], to=label("local2")), emit("ADD_X_IMM", 15, 15, 1), emit("SUBS_X", XZR, 15, 17),
         emit("B_COND", a3=CC["LO"], to=label("local1")), emit("MOVZ_X", 9, 0, 1), emit("B", to=label("local3")),
         place("local2"), emit("MOVZ_X", 9), place("local3"), emit("EOR_X_ONE", 9, 9, when="compare_negated"),
@@ -1787,6 +2080,13 @@ EMIT_TEMPLATES = [
     ("ROW_REAL_BINARY", gated(generic(
         emit("real_in", 16, 9), emit("real_in", 17, 10), emit("real_op", 16, 16, 17), emit("real_out", 9, 16),
     ))),
+    ("ROW_REAL_IMAG", gated([operand(9, "right"), *widen(9, "right_widens")])),
+    ("ROW_REAL_FMA_S", gated(fused_multiply_add("S"))),
+    ("ROW_REAL_FMA_D", gated(fused_multiply_add("D"))),
+    ("ROW_REAL_COPYSIGN_S", gated(copy_sign(1))),
+    ("ROW_REAL_COPYSIGN_D", gated(copy_sign(3))),
+    ("ROW_REAL_MODU_S", gated(complex_modulus_template(True))),
+    ("ROW_REAL_MODU_D", gated(complex_modulus_template(False))),
     ("ROW_REAL_NEG", gated(generic(emit("real_in", 16, 9), emit("real_neg", 16, 16), emit("real_out", 9, 16)))),
     ("ROW_REAL_COMPARE", gated(generic(
         emit("real_in", 16, 9), emit("real_in", 17, 10), emit("real_cmp", 0, 16, 17), emit("CSINC_W", 9, XZR, XZR, "real_condition"),
@@ -2767,6 +3067,39 @@ def build():
     table("OP_ARITY", "short", [0 if op in LEAVES else 1 if op in UNARY else 2 for op in OPS])
     table("OP_MONOCHRONOUS", "short", [int(op in MONOCHRONOUS) for op in OPS])
     table("OP_BRACKETED", "short", [int(op in BRACKETED) for op in OPS])
+    cx_names = list(CX_PROGRAMS)
+    cx_steps = []
+    cx_start, cx_length = [], []
+    for name in cx_names:
+        integer(f"CXP_{name}", cx_names.index(name))
+        cx_start.append(len(cx_steps))
+        cx_length.append(len(CX_PROGRAMS[name].steps))
+        cx_steps.extend(CX_PROGRAMS[name].steps)
+
+    def cx_ref(ref):
+        return ref if isinstance(ref, int) else CX_REFS[ref]
+
+    table("CXP_START", "short", cx_start)
+    table("CXP_LENGTH", "short", cx_length)
+    table("CXP_IMAG", "short", [int(any(dest == "IM" for dest, *_ in CX_PROGRAMS[name].steps)) for name in cx_names])
+    integer("CX_STEP_LIMIT", max(cx_length))
+    integer("CX_TEMP_BASE", CX_TEMP_BASE)
+    table("CXS_DEST", "short", [CX_DESTS[dest] for dest, *_ in cx_steps])
+    table("CXS_OP", "short", [-1 if op is None else OPS.index(op) for _, op, *_ in cx_steps])
+    table("CXS_LEFT", "short", [cx_ref(left) for _, _, left, *_ in cx_steps])
+    table("CXS_RIGHT", "short", [cx_ref(right) for _, _, _, right, *_ in cx_steps])
+    table("CXS_TYPE", "short", [CX_TYPES[kind] for *_, kind, _ in cx_steps])
+    table("CXS_VALUE", "short", [CX_VALUES[value] for *_, value in cx_steps])
+    table("CX_TYPED_PROGRAM", "short", [cx_names.index(CX_TYPED_PROGRAM[op]) if op in CX_TYPED_PROGRAM else -1 for op in OPS])
+    table("CX_OPERAND_PROGRAM", "short", [cx_names.index(CX_OPERAND_PROGRAM[op]) if op in CX_OPERAND_PROGRAM else -1 for op in OPS])
+    for name, value in CX_VALUES.items():
+        integer(f"CXV_{name}", value)
+    for name, value in CX_REFS.items():
+        integer(f"CXR_{name}", value)
+    for name, value in CX_DESTS.items():
+        integer(f"CXD_{name}", value)
+    for name, value in CX_TYPES.items():
+        integer(f"CXT_{name}", value)
     tp_rows = []
     tp_inline_start, tp_inline_length, tp_rest_start = [], [], []
     for op in OPS:
@@ -2812,9 +3145,10 @@ def build():
     table("STAGE_OP", "short", stage_ops)
     op_text = {}
     for text, op, _ in BINARY + PREFIX:
-        op_text.setdefault(op, text)
+        if "\\" not in text:
+            op_text.setdefault(op, text)
     op_text.update({"DELAY": "$", "IF": "if", "BRANCH": "if", "GDELAY": "$", "WINDOW": "window", "LAG": "$"})
-    table("OP_TEXT_FRAGMENT", "short", [fragments.add(op_text[op]) if op in op_text and op not in COMPOSITES else 0 for op in OPS])
+    table("OP_TEXT_FRAGMENT", "short", [fragments.add(op_text.get(op, op.lower())) for op in OPS])
 
     def code_of(text):
         if text in KEYWORDS:
@@ -3093,7 +3427,7 @@ def build():
     integer("MALFORMED_TEXT_LENGTH", EMIT_TEXT.index("memory"))
 
     text = "".join(fragments.texts)
-    assert '"' not in text and "\n" not in text
+    assert '"' not in text and "\n" not in text and "\\" not in text
     fragment_starts = []
     position = 0
     for fragment in fragments.texts:

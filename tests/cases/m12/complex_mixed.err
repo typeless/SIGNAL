@@ -1,0 +1,1 @@
+complex_mixed.sig:3:13: error: operator + expects operands of comparable types, found real and complex

@@ -1,0 +1,1 @@
+complex_order_clock.sig:3:13: error: operator <<= expects ordered operands, found dcomplex

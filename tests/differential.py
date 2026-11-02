@@ -2118,11 +2118,318 @@ def check_m12_literals(compiler, directory, seed):
     return []
 
 
+M12_COMPLEX_ECHO_SOURCE = """process M12COMPLEXECHO =
+  ( ? complex A; dcomplex B;
+    ! complex X; dcomplex Y; )
+  (| X := A
+   | Y := B
+   | A ^= B
+   |)
+  where
+  end;
+"""
+M12_COMPLEX_OUTPUTS = [
+    ("complex", "A + B"), ("complex", "A - B"), ("complex", "A * B"), ("complex", "A / B"), ("complex", "-A"),
+    ("complex", "conj(A)"), ("dcomplex", "C + E"), ("dcomplex", "C - E"), ("dcomplex", "C * E"), ("dcomplex", "C / E"),
+    ("dcomplex", "-C"), ("dcomplex", "conjd(C)"), ("dcomplex", "A + C"), ("dcomplex", "dcomplex(A)"), ("complex", "complex(C)"),
+    ("boolean", "A = B"), ("boolean", "A /= B"), ("boolean", "C = E"), ("boolean", "C /= E"),
+    ("real", "real(A)"), ("real", "real(C)"), ("dreal", "dreal(A)"), ("dreal", "dreal(C)"), ("long", "long(C)"),
+    ("integer", "integer(A)"), ("real", "rpart(A)"), ("real", "ipart(A)"), ("dreal", "rpartd(C)"), ("dreal", "ipartd(C)"),
+    ("real", "modu(A)"), ("dreal", "modud(C)"), ("complex", "A when (rpart(A) < rpart(B))"),
+]
+M12_COMPLEX_SOURCE = (
+    "process M12COMPLEX =\n  ( ? complex A, B; dcomplex C, E;\n    ! "
+    + "; ".join(f"{kind} O{index}" for index, (kind, _) in enumerate(M12_COMPLEX_OUTPUTS)) + "; )\n  (| "
+    + "\n   | ".join(f"O{index} := {expression}" for index, (_, expression) in enumerate(M12_COMPLEX_OUTPUTS))
+    + "\n   | A ^= B ^= C ^= E\n   |)\n  where\n  end;\n"
+)
+M12_MODULUS_OUTPUTS = {"modu(A)": 32, "modud(C)": 64}
+M12_ARRAY_EQ_SIZE = 3
+M12_ARRAY_EQ_KINDS = [("real", 32, False), ("dreal", 64, False), ("complex", 32, True), ("dcomplex", 64, True)]
+M12_ARRAY_EQ_SOURCE = (
+    "process M12ARRAYEQ =\n  ( ? "
+    + " ".join(f"[{M12_ARRAY_EQ_SIZE}] {kind} L{index}, R{index};" for index, (kind, _, _) in enumerate(M12_ARRAY_EQ_KINDS))
+    + "\n    ! boolean " + ", ".join(f"E{index}, N{index}" for index in range(len(M12_ARRAY_EQ_KINDS) + 1)) + "; )\n  (| "
+    + "\n   | ".join(f"E{index} := L{index} == R{index}\n   | N{index} := not (L{index} == R{index})"
+                     for index in range(len(M12_ARRAY_EQ_KINDS)))
+    + f"\n   | SL.F := L0\n   | SL.G := [{', '.join(map(str, range(M12_ARRAY_EQ_SIZE)))}]"
+    + f"\n   | SR.F := R0\n   | SR.G := [{', '.join(map(str, range(M12_ARRAY_EQ_SIZE)))}]"
+    + f"\n   | E{len(M12_ARRAY_EQ_KINDS)} := SL == SR\n   | N{len(M12_ARRAY_EQ_KINDS)} := not (SL == SR)"
+    + "\n   | " + " ^= ".join(f"L{index} ^= R{index}" for index in range(len(M12_ARRAY_EQ_KINDS)))
+    + f"\n   |)\n  where\n    [{M12_ARRAY_EQ_SIZE}] struct (real F; integer G;) SL, SR;\n  end;\n"
+)
+
+
+def rounded(number, width):
+    return number if width == 64 else from_bits(to_bits(number, 32), 32)
+
+
+def fused_multiply_add(x, y, z, width):
+    if any(v != v or abs(v) == math.inf for v in (x, y, z)):
+        return rounded(x * y + z, width)
+    exact = Fraction(x) * Fraction(y) + Fraction(z)
+    if exact == 0:
+        product = x * y if x * y != 0 else math.copysign(0.0, x) * math.copysign(1.0, y)
+        return rounded(product + z, width)
+    if width == 32:
+        return from_bits(nearest32(exact), 32)
+    try:
+        return float(exact)
+    except OverflowError:
+        return math.inf if exact > 0 else -math.inf
+
+
+def complex_quotient(a, b, width):
+    (ar, ai), (br, bi) = a, b
+    fma = lambda x, y, z: fused_multiply_add(x, y, z, width)
+    divide = lambda x, y: rounded(ieee_divide(x, y), width)
+    abs_br, abs_bi = -br if br < 0 else br, -bi if bi < 0 else bi
+    if abs_br >= abs_bi:
+        if abs_br == 0.0:
+            real = imag = 0.0
+        else:
+            ratio = divide(bi, br)
+            denominator = fma(bi, ratio, br)
+            real, imag = divide(fma(ai, ratio, ar), denominator), divide(fma(-ar, ratio, ai), denominator)
+    elif abs_bi >= abs_br:
+        ratio = divide(br, bi)
+        denominator = fma(br, ratio, bi)
+        real, imag = divide(fma(ar, ratio, ai), denominator), divide(fma(ai, ratio, -ar), denominator)
+    else:
+        real = imag = math.nan
+    finite = lambda v: v == v and abs(v) != math.inf
+    if real != real and imag != imag:
+        if (abs(ar) == math.inf or abs(ai) == math.inf) and finite(br) and finite(bi):
+            x = math.copysign(1.0 if abs(ar) == math.inf else 0.0, ar)
+            y = math.copysign(1.0 if abs(ai) == math.inf else 0.0, ai)
+            real = rounded(math.inf * fma(x, br, rounded(y * bi, width)), width)
+            imag = rounded(math.inf * fma(y, br, -rounded(x * bi, width)), width)
+        elif (abs_br == math.inf or abs_bi == math.inf) and finite(ar) and finite(ai):
+            x = math.copysign(1.0 if abs(br) == math.inf else 0.0, br)
+            y = math.copysign(1.0 if abs(bi) == math.inf else 0.0, bi)
+            real = rounded(0.0 * fma(ar, x, rounded(ai * y, width)), width)
+            imag = rounded(0.0 * fma(ai, x, -rounded(ar * y, width)), width)
+    return real, imag
+
+
+def complex_product(z, w, width):
+    (a, b), (c, d) = z, w
+    fma = lambda x, y, s: fused_multiply_add(x, y, s, width)
+    ac, bd, ad, bc = rounded(a * c, width), rounded(b * d, width), rounded(a * d, width), rounded(b * c, width)
+    real, imag = rounded(ac - bd, width), rounded(ad + bc, width)
+    infinite = lambda v: abs(v) == math.inf
+    denan = lambda v: math.copysign(0.0, v) if v != v else v
+    if real != real and imag != imag:
+        recalc = False
+        if infinite(a) or infinite(b):
+            a, b = math.copysign(1.0 if infinite(a) else 0.0, a), math.copysign(1.0 if infinite(b) else 0.0, b)
+            c, d = denan(c), denan(d)
+            recalc = True
+        if infinite(c) or infinite(d):
+            c, d = math.copysign(1.0 if infinite(c) else 0.0, c), math.copysign(1.0 if infinite(d) else 0.0, d)
+            a, b = denan(a), denan(b)
+            recalc = True
+        if not recalc and any(infinite(v) for v in (ac, bd, ad, bc)):
+            a, b, c, d = denan(a), denan(b), denan(c), denan(d)
+            recalc = True
+        if recalc:
+            real = rounded(math.inf * fma(a, c, -rounded(b * d, width)), width)
+            imag = rounded(math.inf * fma(a, d, rounded(b * c, width)), width)
+    return real, imag
+
+
+def complex_modulus(a):
+    try:
+        return abs(complex(*a))
+    except OverflowError:
+        return math.inf
+
+
+def m12_complex_expected(a, b, c, e):
+    pair = lambda z, width: f"{float_text(to_bits(z[0], width), width)} {float_text(to_bits(z[1], width), width)}"
+    add = lambda x, y, width: (rounded(x[0] + y[0], width), rounded(x[1] + y[1], width))
+    sub = lambda x, y, width: (rounded(x[0] - y[0], width), rounded(x[1] - y[1], width))
+    word = lambda value: "true" if value else "false"
+    single = lambda number: float_text(to_bits(number, 32), 32)
+    double = lambda number: float_text(to_bits(number, 64), 64)
+    python = lambda z: (z.real, z.imag)
+    quotient = python(complex(*c) / complex(*e)) if e != (0.0, 0.0) else complex_quotient(c, e, 64)
+    return [
+        pair(add(a, b, 32), 32), pair(sub(a, b, 32), 32), pair(complex_product(a, b, 32), 32), pair(complex_quotient(a, b, 32), 32),
+        pair((-a[0], -a[1]), 32), pair((a[0], -a[1]), 32),
+        pair(python(complex(*c) + complex(*e)), 64), pair(python(complex(*c) - complex(*e)), 64), pair(python(complex(*c) * complex(*e)), 64), pair(quotient, 64),
+        pair((-c[0], -c[1]), 64), pair((c[0], -c[1]), 64), pair(add(a, c, 64), 64), pair(a, 64), pair(c, 32),
+        word(a == b), word(a != b), word(c == e), word(c != e),
+        single(a[0]), single(c[0]), double(a[0]), double(c[0]), str(to_integer(c[0], 64, True)), str(to_integer(a[0], 32, True)),
+        single(a[0]), single(a[1]), double(c[0]), double(c[1]),
+        single(complex_modulus(a)), double(complex_modulus(c)),
+        pair(a, 32) if a[0] < b[0] else "- -",
+    ]
+
+
+def component_bits(text, width):
+    if text.lstrip("-") == "nan":
+        return None
+    sign = 1 << (width - 1) if text.startswith("-") else 0
+    if text.lstrip("-") == "inf":
+        return sign | (0x7F800000 if width == 32 else 0x7FF0000000000000)
+    if width == 64:
+        return to_bits(float(text), 64)
+    return sign | nearest32(Fraction(text.lstrip("-")))
+
+
+def within_one_ulp(got, want, width):
+    got_bits, want_bits = component_bits(got, width), component_bits(want, width)
+    if got_bits is None or want_bits is None:
+        return got_bits == want_bits
+    infinity = 0x7F800000 if width == 32 else 0x7FF0000000000000
+    if infinity in (got_bits, want_bits):
+        return got_bits == want_bits
+    return abs(got_bits - want_bits) <= 1
+
+
+def random_component(rng, width):
+    precision, exponent_bits = FLOAT_FORMATS[width]
+    fraction_bits = precision - 1
+    top = (1 << exponent_bits) - 1
+    bias = top >> 1
+    kind = rng.choice(["zero", "subnormal", "huge", "inf", "nan", "normal", "unit", "unit"])
+    magnitude = {
+        "zero": 0,
+        "subnormal": rng.randrange(1, 1 << fraction_bits),
+        "huge": ((top - 1 - rng.randrange(2)) << fraction_bits) | rng.getrandbits(fraction_bits),
+        "inf": top << fraction_bits,
+        "nan": (top << fraction_bits) | (1 << (fraction_bits - 1)),
+        "normal": (rng.randrange(1, top) << fraction_bits) | rng.getrandbits(fraction_bits),
+        "unit": ((bias + rng.randrange(-3, 4)) << fraction_bits) | rng.choice([0, rng.getrandbits(fraction_bits)]),
+    }[kind]
+    return (rng.getrandbits(1) << (width - 1)) | magnitude
+
+
+def random_complex_operands(rng, width):
+    first = [random_component(rng, width) for _ in range(2)]
+    second = [random_component(rng, width) for _ in range(2)]
+    shape = rng.random()
+    if shape < 0.15:
+        second = list(first)
+    elif shape < 0.25:
+        second = [first[0] ^ rng.choice([0, 1 << (width - 1)]), first[1] ^ (1 << (width - 1))]
+    elif shape < 0.35:
+        second = [second[0], second[0] ^ rng.choice([0, 1 << (width - 1)])]
+    quiet = 0x7FC00000 if width == 32 else 0x7FF8000000000000
+    return [[quiet if from_bits(bits, width) != from_bits(bits, width) else bits for bits in z] for z in (first, second)]
+
+
+def check_m12_complex(executable, directory, seed):
+    rng = random.Random(seed ^ 0xC0FFEE)
+    rows = []
+    for _ in range(M12_STEPS):
+        singles = random_complex_operands(rng, 32)
+        doubles = random_complex_operands(rng, 64)
+        texts = [float_text(bits, 32) for z in singles for bits in z] + [float_text(bits, 64) for z in doubles for bits in z]
+        a, b = [tuple(from_bits(bits, 32) for bits in z) for z in singles]
+        c, e = [tuple(from_bits(bits, 64) for bits in z) for z in doubles]
+        rows.append((texts, m12_complex_expected(a, b, c, e)))
+    input_path = directory / "complex.in"
+    input_path.write_text("".join("1 " + " ".join(texts) + "\n" for texts, _ in rows))
+    lines, timed_out, returncode = read_trace([str(executable)], M12_STEPS, input_path)
+    report = []
+    if len(lines) != M12_STEPS:
+        report.append(f"{input_path}: {len(lines)} lines, exit {returncode}{', timed out' if timed_out else ''}")
+    for step, ((texts, want), got) in enumerate(zip(rows, lines)):
+        fields = got.split(" ")
+        position = 0
+        wrong = []
+        for (kind, expression), expected in zip(M12_COMPLEX_OUTPUTS, want):
+            count = 2 if kind in ("complex", "dcomplex") else 1
+            actual = " ".join(fields[position:position + count])
+            position += count
+            if expression in M12_MODULUS_OUTPUTS:
+                matches = within_one_ulp(actual, expected, M12_MODULUS_OUTPUTS[expression])
+            else:
+                matches = actual == expected
+            if not matches:
+                wrong.append(f"{expression}: got {actual!r}, expected {expected!r}")
+        if position != len(fields):
+            wrong.append(f"{len(fields)} fields, expected {position}")
+        if wrong:
+            report.append(f"{input_path}: step {step + 1} inputs {' '.join(texts)}: {'; '.join(wrong)}")
+    return report
+
+
+def m12_complex_echo_steps(seed):
+    rng = random.Random(seed ^ 0xEC40)
+    steps = []
+    while len(steps) < M12_STEPS:
+        texts = [m12_decimal(rng, width) for width in (32, 32, 64, 64)]
+        if all(bits is not None for _, bits in texts):
+            steps.append(texts)
+    return steps, rng.choice(["1 1.5 2.5 3.5", "1 1.5 2.5 3.5 ", "1 1.5 1e39 3.5 4.5", "1 1.5 2.5 3.5 1e309", "1 - - 3.5 4.5"])
+
+
+def check_m12_complex_echo(executable, directory, seed):
+    steps, malformed = m12_complex_echo_steps(seed)
+    input_path = directory / "complex_echo.in"
+    input_path.write_text("".join("1 " + " ".join(text for text, _ in texts) + "\n" for texts in steps) + malformed + "\n")
+    expected = "".join(" ".join(float_text(bits, width) for (_, bits), width in zip(texts, (32, 32, 64, 64))) + "\n" for texts in steps)
+    with input_path.open("rb") as stdin:
+        finished = subprocess.run([str(executable)], stdin=stdin, capture_output=True, timeout=run.RUN_TIMEOUT_SECONDS)
+    report = []
+    error = f"presence input malformed at step {len(steps) + 1}\n"
+    if finished.returncode != 2 or finished.stderr.decode() != error:
+        report.append(f"{input_path}: exit {finished.returncode}, stderr {finished.stderr.decode()!r}, expected 2 and {error!r}")
+    for step, (want, got) in enumerate(itertools.zip_longest(expected.splitlines(), finished.stdout.decode().splitlines())):
+        if want != got:
+            texts = " ".join(text[:40] for text, _ in steps[step]) if step < len(steps) else ""
+            report.append(f"  step {step + 1}: input {texts!r}: got {got!r}, expected {want!r}")
+    return report
+
+
+def random_array_eq_operands(rng, width, count):
+    first = [random_component(rng, width) for _ in range(count)]
+    sign = 1 << (width - 1)
+    second = [rng.choice([bits, bits, bits ^ sign, random_component(rng, width)]) for bits in first]
+    quiet = 0x7FC00000 if width == 32 else 0x7FF8000000000000
+    return [[quiet | (bits & sign) if from_bits(bits, width) != from_bits(bits, width) else bits for bits in operand]
+            for operand in (first, second)]
+
+
+def check_m12_array_eq(executable, directory, seed):
+    rng = random.Random(seed ^ 0xA77E)
+    rows = []
+    for _ in range(M12_STEPS):
+        texts = []
+        expected = []
+        for _, width, is_complex in M12_ARRAY_EQ_KINDS:
+            parts = [random_array_eq_operands(rng, width, M12_ARRAY_EQ_SIZE) for _ in range(2 if is_complex else 1)]
+            left = [operands[0] for operands in parts]
+            right = [operands[1] for operands in parts]
+            texts += [float_text(bits, width) for operand in (left, right) for part in operand for bits in part]
+            values = [[[from_bits(bits, width) for bits in part] for part in operand] for operand in (left, right)]
+            elements = [list(zip(*operand)) for operand in values]
+            equal = all(complex(*x) == complex(*y) if is_complex else x[0] == y[0] for x, y in zip(*elements))
+            expected.append(equal)
+        expected.append(expected[0])
+        rows.append((texts, " ".join(f"{'true' if equal else 'false'} {'false' if equal else 'true'}" for equal in expected)))
+    input_path = directory / "array_eq.in"
+    input_path.write_text("".join("1 " + " ".join(texts) + "\n" for texts, _ in rows))
+    lines, timed_out, returncode = read_trace([str(executable)], M12_STEPS, input_path)
+    report = []
+    if len(lines) != M12_STEPS:
+        report.append(f"{input_path}: {len(lines)} lines, exit {returncode}{', timed out' if timed_out else ''}")
+    for step, ((texts, want), got) in enumerate(zip(rows, lines)):
+        if got != want:
+            report.append(f"{input_path}: step {step + 1} inputs {' '.join(texts)}: got {got!r}, expected {want!r}")
+    return report
+
+
 def check_m12(compiler, programs, seed):
     directory = BUILD / "m12" / str(seed)
     directory.mkdir(parents=True, exist_ok=True)
     return (check_m12_echo(programs["echo"], directory, seed) + check_m12_arithmetic(programs["arithmetic"], directory, seed)
-            + check_m12_literals(compiler, directory, seed))
+            + check_m12_literals(compiler, directory, seed) + check_m12_complex_echo(programs["complex_echo"], directory, seed)
+            + check_m12_complex(programs["complex"], directory, seed)
+            + check_m12_array_eq(programs["array_eq"], directory, seed))
 
 
 def check_m12_exponent(compiler, directory):
@@ -2150,7 +2457,8 @@ def m12(compiler, seeds, jobs):
     directory = BUILD / "m12"
     directory.mkdir(parents=True, exist_ok=True)
     programs = {}
-    for name, text in (("echo", M12_ECHO_SOURCE), ("arithmetic", M12_ARITHMETIC_SOURCE)):
+    for name, text in (("echo", M12_ECHO_SOURCE), ("arithmetic", M12_ARITHMETIC_SOURCE), ("complex_echo", M12_COMPLEX_ECHO_SOURCE),
+                       ("complex", M12_COMPLEX_SOURCE), ("array_eq", M12_ARRAY_EQ_SOURCE)):
         source = directory / f"{name}.sig"
         source.write_text(text)
         programs[name] = directory / name

@@ -1,1 +1,1 @@
-input 2 of write must be a boolean, an integer, a char, a real or a string, found event
+input 2 of write must be a boolean, an integer, a char, a real, a complex or a string, found event

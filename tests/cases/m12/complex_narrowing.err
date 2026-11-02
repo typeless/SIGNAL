@@ -1,0 +1,1 @@
+complex_narrowing.sig:3:6: error: signal Z has type complex but its definition has type dcomplex
