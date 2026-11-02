@@ -1,0 +1,1 @@
+narrowing.sig:3:6: error: signal X has type real but its definition has type dreal

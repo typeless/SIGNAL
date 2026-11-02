@@ -4,8 +4,10 @@ import itertools
 import math
 import random
 import re
+import struct
 import subprocess
 import sys
+from fractions import Fraction
 from pathlib import Path
 
 import run
@@ -1812,6 +1814,365 @@ def m11(compiler, seeds, jobs):
     return 1 if failures else 0
 
 
+FLOAT_FORMATS = {32: (24, 8), 64: (53, 11)}
+M12_STEPS = 24
+M12_ECHO_SOURCE = """process M12ECHO =
+  ( ? real A; dreal B;
+    ! real X; dreal Y; )
+  (| X := A
+   | Y := B
+   | A ^= B
+   |)
+  where
+  end;
+"""
+M12_ARITHMETIC_OUTPUTS = [
+    ("real", "A + B"), ("real", "A - B"), ("real", "A * B"), ("real", "A / B"), ("real", "-A"),
+    ("dreal", "C + E"), ("dreal", "C - E"), ("dreal", "C * E"), ("dreal", "C / E"), ("dreal", "-C"), ("dreal", "A + C"),
+    ("boolean", "A = B"), ("boolean", "A /= B"), ("boolean", "A < B"), ("boolean", "A <= B"), ("boolean", "A > B"),
+    ("boolean", "A >= B"), ("boolean", "C = E"), ("boolean", "C /= E"), ("boolean", "C < E"), ("boolean", "C <= E"),
+    ("boolean", "C > E"), ("boolean", "C >= E"), ("boolean", "A < C"),
+    ("real", "real(N)"), ("dreal", "dreal(N)"), ("real", "real(U)"), ("dreal", "dreal(U)"), ("dreal", "dreal(A)"),
+    ("real", "real(C)"), ("long", "long(A)"), ("long", "long(C)"), ("integer", "integer(C)"), ("ubyte", "ubyte(A)"),
+    ("ulong", "ulong(C)"),
+]
+M12_ARITHMETIC_SOURCE = (
+    "process M12ARITHMETIC =\n  ( ? real A, B; dreal C, E; long N; ulong U;\n    ! "
+    + "; ".join(f"{kind} O{index}" for index, (kind, _) in enumerate(M12_ARITHMETIC_OUTPUTS)) + "; )\n  (| "
+    + "\n   | ".join(f"O{index} := {expression}" for index, (_, expression) in enumerate(M12_ARITHMETIC_OUTPUTS))
+    + "\n   | A ^= B ^= C ^= E ^= N ^= U\n   |)\n  where\n  end;\n"
+)
+
+
+def float_value(bits, width):
+    precision, exponent_bits = FLOAT_FORMATS[width]
+    fraction_bits = precision - 1
+    biased = (bits >> fraction_bits) & ((1 << exponent_bits) - 1)
+    fraction = bits & ((1 << fraction_bits) - 1)
+    bias = (1 << (exponent_bits - 1)) - 1
+    if biased == 0:
+        return Fraction(fraction) * Fraction(2) ** (1 - bias - fraction_bits)
+    return Fraction(fraction | (1 << fraction_bits)) * Fraction(2) ** (biased - bias - fraction_bits)
+
+
+def nearest32(value):
+    magnitude = abs(value)
+    if magnitude >= Fraction(2) ** 128 - Fraction(2) ** 103:
+        bits = 0x7F800000
+    else:
+        bits = struct.unpack("<I", struct.pack("<f", float(magnitude)))[0]
+        candidates = [b for b in (bits - 1, bits, bits + 1) if 0 <= b < 0x7F800000]
+        bits = min(candidates, key=lambda b: (abs(float_value(b, 32) - magnitude), b % 2))
+    return bits | (0x80000000 if value < 0 else 0)
+
+
+def from_bits(bits, width):
+    return struct.unpack("<f" if width == 32 else "<d", struct.pack("<I" if width == 32 else "<Q", bits))[0]
+
+
+def to_bits(number, width):
+    if width == 64:
+        return struct.unpack("<Q", struct.pack("<d", number))[0]
+    if number != number:
+        return 0x7FC00000
+    if abs(number) == math.inf:
+        return 0x7F800000 | (0x80000000 if number < 0 else 0)
+    if number == 0:
+        return 0x80000000 if math.copysign(1, number) < 0 else 0
+    return nearest32(Fraction(number))
+
+
+def float_text(bits, width):
+    number = from_bits(bits, width)
+    if number != number:
+        return "nan"
+    if width == 64 or number == 0 or abs(number) == math.inf:
+        return repr(number)
+    value = float_value(bits & 0x7FFFFFFF, 32)
+    for digits in range(1, 10):
+        exponent = math.floor(math.log10(value)) - digits + 1
+        scale = Fraction(10) ** exponent
+        while value / scale >= 10 ** digits:
+            scale *= 10
+        while value / scale < 10 ** (digits - 1):
+            scale /= 10
+        low = math.floor(value / scale)
+        passing = [c for c in (low, low + 1) if nearest32(c * scale) == bits & 0x7FFFFFFF]
+        if passing:
+            best = min(passing, key=lambda c: (abs(c * scale - value), c % 2))
+            return ("-" if number < 0 else "") + repr(float(best * scale))
+    raise AssertionError(hex(bits))
+
+
+def random_float_bits(rng, width):
+    precision, exponent_bits = FLOAT_FORMATS[width]
+    top = (1 << exponent_bits) - 1
+    if rng.random() < 0.3:
+        return rng.getrandbits(width)
+    biased = rng.choice([0, 0, 1, 2, top - 1, top - 2, top, rng.randrange(top), rng.randrange(top)])
+    fraction = rng.choice([0, 1, (1 << (precision - 1)) - 1, rng.getrandbits(precision - 1), rng.getrandbits(precision - 1)])
+    return (rng.getrandbits(1) << (width - 1)) | (biased << (precision - 1)) | fraction
+
+
+def exact_decimal(value):
+    if value == 0:
+        return "0"
+    exponent = 0
+    while value.denominator != 1:
+        value *= 10
+        exponent += 1
+    digits = str(value.numerator)
+    return f"{digits}e-{exponent}" if exponent else digits
+
+
+def random_decimal(rng):
+    length = rng.choice([1, 2, 5, 9, 17, 40, 120, 760, 800])
+    digits = "".join(rng.choice("0123456789") for _ in range(length))
+    point = rng.randrange(length + 1)
+    text = (digits[:point] or "0") + ("." + digits[point:] if point < length else "")
+    if rng.random() < 0.7:
+        text += rng.choice("eE") + rng.choice(["", "+", "-"]) + str(rng.randrange(400))
+    return ("-" if rng.random() < 0.3 else "") + text
+
+
+def halfway_decimal(rng, width):
+    while True:
+        bits = random_float_bits(rng, width) & ((1 << (width - 1)) - 1)
+        if bits + 1 < (0x7F800000 if width == 32 else 0x7FF0000000000000):
+            break
+    middle = (float_value(bits, width) + float_value(bits + 1, width)) / 2
+    text = exact_decimal(middle)
+    mantissa, _, exponent = text.partition("e")
+    tail = rng.choice(["", "", "0" * rng.randrange(1, 900) + "1", "0" * rng.randrange(900)])
+    if tail and exponent:
+        return mantissa + tail + "e" + str(int(exponent) - len(tail))
+    return mantissa + tail + ("e" + exponent if exponent else "") if not tail else str(int(mantissa + tail)) + "e-" + str(len(tail))
+
+
+def parsed_bits(text, width):
+    negative = text.startswith("-")
+    value = Fraction(text.lstrip("-").lower())
+    if width == 64:
+        try:
+            number = float(text)
+        except OverflowError:
+            return None
+        return None if abs(number) == math.inf else to_bits(number, 64)
+    bits = nearest32(value)
+    if bits == 0x7F800000:
+        return None
+    return bits | (0x80000000 if negative else 0)
+
+
+def m12_decimal(rng, width):
+    choice = rng.randrange(4)
+    if choice == 0:
+        bits = random_float_bits(rng, width)
+        text = float_text(bits, width)
+        if text == "nan":
+            bits = 0x7FC00000 if width == 32 else 0x7FF8000000000000
+    elif choice == 1:
+        bits = random_float_bits(rng, width)
+        if from_bits(bits, width) != from_bits(bits, width) or abs(from_bits(bits, width)) == math.inf:
+            text = float_text(bits, width)
+        else:
+            text = ("-" if bits >> (width - 1) else "") + exact_decimal(float_value(bits & ((1 << (width - 1)) - 1), width))
+    elif choice == 2:
+        text = random_decimal(rng)
+        bits = parsed_bits(text, width)
+    else:
+        text = halfway_decimal(rng, width)
+        bits = parsed_bits(text, width)
+    return text, bits
+
+
+def m12_echo_steps(seed):
+    rng = random.Random(seed)
+    steps = []
+    while len(steps) < M12_STEPS:
+        texts = [m12_decimal(rng, width) for width in (32, 64)]
+        if all(bits is not None for _, bits in texts):
+            steps.append(texts)
+    overflow_width = rng.choice([32, 64])
+    while True:
+        text = rng.choice([random_decimal(rng), "1" + "0" * rng.randrange(39, 400), "3.4028236e38", "1.7976931348623159e308"])
+        if parsed_bits(text, overflow_width) is None:
+            break
+    other = "1.5"
+    steps.append([(text, None), (other, 0)] if overflow_width == 32 else [(other, 0), (text, None)])
+    return steps
+
+
+def check_m12_echo(executable, directory, seed):
+    steps = m12_echo_steps(seed)
+    input_path = directory / "echo.in"
+    input_path.write_text("".join(f"1 {a} {b}\n" for (a, _), (b, _) in steps))
+    expected = "".join(f"{float_text(a, 32)} {float_text(b, 64)}\n" for (_, a), (_, b) in steps[:-1])
+    with input_path.open("rb") as stdin:
+        finished = subprocess.run([str(executable)], stdin=stdin, capture_output=True, timeout=run.RUN_TIMEOUT_SECONDS)
+    report = []
+    error = f"presence input malformed at step {len(steps)}\n"
+    if finished.returncode != 2 or finished.stderr.decode() != error:
+        report.append(f"{input_path}: exit {finished.returncode}, stderr {finished.stderr.decode()!r}, expected 2 and {error!r}")
+    for step, (want, got) in enumerate(itertools.zip_longest(expected.splitlines(), finished.stdout.decode().splitlines())):
+        if want != got:
+            (a, _), (b, _) = steps[step] if step < len(steps) else (("", 0), ("", 0))
+            report.append(f"  step {step + 1}: input {a[:60]!r} {b[:60]!r}: got {got!r}, expected {want!r}")
+    return report
+
+
+def ieee_divide(left, right):
+    if right == 0:
+        if left != left or left == 0:
+            return math.nan
+        return math.copysign(math.inf, left) * math.copysign(1, right)
+    return left / right
+
+
+def to_integer(number, bits, signed):
+    if number != number:
+        whole = 0
+    elif number >= 2 ** 63:
+        whole = 2 ** 63 - 1
+    elif number <= -2 ** 63:
+        whole = -2 ** 63
+    else:
+        whole = int(number)
+    whole &= (1 << bits) - 1
+    return whole - (1 << bits) if signed and whole >= 1 << (bits - 1) else whole
+
+
+def m12_arithmetic_expected(a, b, c, e, n, u):
+    single = lambda number: float_text(to_bits(number, 32), 32)
+    double = lambda number: float_text(to_bits(number, 64), 64)
+    word = lambda value: "true" if value else "false"
+    return [
+        single(a + b), single(a - b), single(a * b), single(ieee_divide(a, b)), single(-a),
+        double(c + e), double(c - e), double(c * e), double(ieee_divide(c, e)), double(-c), double(a + c),
+        word(a == b), word(a != b), word(a < b), word(a <= b), word(a > b), word(a >= b), word(c == e), word(c != e),
+        word(c < e), word(c <= e), word(c > e), word(c >= e), word(a < c),
+        float_text(nearest32(Fraction(n)), 32), double(float(n)), float_text(nearest32(Fraction(u)), 32), double(float(u)),
+        double(a), single(c), str(to_integer(a, 64, True)), str(to_integer(c, 64, True)), str(to_integer(c, 32, True)),
+        str(to_integer(a, 8, False)), str(to_integer(c, 64, False)),
+    ]
+
+
+def check_m12_arithmetic(executable, directory, seed):
+    rng = random.Random(seed ^ 0x5EED)
+    rows = []
+    for _ in range(M12_STEPS):
+        reals = [random_float_bits(rng, 32) for _ in range(2)]
+        dreals = [random_float_bits(rng, 64) for _ in range(2)]
+        if rng.random() < 0.3:
+            reals[1] = reals[0] ^ rng.choice([0, 1, 0x80000000])
+            dreals[1] = dreals[0] ^ rng.choice([0, 1, 1 << 63])
+        n = rng.choice([rng.getrandbits(63) * rng.choice([1, -1]), rng.randrange(-2 ** 24 - 9, 2 ** 24 + 9), -2 ** 63])
+        u = rng.choice([rng.getrandbits(64), rng.randrange(2 ** 53 - 9, 2 ** 53 + 9), 2 ** 64 - 1])
+        texts = [float_text(bits, 32) for bits in reals] + [float_text(bits, 64) for bits in dreals]
+        numbers = [from_bits(bits, 32) for bits in reals] + [from_bits(bits, 64) for bits in dreals]
+        rows.append((texts + [str(n), str(u)], m12_arithmetic_expected(*numbers, n, u)))
+    input_path = directory / "arithmetic.in"
+    input_path.write_text("".join("1 " + " ".join(texts) + "\n" for texts, _ in rows))
+    lines, timed_out, returncode = read_trace([str(executable)], M12_STEPS, input_path)
+    report = []
+    for step, ((texts, want), got) in enumerate(zip(rows, lines)):
+        if got.split(" ") != want:
+            wrong = [f"{expression}: got {g!r}, expected {w!r}" for (_, expression), g, w in
+                     zip(M12_ARITHMETIC_OUTPUTS, got.split(" ") + [None] * len(want), want) if g != w]
+            report.append(f"{input_path}: step {step + 1} inputs {' '.join(texts)}: {'; '.join(wrong)}")
+    return report
+
+
+def random_literal(rng, width):
+    while True:
+        text, bits = m12_decimal(rng, width)
+        if bits is None or text.lstrip("-") in ("nan", "inf"):
+            continue
+        negative = text.startswith("-")
+        text = text.lstrip("-")
+        if "." not in text and "e" not in text.lower():
+            text += ".0"
+        if width == 64:
+            mantissa, marker, exponent = text.lower().partition("e")
+            text = mantissa + rng.choice("dD") + (exponent or "0")
+        return ("-" if negative else "") + text, bits
+
+
+def check_m12_literals(compiler, directory, seed):
+    rng = random.Random(seed ^ 0x11EAF)
+    literals = [(width, *random_literal(rng, width)) for width in [32] * 6 + [64] * 6]
+    kinds = {32: "real", 64: "dreal"}
+    source = directory / "literals.sig"
+    source.write_text(
+        "process M12LITERALS =\n  ( ! integer N; " + "; ".join(f"{kinds[width]} L{index}" for index, (width, _, _) in enumerate(literals))
+        + "; )\n  (| N := ZN + 1\n   | ZN := N $ init 0\n" + "".join(f"   | L{index} := {text}\n" for index, (_, text, _) in enumerate(literals))
+        + "   | " + " ^= ".join(f"L{index}" for index in range(len(literals))) + " ^= N\n   |)\n  where\n    integer ZN;\n  end;\n")
+    executable = directory / "literals"
+    compiled = compile_case(compiler, source, executable)
+    if compiled.returncode != 0:
+        return [f"{source}: compile failed (exit {compiled.returncode}): {compiled.stderr.strip()}"]
+    expected = "1 " + " ".join(float_text(bits, width) for width, _, bits in literals)
+    lines, timed_out, returncode = read_trace([str(executable)], 1, directory / "literals.in")
+    if lines != [expected]:
+        return [f"{source}: trace {lines!r}, expected {[expected]!r}"]
+    return []
+
+
+def check_m12(compiler, programs, seed):
+    directory = BUILD / "m12" / str(seed)
+    directory.mkdir(parents=True, exist_ok=True)
+    return (check_m12_echo(programs["echo"], directory, seed) + check_m12_arithmetic(programs["arithmetic"], directory, seed)
+            + check_m12_literals(compiler, directory, seed))
+
+
+def check_m12_exponent(compiler, directory):
+    zeros = 1000002
+    text = "0." + "0" * zeros + "1"
+    exponent = zeros - 1
+    source = directory / "exponent.sig"
+    source.write_text(
+        "process M12EXPONENT =\n  ( ! integer N; real X; dreal Y; )\n  (| N := ZN + 1\n   | ZN := N $ init 0\n"
+        f"   | X := {text}e{exponent}\n   | Y := {text}d{exponent}\n   | X ^= Y ^= N\n   |)\n  where\n    integer ZN;\n  end;\n")
+    executable = directory / "exponent"
+    compiled = compile_case(compiler, source, executable)
+    if compiled.returncode != 0:
+        return [f"{source}: compile failed (exit {compiled.returncode}): {compiled.stderr.strip()}"]
+    value = Fraction(10) ** (exponent - zeros - 1)
+    expected = f"1 {float_text(nearest32(value), 32)} {float_text(to_bits(float(value), 64), 64)}"
+    lines, timed_out, returncode = read_trace([str(executable)], 1, directory / "exponent.in")
+    if lines != [expected]:
+        return [f"{source}: trace {lines!r}, expected {[expected]!r}"]
+    return []
+
+
+def m12(compiler, seeds, jobs):
+    print(f"m12 seeds: {' '.join(map(str, seeds))}")
+    directory = BUILD / "m12"
+    directory.mkdir(parents=True, exist_ok=True)
+    programs = {}
+    for name, text in (("echo", M12_ECHO_SOURCE), ("arithmetic", M12_ARITHMETIC_SOURCE)):
+        source = directory / f"{name}.sig"
+        source.write_text(text)
+        programs[name] = directory / name
+        compiled = compile_case([str(compiler)], source, programs[name])
+        if compiled.returncode != 0:
+            print(f"{source}: compile failed (exit {compiled.returncode}): {compiled.stderr.strip()}")
+            return 1
+    exponent_report = check_m12_exponent([str(compiler)], directory)
+    for line in exponent_report:
+        print(f"FAIL {line}")
+    failures = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        for seed, report in zip(seeds, pool.map(lambda seed: check_m12([str(compiler)], programs, seed), seeds)):
+            if report:
+                failures += 1
+                print(f"FAIL seed {seed}")
+                for line in report:
+                    print(f"  {line}")
+    print(f"{len(seeds) - failures} seeds passed, {failures} failed")
+    return 1 if failures or exponent_report else 0
+
+
 def check(compiler, seed):
     program = Program(seed)
     directory = BUILD / str(seed)
@@ -1969,7 +2330,7 @@ def main():
         if arguments != ["m9a"]:
             sys.exit("--against requires the method m9a")
         return m9a(compiler, against, jobs)
-    methods = {"m9b": m9b, "m9c": m9c, "m10a": m10a, "m10b": m10b, "m10c": m10c, "m11": m11}
+    methods = {"m9b": m9b, "m9c": m9c, "m10a": m10a, "m10b": m10b, "m10c": m10c, "m11": m11, "m12": m12}
     method = methods.get(arguments[0]) if arguments else None
     if method:
         del arguments[0]

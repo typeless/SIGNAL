@@ -20,7 +20,7 @@ QEMU_COMMANDS = {
     "virt": ["qemu-system-aarch64", "-M", "virt", "-cpu", "cortex-a72", "-nographic", "-no-reboot", "-kernel"],
     "mps2-an385": ["qemu-system-arm", "-M", "mps2-an385", "-cpu", "cortex-m3", "-nographic", "-no-reboot", "-kernel"],
 }
-STAGE2_ONLY = {"m5", "m6", "m7", "m8", "m9", "m10", "m11"}
+STAGE2_ONLY = {"m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"}
 DEFAULT_JOBS = 4
 PEAK_RSS_TABLE = BUILD / "peak_rss.tsv"
 

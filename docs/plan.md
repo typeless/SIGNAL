@@ -159,9 +159,11 @@ Milestones M7–M12 were approved 2026-10-26; they schedule every S1 construct t
 - **Types:** `real`/`dreal` (V–1.3) on arm64 floating point; `complex`/`dcomplex` and `@` (V–1.4).
 - **Functions:** `**` with a real base; the XIII mathematical and complex functions in the compiler's own runtime (R2: no libm).
 - **Step lines:** decimal printing and parsing of reals.
-- **Open for this milestone's check-in:** soft float on Cortex-M3, which has no FPU, or reals rejected there.
+- **Open for this milestone's check-in:** soft float on Cortex-M3, which has no FPU, or reals rejected there. Decided 2026-11-02: rejected there (D22).
 - Placed last because no R2 program class (drivers, a dynamic linker) needs reals, and no other milestone depends on them.
 - Exit program: each function agrees on every target with Python's `math` module, run offline, within an error bound stated per function at the check-in.
+- Phases (D22): M12a reals; M12b complex numbers; M12c the XIII–4 functions and the exit program.
+  - M12a done 2026-11-02: `real` and `dreal` constants, arithmetic, comparisons, conversions, `**`, step lines, `read` and `write` on macOS and `virt`, rejected on `mps2-an385` (`m12/`). `python3 tests/selfhost.py` printed `stage2 matches stage1`, `stage3 matches stage2`, `run.py: 981 passed, 0 failed` and `diff.py: 274 cases, 0 differ, 10 declared moves`; `differential.py m12 200` (shortest printing of random bit patterns of every class, parsing of random decimals, exact midpoints and digits past the 768th by both the runtime and the compiler, print–parse roundtrip, and arithmetic, comparisons and conversions, all against Python's `float`, `repr`, `struct` and `fractions`), `m11`, `m10c`, `m10b`, `m10a`, `m9c`, `m9b` and `200` printed `200 seeds passed, 0 failed`; `--against build/m9c/stage2 m9a` printed `565 cases, 0 differ`. Self-compile peaks at a 201 MiB memory footprint (191 MiB before M12a, both measured with `/usr/bin/time -l` the same day); the resident-set peak varied from 94 to 202 MiB across runs that wrote the same image, so it no longer measures growth. A cross-model review found a `real` element stored unwidened into a `dreal` array and every real literal read as 0.0 past about 3350 literals; both are fixed with cases.
 
 ## Not scheduled
 
