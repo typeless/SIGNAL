@@ -1,0 +1,1 @@
+math_modf_whole.sig:4:16: error: modf returns a tuple and must be the whole definition

@@ -7,6 +7,7 @@ import re
 import struct
 import subprocess
 import sys
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from fractions import Fraction
 from pathlib import Path
 
@@ -2159,6 +2160,29 @@ M12_ARRAY_EQ_SOURCE = (
     + f"\n   |)\n  where\n    [{M12_ARRAY_EQ_SIZE}] struct (real F; integer G;) SL, SR;\n  end;\n"
 )
 
+M12_MATH_UNARY = ["acos", "asin", "atan", "cos", "sin", "tan", "cosh", "sinh", "tanh", "exp", "log", "log10", "sqrt", "ceil",
+                  "fabs", "floor"]
+M12_MATH_EXACT = {"sqrt", "fabs", "floor", "ceil", "fmod", "ldexp"}
+M12_MATH_OUTPUTS = ([(name, "dreal", f"{name}(X)") for name in M12_MATH_UNARY]
+                    + [("atan2", "dreal", "atan2(X, Y)"), ("pow", "dreal", "pow(X, Y)"), ("fmod", "dreal", "fmod(X, Y)"),
+                       ("ldexp", "dreal", "ldexp(X, K)"), ("arg", "real", "arg(A)"), ("argd", "dreal", "argd(X @ Y)")])
+M12_MATH_TUPLE_OUTPUTS = [("mantissa", "dreal"), ("exponent", "integer"), ("fraction", "dreal"), ("integral", "dreal"),
+                          ("ldexp(frexp(X))", "dreal"), ("fraction + integral", "dreal")]
+M12_MATH_TUPLE_NAMES = [f"T{index}" for index in range(len(M12_MATH_TUPLE_OUTPUTS))]
+M12_MATH_SOURCE = (
+    "process M12MATH =\n  ( ? dreal X, Y; integer K; complex A;\n    ! "
+    + "; ".join([f"{kind} O{index}" for index, (_, kind, _) in enumerate(M12_MATH_OUTPUTS)]
+                + [f"{kind} {name}" for name, (_, kind) in zip(M12_MATH_TUPLE_NAMES, M12_MATH_TUPLE_OUTPUTS)]) + "; )\n  (| "
+    + "\n   | ".join(f"O{index} := {expression}" for index, (_, _, expression) in enumerate(M12_MATH_OUTPUTS))
+    + "\n   | (T0, T1) := frexp(X)\n   | (T2, T3) := modf(X)\n   | T4 := ldexp(T0, T1)\n   | T5 := T2 + T3"
+    + "\n   | X ^= Y ^= K ^= A\n   |)\n  where\n  end;\n"
+)
+M12_MATH_ANCHORS = [709.782712893384, -745.1332191019411, -708.3964185322641, 710.4758600739439, 22.0, 0.34657359027997264,
+                    1.0397207708399179, 0.4375, 0.6875, 1.1875, 2.4375, 2.0 ** 66, 0.5, 0.975, 1.0, 0.6744, 2.0 ** -27,
+                    2.0 ** -28, 1647099.3291652855]
+M12_MATH_EXPONENTS = [0.0, -0.0, math.inf, -math.inf, math.nan, 1.0, -1.0, 0.5, -0.5, 2.0, 3.0, -3.0, 2.0 ** 53,
+                      2.0 ** 53 + 2, 2.0 ** 63, 1e300, -1e300, 1024.0, -1075.0, 1023.9999999999999]
+
 
 def rounded(number, width):
     return number if width == 64 else from_bits(to_bits(number, 32), 32)
@@ -2287,6 +2311,47 @@ def within_one_ulp(got, want, width):
         return got_bits == want_bits
     return abs(got_bits - want_bits) <= 1
 
+
+@functools.cache
+def decimal_pi(digits):
+    with localcontext() as context:
+        context.prec = digits + 10
+        limit = Decimal(10) ** -(digits + 10)
+        total = Decimal(0)
+        for weight, n in ((16, 5), (-4, 239)):
+            power, k = Decimal(1) / n, 0
+            while power > limit:
+                total += weight * power / (2 * k + 1) * (1 if k % 2 == 0 else -1)
+                power /= n * n
+                k += 1
+        return +total
+
+
+def true_tan(x):
+    digits = 100 + max(0, math.frexp(x)[1]) * 302 // 1000
+    with localcontext() as context:
+        context.prec = digits
+        half_pi = decimal_pi(digits) / 2
+        k = (Decimal(x) / half_pi).to_integral_value(rounding=ROUND_HALF_EVEN)
+        r = Decimal(x) - k * half_pi
+        sine, cosine = r, Decimal(1)
+        sine_term, cosine_term, i = r, Decimal(1), 1
+        while sine_term or cosine_term:
+            sine_term *= -r * r / ((2 * i) * (2 * i + 1))
+            cosine_term *= -r * r / ((2 * i - 1) * (2 * i))
+            if abs(sine_term) <= abs(sine) * Decimal(10) ** -digits and abs(cosine_term) <= Decimal(10) ** -digits:
+                break
+            sine += sine_term
+            cosine += cosine_term
+            i += 1
+        return -cosine / sine if k % 2 else sine / cosine
+
+
+def within_one_ulp_of_true(got, true):
+    value = float(got)
+    if not math.isfinite(value):
+        return False
+    return Decimal(math.nextafter(value, -math.inf)) < true < Decimal(math.nextafter(value, math.inf))
 
 def random_component(rng, width):
     precision, exponent_bits = FLOAT_FORMATS[width]
@@ -2423,13 +2488,146 @@ def check_m12_array_eq(executable, directory, seed):
     return report
 
 
+def m12_math_expected(name, *args):
+    if name in ("arg", "argd"):
+        return math.atan2(args[1], args[0])
+    try:
+        if name in ("floor", "ceil"):
+            rounded = float(getattr(math, name)(args[0]))
+            return math.copysign(rounded, args[0]) if rounded == 0.0 else rounded
+        return float(getattr(math, name)(*args))
+    except OverflowError:
+        if name in ("exp", "cosh"):
+            return math.inf
+        if name == "pow":
+            return -math.inf if args[0] < 0 and m12_odd_integer(args[1]) else math.inf
+        return math.copysign(math.inf, args[0])
+    except ValueError:
+        if name in ("log", "log10") and args[0] == 0.0:
+            return -math.inf
+        if name == "pow" and args[0] == 0.0 and args[1] < 0:
+            return math.copysign(math.inf, args[0]) if m12_odd_integer(args[1]) else math.inf
+        return math.nan
+
+
+def m12_odd_integer(value):
+    return math.isfinite(value) and value == math.floor(value) and abs(value) < 2.0 ** 53 and int(value) % 2 == 1
+
+
+def m12_ulps_away(value, rng, spread):
+    if not math.isfinite(value):
+        return value
+    for _ in range(rng.randrange(spread + 1)):
+        value = math.nextafter(value, rng.choice([math.inf, -math.inf]))
+    return value
+
+
+def m12_math_operands(rng):
+    kind = rng.randrange(9)
+    if kind == 0:
+        x = from_bits(random_component(rng, 64), 64)
+    elif kind == 1:
+        k = rng.choice([rng.randrange(1, 9), rng.randrange(1, 1 << 20), rng.getrandbits(rng.randrange(20, 60)) | 1])
+        x = m12_ulps_away(k * (math.pi / 2), rng, 4) * rng.choice([1, -1])
+    elif kind == 2:
+        x = rng.uniform(1, 2) * 2.0 ** rng.randrange(20, 1024) * rng.choice([1, -1])
+    elif kind == 3:
+        x = m12_ulps_away(1.0, rng, 1 << rng.randrange(12)) if rng.random() < 0.5 else 1.0 + rng.uniform(-1e-6, 1e-6)
+    elif kind == 4:
+        x = m12_ulps_away(rng.choice(M12_MATH_ANCHORS), rng, 3) * rng.choice([1, -1])
+    elif kind == 5:
+        x = rng.uniform(-1, 1) * rng.choice([1.0, 2.0, 8.0, 50.0])
+    else:
+        x = from_bits(random_float_bits(rng, 64), 64)
+    shape = rng.randrange(8)
+    if shape == 0:
+        y = rng.choice(M12_MATH_EXPONENTS) * rng.choice([1.0, 1.0, rng.uniform(0.999, 1.001)])
+    elif shape == 1:
+        y = float(rng.randrange(-60, 61)) + rng.choice([0.0, 0.5])
+    elif shape == 2:
+        x, y = rng.choice([(2.0, 1024.0), (2.0, -1074.0), (10.0, 308.25), (0.5, 1074.0), (-2.0, 1023.0)])
+        y = m12_ulps_away(y, rng, 3)
+    elif shape == 3:
+        x, y = rng.uniform(1, 2) * 2.0 ** rng.randrange(900, 1024), from_bits(rng.randrange(1, 1 << 60), 64)
+    elif shape == 4:
+        x, y = m12_ulps_away(1.0, rng, 4), rng.choice([1.0, -1.0]) * 2.0 ** rng.randrange(40, 1023)
+    elif shape == 5:
+        y = x * rng.choice([1.0, -1.0, 2.0, 0.5, 3.0])
+    else:
+        y = from_bits(random_component(rng, 64), 64)
+    exponent = math.frexp(x)[1] if math.isfinite(x) else 0
+    k = rng.choice([rng.randrange(-(1 << 31), 1 << 31), rng.randrange(-1100, 1100), rng.randrange(-2200, 2200),
+                    (1 << 31) - 1, -(1 << 31), -exponent - rng.randrange(1021, 1080), 1024 - exponent])
+    a = [random_component(rng, 32) for _ in range(2)]
+    return x, y, k, [0x7FC00000 if from_bits(bits, 32) != from_bits(bits, 32) else bits for bits in a]
+
+
+def m12_tuple_laws(x, actual):
+    mantissa, exponent = math.frexp(x)
+    fraction, integral = math.modf(x)
+    text = float_text(to_bits(x, 64), 64)
+    want = [float_text(to_bits(mantissa, 64), 64), str(exponent), float_text(to_bits(fraction, 64), 64),
+            float_text(to_bits(integral, 64), 64), text, text]
+    wrong = [f"{name}: got {got!r}, expected {expected!r}"
+             for (name, _), expected, got in zip(M12_MATH_TUPLE_OUTPUTS, want, actual) if got != expected]
+    if x == x and len(actual) > 3 and actual[2] is not None and actual[3] is not None:
+        sign = math.copysign(1.0, x)
+        for name, part in (("fraction", actual[2]), ("integral", actual[3])):
+            if math.copysign(1.0, float(part)) != sign:
+                wrong.append(f"{name} {part!r} has the wrong sign for {text}")
+    return wrong
+
+
+def check_m12_math(executable, directory, seed):
+    rng = random.Random(seed ^ 0x3A7)
+    rows = []
+    for _ in range(M12_STEPS):
+        x, y, k, a = m12_math_operands(rng)
+        re, im = (from_bits(bits, 32) for bits in a)
+        texts = [float_text(to_bits(x, 64), 64), float_text(to_bits(y, 64), 64), str(k)] + [float_text(bits, 32) for bits in a]
+        expected = []
+        for name, kind, _ in M12_MATH_OUTPUTS:
+            arguments = {"atan2": (x, y), "pow": (x, y), "fmod": (x, y), "ldexp": (x, k), "arg": (re, im),
+                         "argd": (x, y)}.get(name, (x,))
+            value = m12_math_expected(name, *arguments)
+            expected.append(float_text(to_bits(value, 32), 32) if kind == "real" else float_text(to_bits(value, 64), 64))
+        rows.append((texts, expected))
+    input_path = directory / "math.in"
+    input_path.write_text("".join("1 " + " ".join(texts) + "\n" for texts, _ in rows))
+    lines, timed_out, returncode = read_trace([str(executable)], M12_STEPS, input_path)
+    report = []
+    if len(lines) != M12_STEPS:
+        report.append(f"{input_path}: {len(lines)} lines, exit {returncode}{', timed out' if timed_out else ''}")
+    for step, ((texts, want), got) in enumerate(zip(rows, lines)):
+        fields = got.split(" ")
+        wrong = []
+        padded = fields + [None] * (len(want) + len(M12_MATH_TUPLE_OUTPUTS))
+        for (name, kind, expression), expected, actual in zip(M12_MATH_OUTPUTS, want, padded):
+            if actual is None:
+                matches = False
+            elif name in M12_MATH_EXACT:
+                matches = actual == expected
+            else:
+                matches = within_one_ulp(actual, expected, 32 if kind == "real" else 64)
+                if not matches and name == "tan" and math.isfinite(float(texts[0])):
+                    matches = within_one_ulp_of_true(actual, true_tan(float(texts[0])))
+            if not matches:
+                wrong.append(f"{expression}: got {actual!r}, expected {expected!r}")
+        x = float(texts[0])
+        wrong += m12_tuple_laws(x, padded[len(want):len(want) + len(M12_MATH_TUPLE_OUTPUTS)])
+        if len(fields) != len(want) + len(M12_MATH_TUPLE_OUTPUTS):
+            wrong.append(f"{len(fields)} fields, expected {len(want) + len(M12_MATH_TUPLE_OUTPUTS)}")
+        if wrong:
+            report.append(f"{input_path}: step {step + 1} inputs {' '.join(texts)}: {'; '.join(wrong)}")
+    return report
+
 def check_m12(compiler, programs, seed):
     directory = BUILD / "m12" / str(seed)
     directory.mkdir(parents=True, exist_ok=True)
     return (check_m12_echo(programs["echo"], directory, seed) + check_m12_arithmetic(programs["arithmetic"], directory, seed)
             + check_m12_literals(compiler, directory, seed) + check_m12_complex_echo(programs["complex_echo"], directory, seed)
             + check_m12_complex(programs["complex"], directory, seed)
-            + check_m12_array_eq(programs["array_eq"], directory, seed))
+            + check_m12_array_eq(programs["array_eq"], directory, seed) + check_m12_math(programs["math"], directory, seed))
 
 
 def check_m12_exponent(compiler, directory):
@@ -2458,7 +2656,7 @@ def m12(compiler, seeds, jobs):
     directory.mkdir(parents=True, exist_ok=True)
     programs = {}
     for name, text in (("echo", M12_ECHO_SOURCE), ("arithmetic", M12_ARITHMETIC_SOURCE), ("complex_echo", M12_COMPLEX_ECHO_SOURCE),
-                       ("complex", M12_COMPLEX_SOURCE), ("array_eq", M12_ARRAY_EQ_SOURCE)):
+                       ("complex", M12_COMPLEX_SOURCE), ("array_eq", M12_ARRAY_EQ_SOURCE), ("math", M12_MATH_SOURCE)):
         source = directory / f"{name}.sig"
         source.write_text(text)
         programs[name] = directory / name

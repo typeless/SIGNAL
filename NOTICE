@@ -1,0 +1,68 @@
+compiler/tables.py ports these files of FreeBSD lib/msun/src at commit 0e44056f19ab339fe7e37c03e49cf50b33bf1d6b, each under the notice below that it carries.
+
+Covers e_acos.c, e_asin.c, e_atan2.c, e_cosh.c, e_fmod.c, e_log.c, e_log10.c, e_rem_pio2.c, e_sinh.c, k_cos.c, k_log.h, k_rem_pio2.c, k_sin.c:
+
+====================================================
+Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+
+Developed at SunSoft, a Sun Microsystems, Inc. business.
+Permission to use, copy, modify, and distribute this
+software is freely granted, provided that this notice
+is preserved.
+====================================================
+
+Covers s_atan.c, s_cos.c, s_frexp.c, s_modf.c, s_sin.c, s_tan.c, s_tanh.c:
+
+====================================================
+Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+
+Developed at SunPro, a Sun Microsystems, Inc. business.
+Permission to use, copy, modify, and distribute this
+software is freely granted, provided that this notice
+is preserved.
+====================================================
+
+Covers k_tan.c:
+
+====================================================
+Copyright 2004 Sun Microsystems, Inc.  All Rights Reserved.
+
+Permission to use, copy, modify, and distribute this
+software is freely granted, provided that this notice
+is preserved.
+====================================================
+
+Covers e_exp.c, e_pow.c:
+
+====================================================
+Copyright (C) 2004 by Sun Microsystems, Inc. All rights reserved.
+
+Permission to use, copy, modify, and distribute this
+software is freely granted, provided that this notice
+is preserved.
+====================================================
+
+Covers s_scalbn.c, which carries "Copyright (c) 2005-2020 Rich Felker, et al." and "SPDX-License-Identifier: MIT" and refers to musl's COPYRIGHT for this text:
+
+----------------------------------------------------------------------
+Copyright © 2005-2020 Rich Felker, et al.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+----------------------------------------------------------------------

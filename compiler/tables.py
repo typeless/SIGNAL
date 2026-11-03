@@ -20,12 +20,15 @@ SEED_WORDS = [
     "cell", "var", "after", "from", "count", "case", "in", "array", "to",
     "module", "use", "private", "ref", "action", "safe", "deterministic", "unsafe", "defaultvalue", "shared", "statevar", "tr", "assert", "min_clock", "spec",
     "affine_sample", "affine_clock_relation", "affine_unsample",
-    "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "tick'", "v'", "zv'", "vb'", "zvb'", "clk_x'", "clk_y'", "clk_i'", "rep'", "seq'", "tup'",
+    "cell'", "zcell'", "var'", "varm'", "zvar'", "h1'", "h2'", "m'", "a'", "za'", "s'", "zs'", "n'", "i'", "zcount'", "tick'", "v'", "zv'", "vb'", "zvb'", "clk_x'", "clk_y'", "clk_i'", "rep'", "seq'", "tup'", "math'",
     "dim", "size", "bounds", "step", "window", "struct", "bundle",
     "conj", "conjd", "rpart", "rpartd", "ipart", "ipartd", "modu", "modud",
+    "acos", "asin", "atan", "cos", "sin", "tan", "cosh", "sinh", "tanh", "exp", "log", "log10", "sqrt", "ceil", "fabs", "floor",
+    "frexp", "modf", "frexp'm", "frexp'e", "modf'f", "modf'i",
+    "atan2", "ldexp", "pow", "fmod", "arg", "argd",
 ]
 FRESH_FIRST = "cell'"
-FRESH_LAST = "tup'"
+FRESH_LAST = "math'"
 KEYWORDS = {
     "process", "where", "end", "init", "integer", "boolean", "event", "true", "false", "when", "default", "and", "or",
     "xor", "not", "modulo", "short", "long", "shl", "shr", "type", "enum", "constant", "next", "iterate", "of", "with",
@@ -49,7 +52,9 @@ NAME_CONSTANTS = {
     "struct": "N_STRUCT", "bundle": "N_BUNDLE",
     "string": "N_STRING", "read": "N_READ", "write": "N_WRITE", "writeString": "N_WRITE_STRING",
     "conj": "N_CONJ", "conjd": "N_CONJD", "rpart": "N_RPART", "rpartd": "N_RPARTD", "ipart": "N_IPART",
-    "ipartd": "N_IPARTD", "modu": "N_MODU", "modud": "N_MODUD",
+    "ipartd": "N_IPARTD", "modu": "N_MODU", "modud": "N_MODUD", "acos": "N_ACOS", "floor": "N_FLOOR", "atan2": "N_ATAN2",
+    "ldexp": "N_LDEXP", "fmod": "N_FMOD", "arg": "N_ARG", "argd": "N_ARGD", "frexp": "N_FREXP", "modf": "N_MODF",
+    "frexp'm": "N_FREXP_MANTISSA", "frexp'e": "N_FREXP_EXPONENT", "modf'f": "N_MODF_FRACTION", "math'": "N_MATH_MARK",
 }
 SYMBOLS = [
     ("(|", "OPEN_BAR"), ("|)", "BAR_CLOSE"), ("-->", "ARROW"), ("::", "COLONS"), (":=", "DEFINE"),
@@ -85,11 +90,12 @@ OPS = [
     "SEQ_TAIL_PAIR", "SEQ_FINAL", "SEQ_FROM", "SEQ_TO", "SEQ_BY", "SEQ_HIDDEN", "SEQ_PREVIOUS", "SEQ_INDEX",
     "TUPLE_HEAD", "TUPLE_TAIL", "TUPLE_TARGET", "TUPLE_OUTPUT", "TRANSPOSE", "MATPROD",
     "CPAIR", "CONJ_CALL", "RPART_CALL", "IPART_CALL", "MODU_CALL", "CONJ", "RPART", "IPART", "MODU", "IMAG", "FMA", "COPYSIGN",
+    "MATH_CALL", "MATH2_CALL", "CARG_CALL", "MATH", "MATH2", "CARG", "TUPLE_SOURCE", "TUPLE_PART", "TUPLE_TAIL_MATH",
 ]
 MONOCHRONOUS = {
     "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR",
     "CONVERT", "ELEMENT", "GATHER", "PAIR", "NEXT", "PREV", "ITER", "IF", "BRANCH", "ARG", "RANGE", "FLAT", "SLICE", "BOUNDS", "BOUNDS_PAIR", "DIM", "DIM_SIZE", "PUT", "SPAN", "TABLE", "RESTRUCTURE", "CONCAT", "ARRAY_EQ", "RANGE_TABLE", "FLATV", "EACH", "EACH_STORE", "WINDOW",
-    "TRANSPOSE", "MATPROD", "CPAIR", "CONJ", "RPART", "IPART", "MODU", "IMAG", "FMA", "COPYSIGN",
+    "TRANSPOSE", "MATPROD", "CPAIR", "CONJ", "RPART", "IPART", "MODU", "IMAG", "FMA", "COPYSIGN", "MATH", "MATH2", "CARG",
 }
 CX_REFS = {"NONE": 0, "AR": 1, "AI": 2, "BR": 3, "BI": 4, "L": 5, "R": 6, "SELF": 7, "IMR": 8}
 CX_TEMP_BASE = 16
@@ -241,6 +247,12 @@ def complex_modulus():
     return program
 
 
+def complex_argument():
+    program = ComplexProgram()
+    program.step("RE", "MATH2", program.temp("CONVERT", "AI", kind="K"), program.temp("CONVERT", "AR", kind="K"), "K")
+    return program
+
+
 def complex_conjugate():
     program = ComplexProgram()
     program.step("IM", "NEG", program.temp("CONVERT", "AI"))
@@ -292,6 +304,7 @@ CX_PROGRAMS = {
     "RPART": complex_part("AR"),
     "IPART": complex_part("AI"),
     "MODU": complex_modulus(),
+    "CARG": complex_argument(),
 }
 CX_TYPED_PROGRAM = {
     "INPUT": "INPUT", "EFFECT": "INPUT", "ARG": "RETYPE", "CONST": "CONST", "DELAY": "DELAY", "COPY": "SIGNAL", "NEG": "UNARY",
@@ -300,7 +313,7 @@ CX_TYPED_PROGRAM = {
     "TABLE": "TABLE", "PUT": "BINARY", "NEXT": "BINARY", "PAIR": "IF", "ELEMENT": "WHEN", "GATHER": "WHEN", "RESTRUCTURE": "WHEN",
     "WINDOW": "WHEN", "EACH": "UNARY", "EACH_STORE": "UNARY", "TRANSPOSE": "UNARY", "CONCAT": "BINARY",
 }
-CX_OPERAND_PROGRAM = {"EQ": "EQ", "NE": "NE", "ARRAY_EQ": "ARRAY_EQ", "CONVERT": "RPART", "RPART": "RPART", "IPART": "IPART", "MODU": "MODU"}
+CX_OPERAND_PROGRAM = {"EQ": "EQ", "NE": "NE", "ARRAY_EQ": "ARRAY_EQ", "CONVERT": "RPART", "RPART": "RPART", "IPART": "IPART", "MODU": "MODU", "CARG": "CARG"}
 
 POINTWISE = {
     "ADD", "SUB", "MUL", "DIV", "MOD", "NEG", "LT", "LE", "GT", "GE", "EQ", "NE", "AND", "OR", "XOR", "NOT", "SHL", "SHR", "IF", "BRANCH",
@@ -340,10 +353,15 @@ COMPOSITES = {
     "SEQ_FINAL": ([], ["SEQ_HIDDEN"]),
     "TUPLE_HEAD": ([], ["TUPLE_TARGET", "PREV"]),
     "TUPLE_TAIL": ([], ["TUPLE_OUTPUT", "PAIR", "NEXT"]),
+    "TUPLE_PART": ([], ["TUPLE_SOURCE", "MATH"]),
+    "TUPLE_TAIL_MATH": ([], ["TUPLE_SOURCE", "MATH", "PAIR", "NEXT"]),
     "CONJ_CALL": ([], ["CONJ"]),
     "RPART_CALL": ([], ["RPART"]),
     "IPART_CALL": ([], ["IPART"]),
     "MODU_CALL": ([], ["MODU"]),
+    "MATH_CALL": ([], ["MATH"]),
+    "MATH2_CALL": ([], ["MATH2"]),
+    "CARG_CALL": ([], ["CARG"]),
 }
 LEAVES = {"CONST", "SIGNAL", "ENUMCONST", "SLOT", "DEFAULTS"}
 TEMPLATE_ROW_KINDS = ["EMIT", "LEFT", "RIGHT", "DEFINE", "GROUP", "END", "INPUT"]
@@ -459,7 +477,7 @@ TEMPLATE_PROGRAMS = {
         template_emit("SIGNAL", "TARGET"), template_emit("SIGNAL", "h1'"), GROUP_ROW, END_ROW,
     ]),
 }
-UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV", "VAR", "STATE", "DIM", "AXIS", "TRANSPOSE", "CONJ", "RPART", "IPART", "MODU"}
+UNARY = {"NEG", "NOT", "UWHEN", "CLOCK", "DELAY", "PREV", "VAR", "STATE", "DIM", "AXIS", "TRANSPOSE", "CONJ", "RPART", "IPART", "MODU", "MATH", "CARG"}
 BINARY = [
     ("default", "DEFAULT", 3), ("when", "WHEN", 4), ("xor", "XOR", 11), ("or", "OR", 12), ("and", "AND", 13),
     ("=", "EQ", 16), ("/=", "NE", 16), ("<", "LT", 16), ("<=", "LE", 16), (">", "GT", 16), (">=", "GE", 16),
@@ -1036,6 +1054,7 @@ FORMS = [
     "FMOV_S_W", "FMOV_D_X", "FMOV_W_S", "FMOV_X_D", "FADD_S", "FADD_D", "FSUB_S", "FSUB_D", "FMUL_S", "FMUL_D",
     "FDIV_S", "FDIV_D", "FNEG_S", "FNEG_D", "FCMP_S", "FCMP_D", "SCVTF_S_X", "SCVTF_D_X", "UCVTF_S_X", "UCVTF_D_X",
     "FCVTZS_X_S", "FCVTZS_X_D", "FCVT_D_S", "FCVT_S_D", "CLZ_X", "MSR_CPACR", "ISB", "FMADD_S", "FMADD_D", "FSQRT_D",
+    "MOVN_X", "ASRV_X", "UBFM_X", "SBFM_X", "FABS_D", "FMOV_D", "FRINTM_D", "FRINTP_D", "FRINTZ_D",
 ]
 MOVE_X = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 2, 21))
 MOVE_W = ((0, 0, 5, 0), (2, 0, 16, 5), (3, 0, 1, 21))
@@ -1043,6 +1062,7 @@ IMM12 = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 12, 10))
 REG2 = ((0, 0, 5, 0), (1, 0, 5, 5))
 REG3 = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 5, 16))
 REG4 = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 5, 16), (3, 0, 5, 10))
+BITFIELD = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 6, 16), (3, 0, 6, 10))
 SELECT = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 5, 16), (3, 0, 4, 12))
 SCALED = tuple(((0, 0, 5, 0), (1, 0, 5, 5), (2, scale, 12, 10)) for scale in range(4))
 INDEXED = ((0, 0, 5, 0), (1, 0, 5, 5), (2, 0, 9, 12))
@@ -1150,6 +1170,15 @@ FORM_SPECS = [
     ("fmadd s", 0x1F000000, REG4, False, "NONE"),
     ("fmadd d", 0x1F400000, REG4, False, "NONE"),
     ("fsqrt d", 0x1E61C000, REG2, False, "NONE"),
+    ("movn x", 0x92800000, MOVE_X, False, "NONE"),
+    ("asrv x", 0x9AC02800, REG3, False, "NONE"),
+    ("ubfm x", 0xD3400000, BITFIELD, False, "NONE"),
+    ("sbfm x", 0x93400000, BITFIELD, False, "NONE"),
+    ("fabs d", 0x1E60C000, REG2, False, "NONE"),
+    ("fmov d", 0x1E604000, REG2, False, "NONE"),
+    ("frintm d", 0x1E654000, REG2, False, "NONE"),
+    ("frintp d", 0x1E64C000, REG2, False, "NONE"),
+    ("frintz d", 0x1E65C000, REG2, False, "NONE"),
 ]
 
 
@@ -1276,7 +1305,9 @@ GLOBAL_LABELS = [
     "malformed", "reserve_failed", "read_value", "put_int", "put_uint", "put_bool", "step", "read_done", "wait", "complete",
     "divide", "put_text", "put_char", "read_line", "read_number", "read_malformed",
     "put_real", "put_dreal", "read_real_value", "parse_real", "bn_muladd", "bn_add", "bn_sub", "bn_cmp", "bn_set",
-    "bn_shift", "bn_bits",
+    "bn_shift", "bn_bits", "math_acos", "math_asin", "math_atan", "math_cos", "math_sin", "math_tan", "math_cosh",
+    "math_sinh", "math_tanh", "math_exp", "math_log", "math_log10", "math_atan2", "math_ldexp", "math_pow", "math_fmod",
+    "math_exp_dd", "math_atan_dd", "math_rem_pio2", "math_k_sin", "math_k_cos", "math_k_tan", "math_frexp", "math_modf",
 ]
 LOCAL_LABEL_COUNT = 96
 EMIT_SOURCES = [
@@ -1427,6 +1458,35 @@ def complex_modulus_template(narrow):
         emit("FMADD_D", 20, 21, 22, 20), emit("FMUL_D", 20, 20, 22), emit("FMOV_D_X", 18, 11), emit("FMUL_D", 20, 20, 18),
         emit("FMOV_X_D", 9, 20), emit("B", to=label("local4")), place("local1"), emit("MOVZ_X", 9, 0, 0x7FF0, 3),
         emit("B", to=label("local4")), place("local3"), emit("MOVZ_X", 9), place("local4"), *narrow_result,
+    )
+
+
+MATH_INSTRUCTIONS = {"sqrt": "FSQRT_D", "ceil": "FRINTP_D", "fabs": "FABS_D", "floor": "FRINTM_D", "modf'i": "FRINTZ_D"}
+MATH_PARTS = {"frexp'm": ("frexp", 0), "frexp'e": ("frexp", 1), "modf'f": ("modf", 0)}
+MATH_UNARY = ["acos", "asin", "atan", "cos", "sin", "tan", "cosh", "sinh", "tanh", "exp", "log", "log10", "sqrt", "ceil",
+              "fabs", "floor", "frexp", "modf", "frexp'm", "frexp'e", "modf'f", "modf'i"]
+MATH_BINARY = ["atan2", "ldexp", "pow", "fmod"]
+
+
+def math_template(function):
+    if function in MATH_INSTRUCTIONS:
+        return generic(emit("FMOV_D_X", 16, 9), emit(MATH_INSTRUCTIONS[function], 16, 16), emit("FMOV_X_D", 9, 16))
+    if function in ("frexp", "modf"):
+        return generic()
+    routine, result = MATH_PARTS.get(function, (function, 0))
+    if function == "ldexp":
+        second = [emit("SBFM_X", 1, 10, 0, 31)]
+    else:
+        second = [emit("ORR_X", 1, XZR, 10)] if function in MATH_BINARY else []
+    return generic(emit("ORR_X", 0, XZR, 9), *second, emit("BL", to=label("math_" + routine)), emit("ORR_X", 9, XZR, result))
+
+
+def complex_argument_template():
+    return generic(
+        *[step for register in (9, 10)
+          for step in (emit("FMOV_S_W", 16, register), emit("FCVT_D_S", 16, 16), emit("FMOV_X_D", register, 16))],
+        emit("ORR_X", 0, XZR, 9), emit("ORR_X", 1, XZR, 10), emit("BL", to=label("math_atan2")), emit("FMOV_D_X", 16, 0),
+        emit("FCVT_S_D", 16, 16), emit("FMOV_W_S", 9, 16),
     )
 
 
@@ -1616,6 +1676,2017 @@ REAL_RUNTIME = [
     place(L["print_done"]), emit("LDR_X", 30, SP, 0), emit("ADD_X_IMM", SP, SP, PRINT_FRAME), emit("RET"),
 
 ]
+MATH_X_POOL = list(range(16))
+MATH_D_POOL = list(range(32))
+MATH_SCRATCH = 17
+MATH_FLOAT_CONDITIONS = {"lt": 4, "le": 9, "gt": 12, "ge": 10, "eq": 0, "ne": 1}
+MATH_SIGNED_CONDITIONS = {"lt": 11, "le": 13, "gt": 12, "ge": 10, "eq": 0, "ne": 1}
+MATH_UNSIGNED_CONDITIONS = {"lt": 3, "le": 9, "gt": 8, "ge": 2, "eq": 0, "ne": 1}
+MATH_SWAPPED = {"lt": "gt", "le": "ge", "gt": "lt", "ge": "le", "eq": "eq", "ne": "ne"}
+MATH_FLOAT_FORMS = {"add": "FADD_D", "sub": "FSUB_D", "mul": "FMUL_D", "div": "FDIV_D"}
+MATH_FLOAT_UNARY = {"neg": "FNEG_D", "sqrt": "FSQRT_D", "abs": "FABS_D", "floor": "FRINTM_D", "ceil": "FRINTP_D"}
+MATH_INTEGER_FORMS = {"div": "SDIV_X", "add": "ADD_X", "sub": "SUB_X", "and": "AND_X", "or": "ORR_X", "xor": "EOR_X", "mul": "MUL_X",
+                      "shl": "LSLV_X", "lsr": "LSRV_X", "asr": "ASRV_X"}
+MATH_WRAPS = {"add", "sub", "mul", "shl", "not"}
+
+
+class MathCondition:
+    def __init__(self, kind, test, left, right):
+        self.kind, self.test, self.left, self.right = kind, test, left, right
+
+
+class MathValue:
+    __hash__ = object.__hash__
+
+    def __init__(self, routine, index, kind):
+        self.routine, self.index, self.kind = routine, index, kind
+
+    def __add__(self, other):
+        return self.routine.binary("add", self, other)
+
+    def __radd__(self, other):
+        return self.routine.binary("add", other, self)
+
+    def __sub__(self, other):
+        return self.routine.binary("sub", self, other)
+
+    def __rsub__(self, other):
+        return self.routine.binary("sub", other, self)
+
+    def __mul__(self, other):
+        return self.routine.binary("mul", self, other)
+
+    def __rmul__(self, other):
+        return self.routine.binary("mul", other, self)
+
+    def __truediv__(self, other):
+        return self.routine.binary("div", self, other)
+
+    def __rtruediv__(self, other):
+        return self.routine.binary("div", other, self)
+
+    def __neg__(self):
+        return self.routine.unary("neg", self)
+
+    def __and__(self, other):
+        return self.routine.binary("and", self, other)
+
+    def __rand__(self, other):
+        return self.routine.binary("and", other, self)
+
+    def __or__(self, other):
+        return self.routine.binary("or", self, other)
+
+    def __ror__(self, other):
+        return self.routine.binary("or", other, self)
+
+    def __xor__(self, other):
+        return self.routine.binary("xor", self, other)
+
+    def __invert__(self):
+        return self.routine.unary("not", self)
+
+    def __lshift__(self, other):
+        return self.routine.binary("shl", self, other)
+
+    def __rshift__(self, other):
+        return self.routine.binary("asr" if self.kind == "I" else "lsr", self, other)
+
+    def __lt__(self, other):
+        return self.routine.compare("lt", self, other)
+
+    def __le__(self, other):
+        return self.routine.compare("le", self, other)
+
+    def __gt__(self, other):
+        return self.routine.compare("gt", self, other)
+
+    def __ge__(self, other):
+        return self.routine.compare("ge", self, other)
+
+    def __eq__(self, other):
+        return self.routine.compare("eq", self, other)
+
+    def __ne__(self, other):
+        return self.routine.compare("ne", self, other)
+
+    def set(self, value):
+        self.routine.assign(self, value)
+
+
+class MathArray:
+    def __init__(self, routine, slot, length, kind):
+        self.routine, self.slot, self.length, self.kind = routine, slot, length, kind
+
+    def __getitem__(self, index):
+        return self.routine.load(self, index)
+
+    def __setitem__(self, index, value):
+        self.routine.store(self, index, value)
+
+
+class MathBlock:
+    def __init__(self, routine, condition):
+        self.routine, self.condition = routine, condition
+
+    def __enter__(self):
+        self.end = self.routine.label()
+        self.routine.branch(self.condition, self.end, negate=True)
+        return self
+
+    def __exit__(self, *exception):
+        self.routine.last_if_end = (self.end, len(self.routine.code))
+        self.routine.place(self.end)
+
+
+class MathElse:
+    def __init__(self, routine):
+        self.routine = routine
+
+    def __enter__(self):
+        else_label, position = self.routine.last_if_end
+        self.end = self.routine.label()
+        self.routine.code.insert(position, ("jump", self.end))
+        return self
+
+    def __exit__(self, *exception):
+        self.routine.last_if_end = (self.end, len(self.routine.code))
+        self.routine.place(self.end)
+
+
+class MathRoutine:
+    def __init__(self, name, parameters):
+        self.name = name
+        self.code = []
+        self.kinds = []
+        self.mutable = set()
+        self.arrays = []
+        self.labels = 0
+        self.last_if_end = None
+        self.parameters = [self.fresh(kind) for kind in parameters]
+        self.code.append(("enter", self.parameters))
+
+    def fresh(self, kind):
+        self.kinds.append(kind)
+        return MathValue(self, len(self.kinds) - 1, kind)
+
+    def label(self):
+        self.labels += 1
+        return ("label", self.name, self.labels)
+
+    def place(self, label):
+        self.code.append(("place", label))
+
+    def jump(self, label):
+        self.code.append(("jump", label))
+
+    def var(self, kind, initial=None):
+        value = self.fresh(kind)
+        self.mutable.add(value.index)
+        if initial is not None:
+            self.assign(value, initial)
+        return value
+
+    def array(self, length, kind):
+        array = MathArray(self, len(self.arrays), length, kind)
+        self.arrays.append(length)
+        return array
+
+    def constant(self, value, kind):
+        if isinstance(value, MathValue):
+            assert value.kind == kind, (value.kind, kind)
+            return value
+        result = self.fresh(kind)
+        if kind == "D":
+            self.code.append(("const", result, struct.unpack("<Q", struct.pack("<d", float(value)))[0]))
+        else:
+            self.code.append(("const", result, self.normalize(int(value), kind)))
+        return result
+
+    def d(self, value):
+        return self.constant(value, "D")
+
+    def bits_constant(self, bits):
+        result = self.fresh("D")
+        self.code.append(("const", result, bits))
+        return result
+
+    def i(self, value):
+        return self.constant(value, "I")
+
+    def u(self, value):
+        return self.constant(value, "U")
+
+    @staticmethod
+    def normalize(value, kind):
+        if kind == "I":
+            value &= 0xFFFFFFFF
+            return value - (1 << 32) if value >= 1 << 31 else value
+        if kind == "U":
+            return value & 0xFFFFFFFF
+        return value
+
+    def kind_of(self, left, right):
+        kind = left.kind if isinstance(left, MathValue) else right.kind
+        return kind
+
+    def binary(self, operation, left, right):
+        kind = self.kind_of(left, right)
+        if kind == "D":
+            left, right = self.constant(left, "D"), self.constant(right, "D")
+            result = self.fresh("D")
+            self.code.append(("float", result, MATH_FLOAT_FORMS[operation], left, right))
+            return result
+        assert operation != "div" or kind == "I"
+        if operation in ("shl", "lsr", "asr") and isinstance(right, int):
+            assert 0 <= right < 64
+            result = self.fresh(kind)
+            self.code.append(("shift", result, operation, self.constant(left, kind), right))
+            return self.wrap(result, operation)
+        if operation in ("add", "sub") and isinstance(right, int) and 0 <= right < 4096:
+            result = self.fresh(kind)
+            self.code.append(("immediate", result, "ADD_X_IMM" if operation == "add" else "SUB_X_IMM", left, right))
+            return self.wrap(result, operation)
+        left = self.constant(left, kind)
+        if operation not in ("shl", "lsr", "asr"):
+            right = self.constant(right, kind)
+            assert left.kind == right.kind, (operation, left.kind, right.kind)
+        result = self.fresh(kind)
+        self.code.append(("integer", result, MATH_INTEGER_FORMS[operation], left, right))
+        return self.wrap(result, operation)
+
+    def wrap(self, value, operation):
+        if operation not in MATH_WRAPS or value.kind == "L":
+            return value
+        result = self.fresh(value.kind)
+        self.code.append(("extend", result, value))
+        return result
+
+    def unary(self, operation, value):
+        if value.kind == "D":
+            result = self.fresh("D")
+            self.code.append(("float_unary", result, MATH_FLOAT_UNARY[operation], value))
+            return result
+        if operation == "neg":
+            return self.binary("sub", 0, value)
+        result = self.fresh(value.kind)
+        self.code.append(("not", result, value))
+        return self.wrap(result, "not")
+
+    def sqrt(self, value):
+        return self.unary("sqrt", value)
+
+    def fma(self, left, right, addend):
+        left, right, addend = self.constant(left, "D"), self.constant(right, "D"), self.constant(addend, "D")
+        result = self.fresh("D")
+        self.code.append(("fma", result, left, right, addend))
+        return result
+
+    def fabs(self, value):
+        return self.unary("abs", value)
+
+    def compare(self, test, left, right):
+        kind = self.kind_of(left, right)
+        if isinstance(left, MathValue) is False:
+            left, right, test = right, left, MATH_SWAPPED[test]
+        if kind == "D":
+            right = self.constant(right, "D")
+        elif isinstance(right, MathValue):
+            assert right.kind == left.kind, (left.kind, right.kind)
+        else:
+            right = self.normalize(right, kind)
+        return MathCondition(kind, test, left, right)
+
+    def branch(self, condition, label, negate=False):
+        self.code.append(("branch", condition, label, negate))
+
+    def If(self, condition):
+        return MathBlock(self, condition)
+
+    def Else(self):
+        return MathElse(self)
+
+    def assign(self, target, value):
+        assert target.index in self.mutable
+        value = self.constant(value, target.kind)
+        self.code.append(("move", target, value))
+
+    def convert(self, value, kind):
+        if value.kind == kind:
+            return value
+        if kind == "D":
+            result = self.fresh(kind)
+            self.code.append(("scvtf", result, value))
+            return result
+        if value.kind == "D":
+            result = self.fresh("L")
+            self.code.append(("fcvtzs", result, value))
+            return self.convert(result, kind)
+        if kind == "L":
+            return MathValue(self, value.index, "L")
+        result = self.fresh(kind)
+        self.code.append(("extend", result, value))
+        return result
+
+    def bits(self, value):
+        result = self.fresh("L")
+        self.code.append(("to_bits", result, value))
+        return result
+
+    def from_bits(self, value):
+        assert value.kind == "L"
+        result = self.fresh("D")
+        self.code.append(("from_bits", result, value))
+        return result
+
+    def hi(self, value):
+        return self.convert(self.binary("asr", self.bits(value), 32), "I")
+
+    def lo(self, value):
+        return self.convert(self.bits(value), "U")
+
+    def words(self, high, low):
+        high_bits = self.binary("shl", self.convert(high, "L"), 32)
+        low_bits = self.convert(self.convert(self.constant(low, "U") if isinstance(low, int) else low, "U"), "L")
+        return self.from_bits(high_bits | low_bits)
+
+    def with_hi(self, value, high):
+        return self.words(high, self.lo(value))
+
+    def with_lo(self, value, low):
+        return self.words(self.hi(value), low)
+
+    def call(self, label, arguments, results):
+        arguments = [self.constant(argument, "D") if isinstance(argument, float) else argument for argument in arguments]
+        values = [self.fresh(kind) for kind in results]
+        self.code.append(("call", label, arguments, values))
+        return values[0] if len(values) == 1 else values
+
+    def ret(self, *values):
+        values = [self.constant(value, "D") if not isinstance(value, MathValue) and index == 0 else value
+                  for index, value in enumerate(values)]
+        self.code.append(("ret", values))
+
+    def load(self, array, index):
+        result = self.fresh(array.kind)
+        self.code.append(("load", result, array, self.constant(index, "L") if isinstance(index, int) else index))
+        return result
+
+    def store(self, array, index, value):
+        value = self.constant(value, array.kind)
+        self.code.append(("store", array, self.constant(index, "L") if isinstance(index, int) else index, value))
+
+
+def math_uses_defs(instruction):
+    kind = instruction[0]
+    if kind == "enter":
+        return [], list(instruction[1])
+    if kind == "const":
+        return [], [instruction[1]]
+    if kind in ("float", "integer"):
+        return [instruction[3], instruction[4]], [instruction[1]]
+    if kind == "fma":
+        return [instruction[2], instruction[3], instruction[4]], [instruction[1]]
+    if kind in ("float_unary", "shift", "immediate"):
+        return [instruction[3]], [instruction[1]]
+    if kind in ("extend", "not", "scvtf", "fcvtzs", "to_bits", "from_bits"):
+        return [instruction[2]], [instruction[1]]
+    if kind == "move":
+        return [instruction[2]], [instruction[1]]
+    if kind == "branch":
+        condition = instruction[1]
+        return [condition.left] + ([condition.right] if isinstance(condition.right, MathValue) else []), []
+    if kind == "call":
+        return list(instruction[2]), list(instruction[3])
+    if kind == "ret":
+        return list(instruction[1]), []
+    if kind == "load":
+        return [instruction[3]], [instruction[1]]
+    if kind == "store":
+        return [instruction[2], instruction[3]], []
+    return [], []
+
+
+def math_intervals(routine):
+    starts, ends = {}, {}
+    places = {}
+    for position, instruction in enumerate(routine.code):
+        if instruction[0] == "place":
+            places[instruction[1]] = position
+        uses, defs = math_uses_defs(instruction)
+        for value in uses + defs:
+            starts.setdefault(value.index, position)
+            ends[value.index] = position
+    loops = []
+    for position, instruction in enumerate(routine.code):
+        target = instruction[1] if instruction[0] == "jump" else instruction[2] if instruction[0] == "branch" else None
+        if target is not None and places[target] < position:
+            loops.append((places[target], position))
+    changed = True
+    while changed:
+        changed = False
+        for head, tail in loops:
+            for index in starts:
+                start, end = starts[index], ends[index]
+                if index in routine.mutable and start <= tail and end >= head:
+                    start, end = min(start, head), max(end, tail)
+                elif start < head <= end:
+                    end = max(end, tail)
+                if (start, end) != (starts[index], ends[index]):
+                    starts[index], ends[index] = start, end
+                    changed = True
+    return starts, ends
+
+
+def math_allocate(routine):
+    starts, ends = math_intervals(routine)
+    order = sorted(starts, key=lambda index: (starts[index], index))
+    registers = {}
+    active = []
+    free = {"X": list(MATH_X_POOL), "D": list(MATH_D_POOL)}
+    for index in order:
+        start = starts[index]
+        for other in list(active):
+            if ends[other] <= start and other != index:
+                active.remove(other)
+                free[math_class(routine, other)].append(registers[other])
+        register_class = math_class(routine, index)
+        if not free[register_class]:
+            raise SystemExit(f"tables.py: routine {routine.name} needs more {register_class} registers at {start}")
+        free[register_class].sort()
+        registers[index] = free[register_class].pop(0)
+        active.append(index)
+    return registers, starts, ends
+
+
+def math_class(routine, index):
+    return "D" if routine.kinds[index] == "D" else "X"
+
+
+def math_constant_steps(register, value):
+    value &= (1 << 64) - 1
+    chunks = [(value >> (16 * shift)) & 0xFFFF for shift in range(4)]
+    inverted = sum(1 for chunk in chunks if chunk != 0xFFFF) < sum(1 for chunk in chunks if chunk != 0)
+    filler = 0xFFFF if inverted else 0
+    steps = []
+    for shift, chunk in enumerate(chunks):
+        if chunk == filler:
+            continue
+        if not steps:
+            steps.append(("MOVN_X", register, 0, chunk ^ 0xFFFF, shift) if inverted else ("MOVZ_X", register, 0, chunk, shift))
+        else:
+            steps.append(("MOVK_X", register, 0, chunk, shift))
+    if not steps:
+        steps.append(("MOVN_X", register, 0, 0, 0) if inverted else ("MOVZ_X", register, 0, 0, 0))
+    return steps
+
+
+def math_lower(routine, name_label):
+    registers, starts, ends = math_allocate(routine)
+    calls = [position for position, instruction in enumerate(routine.code) if instruction[0] == "call"]
+    slots = {}
+    for position in calls:
+        for index in starts:
+            if starts[index] < position < ends[index]:
+                slots.setdefault(index, 8 * (len(slots) + 1))
+    array_offsets = []
+    offset = 8 * (len(slots) + 1)
+    for length in routine.arrays:
+        array_offsets.append(offset)
+        offset += 8 * length
+    framed = bool(calls or routine.arrays)
+    frame = (offset + 15) // 16 * 16 if framed else 0
+    assert frame < 4096
+    out = [("place", routine.name)]
+
+    def emit_step(form, a0=0, a1=0, a2=0, a3=0, target=None):
+        out.append(("emit", form, a0, a1, a2, a3, target))
+
+    def reg(value):
+        return registers[value.index]
+
+    def epilogue():
+        if framed:
+            emit_step("LDR_X", 30, 31, 0)
+            emit_step("ADD_X_IMM", 31, 31, frame)
+        emit_step("RET")
+
+    for position, instruction in enumerate(routine.code):
+        kind = instruction[0]
+        if kind == "enter":
+            if framed:
+                emit_step("SUB_X_IMM", 31, 31, frame)
+                emit_step("STR_X", 30, 31, 0)
+            for number, value in enumerate(instruction[1]):
+                if value.kind == "D":
+                    emit_step("FMOV_D_X", reg(value), number)
+            for number, value in enumerate(instruction[1]):
+                if value.kind != "D" and reg(value) != number:
+                    emit_step("ORR_X", reg(value), 31, number)
+        elif kind == "place":
+            out.append(("place", name_label(instruction[1])))
+        elif kind == "jump":
+            emit_step("B", target=name_label(instruction[1]))
+        elif kind == "const":
+            value, bits = instruction[1], instruction[2]
+            if value.kind == "D":
+                if bits == 0:
+                    emit_step("FMOV_D_X", reg(value), 31)
+                else:
+                    for step in math_constant_steps(MATH_SCRATCH, bits):
+                        emit_step(*step)
+                    emit_step("FMOV_D_X", reg(value), MATH_SCRATCH)
+            else:
+                for step in math_constant_steps(reg(value), bits):
+                    emit_step(*step)
+        elif kind in ("float", "integer"):
+            emit_step(instruction[2], reg(instruction[1]), reg(instruction[3]), reg(instruction[4]))
+        elif kind == "fma":
+            emit_step("FMADD_D", reg(instruction[1]), reg(instruction[2]), reg(instruction[3]), reg(instruction[4]))
+        elif kind == "immediate":
+            emit_step(instruction[2], reg(instruction[1]), reg(instruction[3]), instruction[4])
+        elif kind == "float_unary":
+            emit_step(instruction[2], reg(instruction[1]), reg(instruction[3]))
+        elif kind == "shift":
+            result, operation, source, amount = instruction[1], instruction[2], instruction[3], instruction[4]
+            if operation == "shl":
+                emit_step("UBFM_X", reg(result), reg(source), (64 - amount) % 64, 63 - amount)
+            else:
+                emit_step("SBFM_X" if operation == "asr" else "UBFM_X", reg(result), reg(source), amount, 63)
+        elif kind == "extend":
+            emit_step("SBFM_X" if instruction[1].kind == "I" else "UBFM_X", reg(instruction[1]), reg(instruction[2]), 0, 31)
+        elif kind == "not":
+            emit_step("ORN_X", reg(instruction[1]), 31, reg(instruction[2]))
+        elif kind == "move":
+            target, source = instruction[1], instruction[2]
+            if reg(target) != reg(source):
+                emit_step("FMOV_D" if target.kind == "D" else "ORR_X", reg(target), *((reg(source),) if target.kind == "D" else (31, reg(source))))
+        elif kind == "scvtf":
+            emit_step("SCVTF_D_X", reg(instruction[1]), reg(instruction[2]))
+        elif kind == "fcvtzs":
+            emit_step("FCVTZS_X_D", reg(instruction[1]), reg(instruction[2]))
+        elif kind == "to_bits":
+            emit_step("FMOV_X_D", reg(instruction[1]), reg(instruction[2]))
+        elif kind == "from_bits":
+            emit_step("FMOV_D_X", reg(instruction[1]), reg(instruction[2]))
+        elif kind == "branch":
+            condition, target, negate = instruction[1], instruction[2], instruction[3]
+            if condition.kind == "D":
+                emit_step("FCMP_D", 0, reg(condition.left), reg(condition.right))
+                code = MATH_FLOAT_CONDITIONS[condition.test]
+            else:
+                if isinstance(condition.right, MathValue):
+                    emit_step("SUBS_X", 31, reg(condition.left), reg(condition.right))
+                elif 0 <= condition.right < 4096:
+                    emit_step("SUBS_X_IMM", 31, reg(condition.left), condition.right)
+                else:
+                    for step in math_constant_steps(MATH_SCRATCH, condition.right):
+                        emit_step(*step)
+                    emit_step("SUBS_X", 31, reg(condition.left), MATH_SCRATCH)
+                table = MATH_UNSIGNED_CONDITIONS if condition.kind == "U" else MATH_SIGNED_CONDITIONS
+                code = table[condition.test]
+            emit_step("B_COND", a3=code ^ 1 if negate else code, target=name_label(target))
+        elif kind == "call":
+            label, arguments, results = instruction[1], instruction[2], instruction[3]
+            saved = [index for index in slots if starts[index] < position < ends[index]]
+            for index in saved:
+                if routine.kinds[index] == "D":
+                    emit_step("FMOV_X_D", MATH_SCRATCH, registers[index])
+                    emit_step("STR_X", MATH_SCRATCH, 31, slots[index])
+                else:
+                    emit_step("STR_X", registers[index], 31, slots[index])
+            assert sum(1 for argument in arguments if argument.kind != "D") <= 1
+            for number, argument in enumerate(arguments):
+                if argument.kind != "D" and reg(argument) != number:
+                    emit_step("ORR_X", number, 31, reg(argument))
+            for number, argument in enumerate(arguments):
+                if argument.kind == "D":
+                    emit_step("FMOV_X_D", number, reg(argument))
+            emit_step("BL", target=name_label(label))
+            for number, result in enumerate(results):
+                if result.kind == "D":
+                    emit_step("FMOV_D_X", reg(result), number)
+            for number, result in enumerate(results):
+                if result.kind != "D" and reg(result) != number:
+                    emit_step("ORR_X", reg(result), 31, number)
+            for index in saved:
+                if routine.kinds[index] == "D":
+                    emit_step("LDR_X", MATH_SCRATCH, 31, slots[index])
+                    emit_step("FMOV_D_X", registers[index], MATH_SCRATCH)
+                else:
+                    emit_step("LDR_X", registers[index], 31, slots[index])
+        elif kind == "ret":
+            values = instruction[1]
+            for number, value in enumerate(values):
+                if value.kind != "D" and reg(value) != number:
+                    emit_step("ORR_X", number, 31, reg(value))
+            for number, value in enumerate(values):
+                if value.kind == "D":
+                    emit_step("FMOV_X_D", number, reg(value))
+            epilogue()
+        elif kind == "load":
+            result, array, index = instruction[1], instruction[2], instruction[3]
+            emit_step("ADD_X_IMM", MATH_SCRATCH, 31, array_offsets[array.slot])
+            if result.kind == "D":
+                emit_step("LDR_X_REG", MATH_SCRATCH, MATH_SCRATCH, reg(index))
+                emit_step("FMOV_D_X", reg(result), MATH_SCRATCH)
+            else:
+                emit_step("LDR_X_REG", reg(result), MATH_SCRATCH, reg(index))
+        elif kind == "store":
+            array, index, value = instruction[1], instruction[2], instruction[3]
+            emit_step("ADD_X_IMM", MATH_SCRATCH, 31, array_offsets[array.slot])
+            if value.kind == "D":
+                emit_step("FMOV_X_D", 16, reg(value))
+                emit_step("STR_X_REG", 16, MATH_SCRATCH, reg(index))
+            else:
+                emit_step("STR_X_REG", reg(value), MATH_SCRATCH, reg(index))
+        else:
+            raise SystemExit(f"tables.py: unknown math instruction {kind}")
+    return out
+
+
+def math_ldexp():
+    f = MathRoutine("math_ldexp", ["D", "I"])
+    x, count = f.parameters
+    y = f.var("D", x)
+    n = f.var("I", count)
+    with f.If(n > 1023):
+        y.set(y * f.bits_constant(0x7FE0000000000000))
+        n.set(n - 1023)
+        with f.If(n > 1023):
+            y.set(y * f.bits_constant(0x7FE0000000000000))
+            n.set(n - 1023)
+            with f.If(n > 1023):
+                n.set(1023)
+    with f.Else():
+        with f.If(n < -1022):
+            y.set(y * f.bits_constant(0x0360000000000000))
+            n.set(n + 969)
+            with f.If(n < -1022):
+                y.set(y * f.bits_constant(0x0360000000000000))
+                n.set(n + 969)
+                with f.If(n < -1022):
+                    n.set(-1022)
+    f.ret(y * f.from_bits(f.convert(n + 0x3FF, "L") << 52))
+    return f
+
+
+def math_frexp():
+    f = MathRoutine("math_frexp", ["D"])
+    x = f.var("D", f.parameters[0])
+    hx = f.var("I", f.hi(x))
+    lx = f.convert(f.bits(x), "I")
+    ix = f.var("I", hx & 0x7FFFFFFF)
+    exponent = f.var("I", 0)
+    with f.If(ix >= 0x7FF00000):
+        f.ret(x, exponent)
+    with f.If((ix | lx) == 0):
+        f.ret(x, exponent)
+    with f.If(ix < 0x00100000):
+        x.set(x * f.bits_constant(0x4350000000000000))
+        hx.set(f.hi(x))
+        ix.set(hx & 0x7FFFFFFF)
+        exponent.set(-54)
+    exponent.set(exponent + ((ix >> 20) - 1022))
+    hx.set((hx & 0x800FFFFF) | 0x3FE00000)
+    x.set(f.with_hi(x, hx))
+    f.ret(x, exponent)
+    return f
+
+
+def math_modf():
+    f = MathRoutine("math_modf", ["D"])
+    x = f.parameters[0]
+    i0 = f.hi(x)
+    i1 = f.lo(x)
+    j0 = f.var("I", ((i0 >> 20) & 0x7FF) - 0x3FF)
+    signed_zero = f.words(i0 & 0x80000000, 0)
+    with f.If(j0 < 20):
+        with f.If(j0 < 0):
+            f.ret(x, signed_zero)
+        i = f.convert(f.u(0x000FFFFF) >> f.convert(j0, "U"), "I")
+        with f.If(((i0 & i) | f.convert(i1, "I")) == 0):
+            f.ret(signed_zero, x)
+        whole = f.words(i0 & ~i, 0)
+        f.ret(x - whole, whole)
+    with f.If(j0 > 51):
+        with f.If(j0 == 0x400):
+            f.ret(f.d(0.0) / x, x)
+        f.ret(signed_zero, x * 1.0)
+    i = f.u(0xFFFFFFFF) >> f.convert(j0 - 20, "U")
+    with f.If((i1 & i) == 0):
+        f.ret(signed_zero, x)
+    whole = f.words(i0, i1 & ~i)
+    f.ret(x - whole, whole)
+    return f
+
+
+def math_fmod():
+    f = MathRoutine("math_fmod", ["D", "D"])
+    x0, y0 = f.parameters
+    hx = f.var("I", f.hi(x0))
+    lx = f.var("U", f.lo(x0))
+    hy = f.var("I", f.hi(y0))
+    ly = f.var("U", f.lo(y0))
+    sx = hx & 0x80000000
+    hx.set(hx ^ sx)
+    hy.set(hy & 0x7FFFFFFF)
+    nan_label = f.label()
+    with f.If((hy | f.convert(ly, "I")) == 0):
+        f.jump(nan_label)
+    with f.If(hx >= 0x7FF00000):
+        f.jump(nan_label)
+    with f.If((hy | f.convert((ly | (0 - ly)) >> 31, "I")) > 0x7FF00000):
+        f.jump(nan_label)
+    zero = f.from_bits(f.convert(sx, "L") << 32)
+    with f.If(hx <= hy):
+        with f.If(hx < hy):
+            f.ret(x0)
+        with f.If(lx < ly):
+            f.ret(x0)
+        with f.If(lx == ly):
+            f.ret(zero)
+    ix = f.var("I")
+    iy = f.var("I")
+    for high, low, logb in ((hx, lx, ix), (hy, ly, iy)):
+        with f.If(high < 0x00100000):
+            j = f.var("I", -1022)
+            i = f.var("U")
+            with f.If(high == 0):
+                j.set(j - 21)
+                i.set(low)
+            with f.Else():
+                i.set(f.convert(high, "U") << 11)
+            top = f.label()
+            done = f.label()
+            f.place(top)
+            with f.If((i & 0x80000000) != 0):
+                f.jump(done)
+            with f.If(i == 0):
+                f.jump(done)
+            j.set(j - 1)
+            i.set(i << 1)
+            f.jump(top)
+            f.place(done)
+            logb.set(j)
+        with f.Else():
+            logb.set((high >> 20) - 1023)
+    n = f.var("I")
+    for high, low, logb in ((hx, lx, ix), (hy, ly, iy)):
+        with f.If(logb >= -1022):
+            high.set((high & 0x000FFFFF) | 0x00100000)
+        with f.Else():
+            n.set(-1022 - logb)
+            with f.If(n <= 31):
+                high.set((high << n) | f.convert(low >> f.convert(32 - n, "U"), "I"))
+                low.set(low << f.convert(n, "U"))
+            with f.Else():
+                high.set(f.convert(low << f.convert(n - 32, "U"), "I"))
+                low.set(0)
+    n.set(ix - iy)
+    hz = f.var("I")
+    lz = f.var("U")
+    top = f.label()
+    done = f.label()
+    f.place(top)
+    with f.If(n == 0):
+        f.jump(done)
+    n.set(n - 1)
+    hz.set(hx - hy)
+    lz.set(lx - ly)
+    with f.If(lx < ly):
+        hz.set(hz - 1)
+    with f.If(hz < 0):
+        hx.set(hx + hx + f.convert(lx >> 31, "I"))
+        lx.set(lx + lx)
+    with f.Else():
+        with f.If((hz | f.convert(lz, "I")) == 0):
+            f.ret(zero)
+        hx.set(hz + hz + f.convert(lz >> 31, "I"))
+        lx.set(lz + lz)
+    f.jump(top)
+    f.place(done)
+    hz.set(hx - hy)
+    lz.set(lx - ly)
+    with f.If(lx < ly):
+        hz.set(hz - 1)
+    with f.If(hz >= 0):
+        hx.set(hz)
+        lx.set(lz)
+    with f.If((hx | f.convert(lx, "I")) == 0):
+        f.ret(zero)
+    top = f.label()
+    done = f.label()
+    f.place(top)
+    with f.If(hx >= 0x00100000):
+        f.jump(done)
+    hx.set(hx + hx + f.convert(lx >> 31, "I"))
+    lx.set(lx + lx)
+    iy.set(iy - 1)
+    f.jump(top)
+    f.place(done)
+    with f.If(iy >= -1022):
+        hx.set((hx - 0x00100000) | ((iy + 1023) << 20))
+        f.ret(f.words(hx | sx, lx))
+    n.set(-1022 - iy)
+    with f.If(n <= 20):
+        lx.set((lx >> f.convert(n, "U")) | (f.convert(hx, "U") << f.convert(32 - n, "U")))
+        hx.set(hx >> n)
+    with f.Else():
+        with f.If(n <= 31):
+            lx.set(f.convert(hx << (32 - n), "U") | (lx >> f.convert(n, "U")))
+            hx.set(sx)
+        with f.Else():
+            lx.set(f.convert(hx >> (n - 32), "U"))
+            hx.set(sx)
+    f.ret(f.words(hx | sx, lx) * 1.0)
+    f.place(nan_label)
+    product = (x0 + 0.0) * (y0 + 0.0)
+    f.ret(product / product)
+    return f
+
+
+def math_exp():
+    f = MathRoutine("math_exp", ["D"])
+    x = f.var("D", f.parameters[0])
+    hi = f.var("D", 0.0)
+    lo = f.var("D", 0.0)
+    k = f.var("I", 0)
+    high = f.hi(x)
+    xsb = f.var("I", (high >> 31) & 1)
+    hx = f.var("I", high & 0x7FFFFFFF)
+    with f.If(hx >= 0x40862E42):
+        with f.If(hx >= 0x7FF00000):
+            with f.If(((hx & 0xFFFFF) | f.convert(f.lo(x), "I")) != 0):
+                f.ret(x + x)
+            with f.If(xsb == 0):
+                f.ret(x)
+            f.ret(0.0)
+        with f.If(x > 7.09782712893383973096e+02):
+            f.ret(f.d(1.0e+300) * 1.0e+300)
+        with f.If(x < -7.45133219101941108420e+02):
+            f.ret(f.d(9.33263618503218878990e-302) * 9.33263618503218878990e-302)
+    with f.If(hx > 0x3FD62E42):
+        with f.If(hx < 0x3FF0A2B2):
+            with f.If(xsb == 0):
+                hi.set(x - 6.93147180369123816490e-01)
+                lo.set(1.90821492927058770002e-10)
+                k.set(1)
+            with f.Else():
+                hi.set(x - -6.93147180369123816490e-01)
+                lo.set(-1.90821492927058770002e-10)
+                k.set(-1)
+        with f.Else():
+            half = f.var("D", 0.5)
+            with f.If(xsb != 0):
+                half.set(-0.5)
+            k.set(f.convert(1.44269504088896338700e+00 * x + half, "I"))
+            t = f.convert(k, "D")
+            hi.set(x - t * 6.93147180369123816490e-01)
+            lo.set(t * 1.90821492927058770002e-10)
+        x.set(hi - lo)
+    with f.Else():
+        with f.If(hx < 0x3E300000):
+            with f.If(f.d(1.0e+300) + x > 1.0):
+                f.ret(1.0 + x)
+        with f.Else():
+            k.set(0)
+    t = x * x
+    twopk = f.var("D")
+    with f.If(k >= -1021):
+        twopk.set(f.words(f.convert(k + 0x3FF, "U") << 20, 0))
+    with f.Else():
+        twopk.set(f.words(f.convert(k + (0x3FF + 1000), "U") << 20, 0))
+    c = x - t * (1.66666666666666019037e-01 + t * (-2.77777777770155933842e-03 + t * (6.61375632143793436117e-05 + t * (
+        -1.65339022054652515390e-06 + t * 4.13813679705723846039e-08))))
+    with f.If(k == 0):
+        f.ret(1.0 - ((x * c) / (c - 2.0) - x))
+    y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi)
+    with f.If(k >= -1021):
+        with f.If(k == 1024):
+            f.ret(y * 2.0 * f.bits_constant(0x7FE0000000000000))
+        f.ret(y * twopk)
+    f.ret(y * twopk * 9.33263618503218878990e-302)
+    return f
+
+
+def log_reduce(f, x, k, check_one):
+    high = f.hi(x)
+    hx = f.var("I", high)
+    lx = f.lo(x)
+    with f.If(hx < 0x00100000):
+        with f.If(((hx & 0x7FFFFFFF) | f.convert(lx, "I")) == 0):
+            f.ret(f.d(-1.80143985094819840000e+16) / f.d(0.0))
+        with f.If(hx < 0):
+            f.ret((x - x) / f.d(0.0))
+        k.set(k - 54)
+        x.set(x * 1.80143985094819840000e+16)
+        hx.set(f.hi(x))
+    with f.If(hx >= 0x7FF00000):
+        f.ret(x + x)
+    if check_one:
+        with f.If(hx == 0x3FF00000):
+            with f.If(f.lo(x) == 0):
+                f.ret(0.0)
+    k.set(k + ((hx >> 20) - 1023))
+    hx.set(hx & 0x000FFFFF)
+    i = (hx + 0x95F64) & 0x100000
+    x.set(f.with_hi(x, hx | (i ^ 0x3FF00000)))
+    k.set(k + (i >> 20))
+    return hx
+
+
+def math_log():
+    f = MathRoutine("math_log", ["D"])
+    x = f.var("D", f.parameters[0])
+    k = f.var("I", 0)
+    hx = log_reduce(f, x, k, False)
+    g = x - 1.0
+    with f.If((0x000FFFFF & (hx + 2)) < 3):
+        with f.If(g == 0.0):
+            with f.If(k == 0):
+                f.ret(0.0)
+            dk = f.convert(k, "D")
+            f.ret(dk * 6.93147180369123816490e-01 + dk * 1.90821492927058770002e-10)
+        r = g * g * (0.5 - 0.33333333333333333 * g)
+        with f.If(k == 0):
+            f.ret(g - r)
+        dk = f.convert(k, "D")
+        f.ret(dk * 6.93147180369123816490e-01 - ((r - dk * 1.90821492927058770002e-10) - g))
+    s = g / (2.0 + g)
+    dk = f.convert(k, "D")
+    z = s * s
+    i = f.var("I", hx - 0x6147A)
+    w = z * z
+    j = 0x6B851 - hx
+    t1 = w * (3.999999999940941908e-01 + w * (2.222219843214978396e-01 + w * 1.531383769920937332e-01))
+    t2 = z * (6.666666666666735130e-01 + w * (2.857142874366239149e-01 + w * (1.818357216161805012e-01 + w * 1.479819860511658591e-01)))
+    i.set(i | j)
+    r = t2 + t1
+    with f.If(i > 0):
+        hfsq = 0.5 * g * g
+        with f.If(k == 0):
+            f.ret(g - (hfsq - s * (hfsq + r)))
+        f.ret(dk * 6.93147180369123816490e-01 - ((hfsq - (s * (hfsq + r) + dk * 1.90821492927058770002e-10)) - g))
+    with f.If(k == 0):
+        f.ret(g - s * (g - r))
+    f.ret(dk * 6.93147180369123816490e-01 - ((s * (g - r) - dk * 1.90821492927058770002e-10) - g))
+    return f
+
+
+def math_log10():
+    f = MathRoutine("math_log10", ["D"])
+    x = f.var("D", f.parameters[0])
+    k = f.var("I", 0)
+    log_reduce(f, x, k, True)
+    y = f.convert(k, "D")
+    g = x - 1.0
+    hfsq = 0.5 * g * g
+    s = g / (2.0 + g)
+    z = s * s
+    w = z * z
+    t1 = w * (3.999999999940941908e-01 + w * (2.222219843214978396e-01 + w * 1.531383769920937332e-01))
+    t2 = z * (6.666666666666735130e-01 + w * (2.857142874366239149e-01 + w * (1.818357216161805012e-01 + w * 1.479819860511658591e-01)))
+    r = s * (0.5 * g * g + (t2 + t1))
+    hi = f.with_lo(g - hfsq, 0)
+    lo = (g - hi) - hfsq + r
+    val_hi = f.var("D", hi * 4.34294481878168880939e-01)
+    y2 = y * 3.01029995663611771306e-01
+    val_lo = f.var("D", y * 3.69423907715893078616e-13 + (lo + hi) * 2.50829467116452752298e-11 + lo * 4.34294481878168880939e-01)
+    w2 = y2 + val_hi
+    val_lo.set(val_lo + ((y2 - w2) + val_hi))
+    val_hi.set(w2)
+    f.ret(val_lo + val_hi)
+    return f
+
+
+def two_sum(f, a, b):
+    s = a + b
+    bb = s - a
+    return s, (a - (s - bb)) + (b - bb)
+
+
+def math_exp_dd():
+    f = MathRoutine("math_exp_dd", ["D"])
+    a = f.parameters[0]
+    half = f.var("D", 0.5)
+    with f.If(a < 0.0):
+        half.set(-0.5)
+    k = f.convert(1.44269504088896338700e+00 * a + half, "I")
+    t = f.convert(k, "D")
+    r, rr = two_sum(f, a - t * 6.93147180369123816490e-01, -(t * 1.90821492927058770002e-10))
+    factorials = [1]
+    for n in range(1, 17):
+        factorials.append(factorials[-1] * n)
+    tail = f.d(1.0 / factorials[16])
+    for n in range(15, 2, -1):
+        tail = r * tail + 1.0 / factorials[n]
+    tail = r * tail
+    square = r * r
+    square_low = f.fma(r, r, -square) + 2.0 * r * rr
+    cubic = square * tail
+    quadratic = 0.5 * square + cubic
+    quadratic_low = cubic - (quadratic - 0.5 * square)
+    p1 = r + quadratic
+    p2 = (quadratic - (p1 - r)) + (quadratic_low + rr + 0.5 * square_low)
+    e1 = 1.0 + p1
+    e2 = (p1 - (e1 - 1.0)) + p2
+    f.ret(e1, e2, k)
+    return f
+
+
+def scaled_exp(f, a):
+    e1, e2, k = f.call("math_exp_dd", [a], ["D", "D", "I"])
+    scale = f.words(f.convert(k + 0x3FF, "U") << 20, 0)
+    return e1 * scale, e2 * scale
+
+
+def exp_overflow_range(f, a, sign):
+    e1, e2, k = f.call("math_exp_dd", [a], ["D", "D", "I"])
+    return (e1 + e2) * sign * f.words(f.convert(k + (0x3FF - 2), "U") << 20, 0) * 2.0
+
+
+def math_sinh():
+    f = MathRoutine("math_sinh", ["D"])
+    x = f.parameters[0]
+    jx = f.hi(x)
+    ix = f.var("I", jx & 0x7FFFFFFF)
+    with f.If(ix >= 0x7FF00000):
+        f.ret(x + x)
+    h = f.var("D", 0.5)
+    with f.If(jx < 0):
+        h.set(-h)
+    with f.If(ix < 0x40360000):
+        with f.If(ix < 0x3E300000):
+            with f.If(f.d(1.0e307) + x > 1.0):
+                f.ret(x)
+        big, small = scaled_exp(f, f.fabs(x))
+        t1, t2 = two_sum(f, big, f.d(-1.0))
+        t2 = t2 + small
+        w0 = t1 / big
+        w1 = (f.fma(-w0, big, t1) + (t2 - w0 * small)) / big
+        s1, s2 = two_sum(f, t1, w0)
+        f.ret(h * (s1 + (s2 + (t2 + w1))))
+    with f.If(ix <= 0x408633CE):
+        f.ret(exp_overflow_range(f, f.fabs(x), h + h))
+    f.ret(x * 1.0e307)
+    return f
+
+
+def math_cosh():
+    f = MathRoutine("math_cosh", ["D"])
+    x = f.parameters[0]
+    ix = f.var("I", f.hi(x) & 0x7FFFFFFF)
+    with f.If(ix >= 0x7FF00000):
+        f.ret(x * x)
+    with f.If(ix < 0x40360000):
+        big, small = scaled_exp(f, f.fabs(x))
+        i0 = 1.0 / big
+        i1 = (f.fma(-i0, big, f.d(1.0)) - i0 * small) * i0
+        s1, s2 = two_sum(f, big, i0)
+        f.ret(0.5 * (s1 + (s2 + (small + i1))))
+    with f.If(ix <= 0x408633CE):
+        f.ret(exp_overflow_range(f, f.fabs(x), f.d(1.0)))
+    f.ret(f.d(1.0e300) * 1.0e300)
+    return f
+
+
+def math_tanh():
+    f = MathRoutine("math_tanh", ["D"])
+    x = f.parameters[0]
+    jx = f.var("I", f.hi(x))
+    ix = f.var("I", jx & 0x7FFFFFFF)
+    with f.If(ix >= 0x7FF00000):
+        with f.If(jx >= 0):
+            f.ret(1.0 / x + 1.0)
+        f.ret(1.0 / x - 1.0)
+    z = f.var("D")
+    with f.If(ix < 0x40360000):
+        with f.If(ix < 0x3E300000):
+            with f.If(f.d(1.0e300) + x > 1.0):
+                f.ret(x)
+        a = f.var("D", -2.0 * f.fabs(x))
+        with f.If(ix >= 0x3FF00000):
+            a.set(-a)
+        big, small = scaled_exp(f, a)
+        n1, n2 = two_sum(f, big, f.d(-1.0))
+        d1, d2 = two_sum(f, big, f.d(1.0))
+        z0 = n1 / d1
+        z.set(f.fabs(z0 + (f.fma(-z0, d1, n1) + ((n2 + small) - z0 * (d2 + small))) / d1))
+    with f.Else():
+        z.set(f.d(1.0) - 1.0e-300)
+    with f.If(jx >= 0):
+        f.ret(z)
+    f.ret(-z)
+    return f
+
+
+def math_pow():
+    f = MathRoutine("math_pow", ["D", "D"])
+    x, y = f.parameters
+    huge, tiny = 1.0e300, 1.0e-300
+    hx = f.var("I", f.hi(x))
+    lx = f.var("U", f.lo(x))
+    hy = f.var("I", f.hi(y))
+    ly = f.var("U", f.lo(y))
+    ix = f.var("I", hx & 0x7FFFFFFF)
+    iy = f.var("I", hy & 0x7FFFFFFF)
+    with f.If((iy | f.convert(ly, "I")) == 0):
+        f.ret(1.0)
+    with f.If(hx == 0x3FF00000):
+        with f.If(lx == 0):
+            f.ret(1.0)
+    nan = f.label()
+    f.branch(ix > 0x7FF00000, nan)
+    with f.If(ix == 0x7FF00000):
+        f.branch(lx != 0, nan)
+    f.branch(iy > 0x7FF00000, nan)
+    with f.If(iy == 0x7FF00000):
+        f.branch(ly != 0, nan)
+    yisint = f.var("I", 0)
+    k = f.var("I")
+    j = f.var("I")
+    with f.If(hx < 0):
+        with f.If(iy >= 0x43400000):
+            yisint.set(2)
+        with f.Else():
+            with f.If(iy >= 0x3FF00000):
+                k.set((iy >> 20) - 0x3FF)
+                with f.If(k > 20):
+                    shift = f.convert(52 - k, "U")
+                    ju = ly >> shift
+                    with f.If((ju << shift) == ly):
+                        yisint.set(2 - f.convert(ju & 1, "I"))
+                with f.Else():
+                    with f.If(ly == 0):
+                        j.set(iy >> (20 - k))
+                        with f.If((j << (20 - k)) == iy):
+                            yisint.set(2 - (j & 1))
+    with f.If(ly == 0):
+        with f.If(iy == 0x7FF00000):
+            with f.If(((ix - 0x3FF00000) | f.convert(lx, "I")) == 0):
+                f.ret(1.0)
+            with f.If(ix >= 0x3FF00000):
+                with f.If(hy >= 0):
+                    f.ret(y)
+                f.ret(0.0)
+            with f.If(hy < 0):
+                f.ret(-y)
+            f.ret(0.0)
+        with f.If(iy == 0x3FF00000):
+            with f.If(hy < 0):
+                f.ret(1.0 / x)
+            f.ret(x)
+        with f.If(hy == 0x40000000):
+            f.ret(x * x)
+        with f.If(hy == 0x3FE00000):
+            with f.If(hx >= 0):
+                f.ret(f.sqrt(x))
+    ax = f.var("D", f.fabs(x))
+    with f.If(lx == 0):
+        special = f.label()
+        ordinary = f.label()
+        f.branch(ix == 0x7FF00000, special)
+        f.branch(ix == 0, special)
+        f.branch(ix == 0x3FF00000, special)
+        f.jump(ordinary)
+        f.place(special)
+        z = f.var("D", ax)
+        with f.If(hy < 0):
+            z.set(1.0 / z)
+        with f.If(hx < 0):
+            with f.If(((ix - 0x3FF00000) | yisint) == 0):
+                z.set((z - z) / (z - z))
+            with f.Else():
+                with f.If(yisint == 1):
+                    z.set(-z)
+        f.ret(z)
+        f.place(ordinary)
+    n = f.var("I", f.convert(f.convert(hx, "U") >> 31, "I") - 1)
+    with f.If((n | yisint) == 0):
+        f.ret((x - x) / (x - x))
+    s = f.var("D", 1.0)
+    with f.If((n | (yisint - 1)) == 0):
+        s.set(-1.0)
+    t1 = f.var("D")
+    t2 = f.var("D")
+    with f.If(iy > 0x41E00000):
+        with f.If(iy > 0x43F00000):
+            with f.If(ix <= 0x3FEFFFFF):
+                with f.If(hy < 0):
+                    f.ret(f.d(huge) * huge)
+                f.ret(f.d(tiny) * tiny)
+            with f.If(ix >= 0x3FF00000):
+                with f.If(hy > 0):
+                    f.ret(f.d(huge) * huge)
+                f.ret(f.d(tiny) * tiny)
+        with f.If(ix < 0x3FEFFFFF):
+            with f.If(hy < 0):
+                f.ret(s * huge * huge)
+            f.ret(s * tiny * tiny)
+        with f.If(ix > 0x3FF00000):
+            with f.If(hy > 0):
+                f.ret(s * huge * huge)
+            f.ret(s * tiny * tiny)
+        t = ax - 1.0
+        w = (t * t) * (0.5 - t * (3.3333333333333331e-01 - t * 0.25))
+        u = 1.44269502162933349609e+00 * t
+        v = t * 1.92596299112661746887e-08 - w * 1.44269504088896338700e+00
+        t1.set(f.with_lo(u + v, 0))
+        t2.set(v - (t1 - u))
+    with f.Else():
+        n.set(0)
+        with f.If(ix < 0x00100000):
+            ax.set(ax * 9007199254740992.0)
+            n.set(n - 53)
+            ix.set(f.hi(ax))
+        n.set(n + ((ix >> 20) - 0x3FF))
+        j.set(ix & 0x000FFFFF)
+        ix.set(j | 0x3FF00000)
+        bp = f.var("D", 1.0)
+        dp_h = f.var("D", 0.0)
+        dp_l = f.var("D", 0.0)
+        with f.If(j <= 0x3988E):
+            k.set(0)
+        with f.Else():
+            with f.If(j < 0xBB67A):
+                k.set(1)
+                bp.set(1.5)
+                dp_h.set(5.84962487220764160156e-01)
+                dp_l.set(1.35003920212974897128e-08)
+            with f.Else():
+                k.set(0)
+                n.set(n + 1)
+                ix.set(ix - 0x00100000)
+        ax.set(f.with_hi(ax, ix))
+        u = ax - bp
+        v = 1.0 / (ax + bp)
+        ss = u * v
+        s_h = f.with_lo(ss, 0)
+        t_h = f.words(((ix >> 1) | 0x20000000) + 0x00080000 + (k << 18), 0)
+        t_l = ax - (t_h - bp)
+        s_l = v * ((u - s_h * t_h) - s_h * t_l)
+        s2 = ss * ss
+        r = s2 * s2 * (5.99999999999994648725e-01 + s2 * (4.28571428578550184252e-01 + s2 * (3.33333329818377432918e-01 + s2 * (
+            2.72728123808534006489e-01 + s2 * (2.30660745775561754067e-01 + s2 * 2.06975017800338417784e-01)))))
+        r = r + s_l * (s_h + ss)
+        s2 = s_h * s_h
+        t_h = f.with_lo(3.0 + s2 + r, 0)
+        t_l = r - ((t_h - 3.0) - s2)
+        u = s_h * t_h
+        v = s_l * t_h + t_l * ss
+        p_h = f.with_lo(u + v, 0)
+        p_l = v - (p_h - u)
+        z_h = 9.61796700954437255859e-01 * p_h
+        z_l = -7.02846165095275826516e-09 * p_h + p_l * 9.61796693925975554329e-01 + dp_l
+        t = f.convert(n, "D")
+        t1.set(f.with_lo(((z_h + z_l) + dp_h) + t, 0))
+        t2.set(z_l - (((t1 - t) - dp_h) - z_h))
+    y1 = f.with_lo(y, 0)
+    p_l = f.var("D", (y - y1) * t1 + y * t2)
+    p_h = f.var("D", y1 * t1)
+    z = f.var("D", p_l + p_h)
+    j.set(f.hi(z))
+    i = f.var("I", f.convert(f.lo(z), "I"))
+    with f.If(j >= 0x40900000):
+        with f.If(((j - 0x40900000) | i) != 0):
+            f.ret(s * huge * huge)
+        with f.If(p_l + 8.0085662595372944372e-0017 > z - p_h):
+            f.ret(s * huge * huge)
+    with f.Else():
+        with f.If((j & 0x7FFFFFFF) >= 0x4090CC00):
+            with f.If(((j - 0xC090CC00) | i) != 0):
+                f.ret(s * tiny * tiny)
+            with f.If(p_l <= z - p_h):
+                f.ret(s * tiny * tiny)
+    i.set(j & 0x7FFFFFFF)
+    k.set((i >> 20) - 0x3FF)
+    n.set(0)
+    with f.If(i > 0x3FE00000):
+        n.set(j + (f.i(0x00100000) >> (k + 1)))
+        k.set(((n & 0x7FFFFFFF) >> 20) - 0x3FF)
+        t = f.words(n & ~(f.i(0x000FFFFF) >> k), 0)
+        n.set(((n & 0x000FFFFF) | 0x00100000) >> (20 - k))
+        with f.If(j < 0):
+            n.set(-n)
+        p_h.set(p_h - t)
+    t = f.with_lo(p_l + p_h, 0)
+    u = t * 6.93147182464599609375e-01
+    v = (p_l - (t - p_h)) * 6.93147180559945286227e-01 + t * -1.90465429995776804525e-09
+    z.set(u + v)
+    w = v - (z - u)
+    t = z * z
+    t1.set(z - t * (1.66666666666666019037e-01 + t * (-2.77777777770155933842e-03 + t * (6.61375632143793436117e-05 + t * (
+        -1.65339022054652515390e-06 + t * 4.13813679705723846039e-08)))))
+    r = (z * t1) / (t1 - 2.0) - (w + z * w)
+    z.set(1.0 - (r - z))
+    j.set(f.hi(z))
+    j.set(j + (n << 20))
+    with f.If((j >> 20) <= 0):
+        z.set(f.call("math_ldexp", [z, n], ["D"]))
+    with f.Else():
+        z.set(f.with_hi(z, j))
+    f.ret(s * z)
+    f.place(nan)
+    f.ret((x + 0.0) + (y + 0.0))
+    return f
+
+
+IPIO2 = [10680707, 7228996, 1387004, 2578385, 16069853, 12639074, 9804092, 4427841, 16666979, 11263675, 12935607, 2387514, 4345298, 14681673, 3074569, 13734428, 16653803, 1880361, 10960616, 8533493, 3062596, 8710556, 7349940, 6258241, 3772886, 3769171, 3798172, 8675211, 12450088, 3874808, 9961438, 366607, 15675153, 9132554, 7151469, 3571407, 2607881, 12013382, 4155038, 6285869, 7677882, 13102053, 15825725, 473591, 9065106, 15363067, 6271263, 9264392, 5636912, 4652155, 7056368, 13614112, 10155062, 1944035, 9527646, 15080200, 6658437, 6231200, 6832269, 16767104, 5075751, 3212806, 1398474, 7579849, 6349435, 12618859]
+PIO2 = [1.57079625129699707031e+00, 7.54978941586159635335e-08, 5.39030252995776476554e-15, 3.28200341580791294123e-22,
+        1.27065575308067607349e-29, 1.22933308981111328932e-36, 2.73370053816464559624e-44, 2.16741683877804819444e-51]
+PS = [1.66666666666666657415e-01, -3.25565818622400915405e-01, 2.01212532134862925881e-01, -4.00555345006794114027e-02,
+      7.91534994289814532176e-04, 3.47933107596021167570e-05]
+QS = [-2.40339491173441421878e+00, 2.02094576023350569471e+00, -6.88283971605453293030e-01, 7.70381505559019352791e-02]
+TAN_T = [3.33333333333334091986e-01, 1.33333333333201242699e-01, 5.39682539762260521377e-02, 2.18694882948595424599e-02,
+         8.86323982359930005737e-03, 3.59207910759131235356e-03, 1.45620945432529025516e-03, 5.88041240820264096874e-04,
+         2.46463134818469906812e-04, 7.81794442939557092300e-05, 7.14072491382608190305e-05, -1.85586374855275456654e-05,
+         2.59073051863633712884e-05]
+ATAN_HI = [4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00]
+ATAN_LO = [2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17]
+AT = [3.33333333333329318027e-01, -1.99999999998764832476e-01, 1.42857142725034663711e-01, -1.11111104054623557880e-01,
+      9.09088713343650656196e-02, -7.69187620504482999495e-02, 6.66107313738753120669e-02, -5.83357013379057348645e-02,
+      4.97687799461593236017e-02, -3.65315727442169155270e-02, 1.62858201153657823623e-02]
+
+
+def math_k_sin():
+    f = MathRoutine("math_k_sin", ["D", "D", "I"])
+    x, y, iy = f.parameters
+    z = x * x
+    w = z * z
+    r = 8.33333333332248946124e-03 + z * (-1.98412698298579493134e-04 + z * 2.75573137070700676789e-06) + z * w * (
+        -2.50507602534068634195e-08 + z * 1.58969099521155010221e-10)
+    v = z * x
+    with f.If(iy == 0):
+        f.ret(x + v * (-1.66666666666666324348e-01 + z * r))
+    f.ret(x - ((z * (0.5 * y - v * r) - y) - v * -1.66666666666666324348e-01))
+    return f
+
+
+def math_k_cos():
+    f = MathRoutine("math_k_cos", ["D", "D"])
+    x, y = f.parameters
+    z = x * x
+    w = z * z
+    r = z * (4.16666666666666019037e-02 + z * (-1.38888888888741095749e-03 + z * 2.48015872894767294178e-05)) + w * w * (
+        -2.75573143513906633035e-07 + z * (2.08757232129817482790e-09 + z * -1.13596475577881948265e-11))
+    hz = 0.5 * z
+    w = 1.0 - hz
+    f.ret(w + (((1.0 - w) - hz) + (z * r - x * y)))
+    return f
+
+
+def math_k_tan():
+    f = MathRoutine("math_k_tan", ["D", "D", "I"])
+    x0, y0, iy = f.parameters
+    x = f.var("D", x0)
+    y = f.var("D", y0)
+    hx = f.hi(x0)
+    ix = f.var("I", hx & 0x7FFFFFFF)
+    T = TAN_T
+    with f.If(ix >= 0x3FE59428):
+        with f.If(hx < 0):
+            x.set(-x)
+            y.set(-y)
+        z = 7.85398163397448278999e-01 - x
+        w = 3.06161699786838301793e-17 - y
+        x.set(z + w)
+        y.set(0.0)
+    z = x * x
+    w = z * z
+    r = T[1] + w * (T[3] + w * (T[5] + w * (T[7] + w * (T[9] + w * T[11]))))
+    v = z * (T[2] + w * (T[4] + w * (T[6] + w * (T[8] + w * (T[10] + w * T[12])))))
+    s = z * x
+    r = f.var("D", y + z * (s * (r + v) + y))
+    r.set(r + T[0] * s)
+    w = x + r
+    with f.If(ix >= 0x3FE59428):
+        v = f.convert(iy, "D")
+        f.ret(f.convert(1 - ((hx >> 30) & 2), "D") * (v - 2.0 * (x - (w * w / (w + v) - r))))
+    with f.If(iy == 1):
+        f.ret(w)
+    z = f.with_lo(w, 0)
+    v = r - (z - x)
+    a = -1.0 / w
+    t = f.with_lo(a, 0)
+    s = 1.0 + t * z
+    f.ret(t + a * (s + t * v))
+    return f
+
+
+def math_rem_pio2():
+    f = MathRoutine("math_rem_pio2", ["D"])
+    x = f.parameters[0]
+    pio2_1, pio2_1t = 1.57079632673412561417e+00, 6.07710050650619224932e-11
+    hx = f.var("I", f.hi(x))
+    ix = f.var("I", hx & 0x7FFFFFFF)
+    medium = f.label()
+
+    def near(multiple):
+        with f.If(hx > 0):
+            z = x - multiple * pio2_1
+            first = z - multiple * pio2_1t
+            f.ret(f.i(multiple), first, (z - first) - multiple * pio2_1t)
+        z = x + multiple * pio2_1
+        first = z + multiple * pio2_1t
+        f.ret(f.i(-multiple), first, (z - first) + multiple * pio2_1t)
+
+    with f.If(ix <= 0x400F6A7A):
+        f.branch((ix & 0xFFFFF) == 0x921FB, medium)
+        with f.If(ix <= 0x4002D97C):
+            near(1)
+        near(2)
+    with f.If(ix <= 0x401C463B):
+        with f.If(ix <= 0x4015FDBC):
+            f.branch(ix == 0x4012D97C, medium)
+            near(3)
+        f.branch(ix == 0x401921FB, medium)
+        near(4)
+    large = f.label()
+    f.branch(ix >= 0x413921FB, large)
+    f.place(medium)
+    fn = (x * 6.36619772367581382433e-01 + 6755399441055744.0) - 6755399441055744.0
+    n = f.convert(fn, "I")
+    r = f.var("D", x - fn * pio2_1)
+    w = f.var("D", fn * pio2_1t)
+    j = ix >> 20
+    first = f.var("D", r - w)
+    i = j - f.convert((f.convert(f.hi(first), "U") >> 20) & 0x7FF, "I")
+    with f.If(i > 16):
+        t = f.var("D", r)
+        w.set(fn * 6.07710050630396597660e-11)
+        r.set(t - w)
+        w.set(fn * 2.02226624879595063154e-21 - ((t - r) - w))
+        first.set(r - w)
+        i = j - f.convert((f.convert(f.hi(first), "U") >> 20) & 0x7FF, "I")
+        with f.If(i > 49):
+            t.set(r)
+            w.set(fn * 2.02226624871116645580e-21)
+            r.set(t - w)
+            w.set(fn * 8.47842766036889956997e-32 - ((t - r) - w))
+            first.set(r - w)
+    f.ret(n, first, (r - first) - w)
+    f.place(large)
+    with f.If(ix >= 0x7FF00000):
+        z = x - x
+        f.ret(f.i(0), z, z)
+    two24, twon24 = 1.67772160000000000000e+07, 5.96046447753906250000e-08
+    e0 = f.var("I", (ix >> 20) - 1046)
+    z = f.var("D", f.words(ix - (e0 << 20), f.lo(x)))
+    tx = f.array(3, "D")
+    for index in range(2):
+        whole = f.convert(f.convert(z, "I"), "D")
+        tx[index] = whole
+        z.set((z - whole) * two24)
+    tx[2] = z
+    nx = f.var("I", 3)
+    trim, trimmed = f.label(), f.label()
+    f.place(trim)
+    f.branch(tx[nx - 1] != 0.0, trimmed)
+    nx.set(nx - 1)
+    f.jump(trim)
+    f.place(trimmed)
+
+    table = f.array(len(IPIO2), "I")
+    for index, value in enumerate(IPIO2):
+        table[index] = value
+    pio2 = f.array(len(PIO2), "D")
+    for index, value in enumerate(PIO2):
+        pio2[index] = value
+    iq = f.array(20, "I")
+    fv = f.array(20, "D")
+    fq = f.array(20, "D")
+    q = f.array(20, "D")
+    jk = 4
+    jp = 4
+    jx = f.var("I", nx - 1)
+    jv = f.var("I", (e0 - 3) / f.i(24))
+    with f.If(jv < 0):
+        jv.set(0)
+    q0 = f.var("I", e0 - 24 * (jv + 1))
+    i = f.var("I", 0)
+    j = f.var("I", jv - jx)
+    k = f.var("I")
+    m = f.var("I", jx + jk)
+    fw = f.var("D")
+    zv = f.var("D")
+    nv = f.var("I")
+    ih = f.var("I")
+    carry = f.var("I")
+
+    def loop(condition_builder, body):
+        top, done = f.label(), f.label()
+        f.place(top)
+        f.branch(condition_builder(), done, negate=True)
+        body()
+        f.jump(top)
+        f.place(done)
+
+    def fill_f():
+        value = f.var("D", 0.0)
+        with f.If(j >= 0):
+            value.set(f.convert(table[j], "D"))
+        fv[i] = value
+        i.set(i + 1)
+        j.set(j + 1)
+
+    i.set(0)
+    loop(lambda: i <= m, fill_f)
+
+    def product(target_index):
+        fw.set(0.0)
+        j.set(0)
+
+        def accumulate():
+            fw.set(fw + tx[j] * fv[jx + target_index - j])
+            j.set(j + 1)
+        loop(lambda: j <= jx, accumulate)
+        q[target_index] = fw
+
+    def fill_q():
+        product(i)
+        i.set(i + 1)
+
+    i.set(0)
+    loop(lambda: i <= jk, fill_q)
+    jz = f.var("I", jk)
+    recompute = f.label()
+    f.place(recompute)
+    i.set(0)
+    j.set(jz)
+    zv.set(q[jz])
+
+    def split():
+        fw.set(f.convert(f.convert(twon24 * zv, "I"), "D"))
+        iq[i] = f.convert(zv - two24 * fw, "I")
+        zv.set(q[j - 1] + fw)
+        i.set(i + 1)
+        j.set(j - 1)
+    loop(lambda: j > 0, split)
+    zv.set(f.call("math_ldexp", [zv, q0], ["D"]))
+    zv.set(zv - 8.0 * f.unary("floor", zv * 0.125))
+    nv.set(f.convert(zv, "I"))
+    zv.set(zv - f.convert(nv, "D"))
+    ih.set(0)
+    with f.If(q0 > 0):
+        top = iq[jz - 1]
+        shifted = top >> (24 - q0)
+        nv.set(nv + shifted)
+        rest = top - (shifted << (24 - q0))
+        iq[jz - 1] = rest
+        ih.set(rest >> (23 - q0))
+    with f.Else():
+        with f.If(q0 == 0):
+            ih.set(iq[jz - 1] >> 23)
+        with f.Else():
+            with f.If(zv >= 0.5):
+                ih.set(2)
+    with f.If(ih > 0):
+        nv.set(nv + 1)
+        carry.set(0)
+        i.set(0)
+
+        def complement():
+            j.set(iq[i])
+            with f.If(carry == 0):
+                with f.If(j != 0):
+                    carry.set(1)
+                    iq[i] = 0x1000000 - j
+            with f.Else():
+                iq[i] = 0xFFFFFF - j
+            i.set(i + 1)
+        loop(lambda: i < jz, complement)
+        with f.If(q0 > 0):
+            with f.If(q0 == 1):
+                iq[jz - 1] = iq[jz - 1] & 0x7FFFFF
+            with f.If(q0 == 2):
+                iq[jz - 1] = iq[jz - 1] & 0x3FFFFF
+        with f.If(ih == 2):
+            zv.set(1.0 - zv)
+            with f.If(carry != 0):
+                zv.set(zv - f.call("math_ldexp", [f.d(1.0), q0], ["D"]))
+    finish = f.label()
+    f.branch(zv != 0.0, finish)
+    j.set(0)
+    i.set(jz - 1)
+
+    def gather():
+        j.set(j | iq[i])
+        i.set(i - 1)
+    loop(lambda: i >= jk, gather)
+    f.branch(j != 0, finish)
+    k.set(1)
+
+    def count():
+        k.set(k + 1)
+    loop(lambda: iq[jk - k] == 0, count)
+    i.set(jz + 1)
+
+    def extend():
+        fv[jx + i] = f.convert(table[jv + i], "D")
+        product(i)
+        i.set(i + 1)
+    loop(lambda: i <= jz + k, extend)
+    jz.set(jz + k)
+    f.jump(recompute)
+    f.place(finish)
+    with f.If(zv == 0.0):
+        jz.set(jz - 1)
+        q0.set(q0 - 24)
+
+        def drop():
+            jz.set(jz - 1)
+            q0.set(q0 - 24)
+        loop(lambda: iq[jz] == 0, drop)
+    with f.Else():
+        zv.set(f.call("math_ldexp", [zv, 0 - q0], ["D"]))
+        with f.If(zv >= two24):
+            fw.set(f.convert(f.convert(twon24 * zv, "I"), "D"))
+            iq[jz] = f.convert(zv - two24 * fw, "I")
+            jz.set(jz + 1)
+            q0.set(q0 + 24)
+            iq[jz] = f.convert(fw, "I")
+        with f.Else():
+            iq[jz] = f.convert(zv, "I")
+    fw.set(f.call("math_ldexp", [f.d(1.0), q0], ["D"]))
+    i.set(jz)
+
+    def scale():
+        q[i] = fw * f.convert(iq[i], "D")
+        fw.set(fw * twon24)
+        i.set(i - 1)
+    loop(lambda: i >= 0, scale)
+    i.set(jz)
+
+    def multiply():
+        fw.set(0.0)
+        k.set(0)
+        top, done = f.label(), f.label()
+        f.place(top)
+        f.branch(k > jp, done)
+        f.branch(k > jz - i, done)
+        fw.set(fw + pio2[k] * q[i + k])
+        k.set(k + 1)
+        f.jump(top)
+        f.place(done)
+        fq[jz - i] = fw
+        i.set(i - 1)
+    loop(lambda: i >= 0, multiply)
+    fw.set(0.0)
+    i.set(jz)
+
+    def total():
+        fw.set(fw + fq[i])
+        i.set(i - 1)
+    loop(lambda: i >= 0, total)
+    head = f.var("D", fw)
+    with f.If(ih != 0):
+        head.set(-fw)
+    fw.set(fq[0] - fw)
+    i.set(1)
+
+    def tail():
+        fw.set(fw + fq[i])
+        i.set(i + 1)
+    loop(lambda: i <= jz, tail)
+    with f.If(ih != 0):
+        fw.set(-fw)
+    nv.set(nv & 7)
+    with f.If(hx < 0):
+        f.ret(0 - nv, -head, -fw)
+    f.ret(nv, head, fw)
+    return f
+
+
+def math_sin():
+    f = MathRoutine("math_sin", ["D"])
+    x = f.parameters[0]
+    ix = f.var("I", f.hi(x) & 0x7FFFFFFF)
+    with f.If(ix <= 0x3FE921FB):
+        with f.If(ix < 0x3E500000):
+            with f.If(f.convert(x, "I") == 0):
+                f.ret(x)
+        f.ret(f.call("math_k_sin", [x, 0.0, f.i(0)], ["D"]))
+    with f.If(ix >= 0x7FF00000):
+        f.ret(x - x)
+    n, y0, y1 = f.call("math_rem_pio2", [x], ["I", "D", "D"])
+    quadrant = n & 3
+    with f.If(quadrant == 0):
+        f.ret(f.call("math_k_sin", [y0, y1, f.i(1)], ["D"]))
+    with f.If(quadrant == 1):
+        f.ret(f.call("math_k_cos", [y0, y1], ["D"]))
+    with f.If(quadrant == 2):
+        f.ret(-f.call("math_k_sin", [y0, y1, f.i(1)], ["D"]))
+    f.ret(-f.call("math_k_cos", [y0, y1], ["D"]))
+    return f
+
+
+def math_cos():
+    f = MathRoutine("math_cos", ["D"])
+    x = f.parameters[0]
+    ix = f.var("I", f.hi(x) & 0x7FFFFFFF)
+    with f.If(ix <= 0x3FE921FB):
+        with f.If(ix < 0x3E46A09E):
+            with f.If(f.convert(x, "I") == 0):
+                f.ret(1.0)
+        f.ret(f.call("math_k_cos", [x, 0.0], ["D"]))
+    with f.If(ix >= 0x7FF00000):
+        f.ret(x - x)
+    n, y0, y1 = f.call("math_rem_pio2", [x], ["I", "D", "D"])
+    quadrant = n & 3
+    with f.If(quadrant == 0):
+        f.ret(f.call("math_k_cos", [y0, y1], ["D"]))
+    with f.If(quadrant == 1):
+        f.ret(-f.call("math_k_sin", [y0, y1, f.i(1)], ["D"]))
+    with f.If(quadrant == 2):
+        f.ret(-f.call("math_k_cos", [y0, y1], ["D"]))
+    f.ret(f.call("math_k_sin", [y0, y1, f.i(1)], ["D"]))
+    return f
+
+
+def math_tan():
+    f = MathRoutine("math_tan", ["D"])
+    x = f.parameters[0]
+    ix = f.var("I", f.hi(x) & 0x7FFFFFFF)
+    with f.If(ix <= 0x3FE921FB):
+        with f.If(ix < 0x3E400000):
+            with f.If(f.convert(x, "I") == 0):
+                f.ret(x)
+        f.ret(f.call("math_k_tan", [x, 0.0, f.i(1)], ["D"]))
+    with f.If(ix >= 0x7FF00000):
+        f.ret(x - x)
+    n, y0, y1 = f.call("math_rem_pio2", [x], ["I", "D", "D"])
+    f.ret(f.call("math_k_tan", [y0, y1, 1 - ((n & 1) << 1)], ["D"]))
+    return f
+
+
+def math_atan_dd():
+    f = MathRoutine("math_atan_dd", ["D", "D"])
+    x, dx = f.parameters
+    ix = f.hi(x)
+    numerator = f.var("D", -1.0)
+    numerator_low = f.var("D", 0.0)
+    denominator = f.var("D", x)
+    denominator_low = f.var("D", dx)
+    selector = f.var("I", 3)
+    z = f.var("D", x)
+    z_low = f.var("D", dx)
+    reduce = f.label()
+    with f.If(ix < 0x3FDC0000):
+        selector.set(-1)
+        f.jump(reduce)
+    with f.If(ix < 0x3FE60000):
+        selector.set(0)
+        numerator.set(2.0 * x - 1.0)
+        numerator_low.set(2.0 * dx)
+        denominator.set(x + 2.0)
+        denominator_low.set((2.0 - (denominator - x)) + dx)
+    with f.Else():
+        with f.If(ix < 0x3FF30000):
+            selector.set(1)
+            numerator.set(x - 1.0)
+            numerator_low.set(dx)
+            sum_, error = two_sum(f, x, f.d(1.0))
+            denominator.set(sum_)
+            denominator_low.set(error + dx)
+        with f.Else():
+            with f.If(ix < 0x40038000):
+                selector.set(2)
+                numerator.set(x - 1.5)
+                numerator_low.set(dx)
+                product = 1.5 * x
+                sum_, error = two_sum(f, f.d(1.0), product)
+                denominator.set(sum_)
+                denominator_low.set(error + (f.fma(f.d(1.5), x, -product) + 1.5 * dx))
+    quotient = numerator / denominator
+    z.set(quotient)
+    z_low.set((f.fma(-quotient, denominator, numerator) + (numerator_low - quotient * denominator_low)) / denominator)
+    f.place(reduce)
+    zz = z * z
+    w = zz * zz
+    s1 = zz * (AT[0] + w * (AT[2] + w * (AT[4] + w * (AT[6] + w * (AT[8] + w * AT[10])))))
+    s2 = w * (AT[1] + w * (AT[3] + w * (AT[5] + w * (AT[7] + w * AT[9]))))
+    t = z * (s1 + s2)
+    correction = z_low / (1.0 + zz)
+    with f.If(selector < 0):
+        h = z - t
+        f.ret(h, ((z - h) - t) + correction)
+    high = f.var("D", ATAN_HI[3])
+    low = f.var("D", ATAN_LO[3])
+    for index in range(3):
+        with f.If(selector == index):
+            high.set(ATAN_HI[index])
+            low.set(ATAN_LO[index])
+    h1, l1 = two_sum(f, high, z)
+    h = h1 - t
+    f.ret(h, ((h1 - h) - t) + (l1 + low + correction))
+    return f
+
+
+def math_atan():
+    f = MathRoutine("math_atan", ["D"])
+    x = f.parameters[0]
+    hx = f.hi(x)
+    ix = f.var("I", hx & 0x7FFFFFFF)
+    with f.If(ix >= 0x44100000):
+        low = f.lo(x)
+        with f.If(ix > 0x7FF00000):
+            f.ret(x + x)
+        with f.If(ix == 0x7FF00000):
+            with f.If(low != 0):
+                f.ret(x + x)
+        with f.If(hx > 0):
+            f.ret(f.d(ATAN_HI[3]) + ATAN_LO[3])
+        f.ret(f.d(-ATAN_HI[3]) - ATAN_LO[3])
+    with f.If(ix < 0x3E400000):
+        with f.If(f.d(1.0e300) + x > 1.0):
+            f.ret(x)
+    h, l = f.call("math_atan_dd", [f.fabs(x), 0.0], ["D", "D"])
+    z = h + l
+    with f.If(hx < 0):
+        f.ret(-z)
+    f.ret(z)
+    return f
+
+
+def math_atan2():
+    f = MathRoutine("math_atan2", ["D", "D"])
+    y, x = f.parameters
+    tiny, pi_o_4, pi_o_2, pi = 1.0e-300, 7.8539816339744827900E-01, 1.5707963267948965580E+00, 3.1415926535897931160E+00
+    pi_lo = 1.2246467991473531772E-16
+    hx = f.var("I", f.hi(x))
+    lx = f.var("U", f.lo(x))
+    ix = f.var("I", hx & 0x7FFFFFFF)
+    hy = f.var("I", f.hi(y))
+    ly = f.var("U", f.lo(y))
+    iy = f.var("I", hy & 0x7FFFFFFF)
+    nan = f.label()
+    f.branch((ix | f.convert((lx | (0 - lx)) >> 31, "I")) > 0x7FF00000, nan)
+    f.branch((iy | f.convert((ly | (0 - ly)) >> 31, "I")) > 0x7FF00000, nan)
+    with f.If(hx == 0x3FF00000):
+        with f.If(lx == 0):
+            f.ret(f.call("math_atan", [y], ["D"]))
+    m = f.var("I", ((hy >> 31) & 1) | ((hx >> 30) & 2))
+
+    def by_quadrant(values):
+        for index, value in enumerate(values[:-1]):
+            with f.If(m == index):
+                f.ret(value())
+        f.ret(values[-1]())
+
+    with f.If((iy | f.convert(ly, "I")) == 0):
+        by_quadrant([lambda: y, lambda: y, lambda: f.d(pi) + tiny, lambda: f.d(-pi) - tiny])
+    with f.If((ix | f.convert(lx, "I")) == 0):
+        with f.If(hy < 0):
+            f.ret(f.d(-pi_o_2) - tiny)
+        f.ret(f.d(pi_o_2) + tiny)
+    with f.If(ix == 0x7FF00000):
+        with f.If(iy == 0x7FF00000):
+            by_quadrant([lambda: f.d(pi_o_4) + tiny, lambda: f.d(-pi_o_4) - tiny, lambda: f.d(3.0 * pi_o_4) + tiny,
+                         lambda: f.d(-3.0 * pi_o_4) - tiny])
+        by_quadrant([lambda: f.d(0.0), lambda: f.d(-0.0), lambda: f.d(pi) + tiny, lambda: f.d(-pi) - tiny])
+    with f.If(iy == 0x7FF00000):
+        with f.If(hy < 0):
+            f.ret(f.d(-pi_o_2) - tiny)
+        f.ret(f.d(pi_o_2) + tiny)
+    k = (iy - ix) >> 20
+    z = f.var("D")
+    z_low = f.var("D", 0.0)
+    done = f.label()
+    with f.If(k > 60):
+        z.set(pi_o_2)
+        z_low.set(0.5 * pi_lo)
+        m.set(m & 1)
+    with f.Else():
+        with f.If(hx < 0):
+            with f.If(k < -60):
+                z.set(0.0)
+                f.jump(done)
+        ay = f.fabs(y)
+        ax = f.fabs(x)
+        q = ay / ax
+        z.set(q)
+        z_low.set(f.fma(-q, ax, ay) / ax)
+        with f.If(f.hi(q) >= 0x3E400000):
+            h, l = f.call("math_atan_dd", [q, z_low], ["D", "D"])
+            z.set(h)
+            z_low.set(l)
+    f.place(done)
+    s, e = two_sum(f, f.d(pi), -z)
+    by_quadrant([lambda: z + z_low, lambda: -(z + z_low), lambda: s + (e + (pi_lo - z_low)), lambda: -(s + (e + (pi_lo - z_low)))])
+    f.place(nan)
+    f.ret((x + 0.0) + (y + 0.0))
+    return f
+
+
+def inverse_rational(f, t):
+    p = t * (PS[0] + t * (PS[1] + t * (PS[2] + t * (PS[3] + t * (PS[4] + t * PS[5])))))
+    q = 1.0 + t * (QS[0] + t * (QS[1] + t * (QS[2] + t * QS[3])))
+    return p, q
+
+
+def math_asin():
+    f = MathRoutine("math_asin", ["D"])
+    x = f.parameters[0]
+    pio2_hi, pio2_lo, pio4_hi = 1.57079632679489655800e+00, 6.12323399573676603587e-17, 7.85398163397448278999e-01
+    hx = f.hi(x)
+    ix = f.var("I", hx & 0x7FFFFFFF)
+    with f.If(ix >= 0x3FF00000):
+        with f.If(((ix - 0x3FF00000) | f.convert(f.lo(x), "I")) == 0):
+            f.ret(x * pio2_hi + x * pio2_lo)
+        f.ret((x - x) / (x - x))
+    with f.If(ix < 0x3FE00000):
+        with f.If(ix < 0x3E500000):
+            with f.If(f.d(1.000e+300) + x > 1.0):
+                f.ret(x)
+        t = x * x
+        p, q = inverse_rational(f, t)
+        w = p / q
+        f.ret(x + x * w)
+    w = 1.0 - f.fabs(x)
+    t = f.var("D", w * 0.5)
+    p, q = inverse_rational(f, t)
+    s = f.sqrt(t)
+    with f.If(ix >= 0x3FEF3333):
+        w = p / q
+        t.set(pio2_hi - (2.0 * (s + s * w) - pio2_lo))
+    with f.Else():
+        w = f.with_lo(s, 0)
+        c = (t - w * w) / (s + w)
+        r = p / q
+        p = 2.0 * s * r - (pio2_lo - 2.0 * c)
+        q = pio4_hi - 2.0 * w
+        t.set(pio4_hi - (p - q))
+    with f.If(hx > 0):
+        f.ret(t)
+    f.ret(-t)
+    return f
+
+
+def math_acos():
+    f = MathRoutine("math_acos", ["D"])
+    x = f.parameters[0]
+    pi, pio2_hi, pio2_lo = 3.14159265358979311600e+00, 1.57079632679489655800e+00, 6.12323399573676603587e-17
+    hx = f.hi(x)
+    ix = f.var("I", hx & 0x7FFFFFFF)
+    with f.If(ix >= 0x3FF00000):
+        with f.If(((ix - 0x3FF00000) | f.convert(f.lo(x), "I")) == 0):
+            with f.If(hx > 0):
+                f.ret(0.0)
+            f.ret(pi + 2.0 * f.d(pio2_lo))
+        f.ret((x - x) / (x - x))
+    with f.If(ix < 0x3FE00000):
+        with f.If(ix <= 0x3C600000):
+            f.ret(f.d(pio2_hi) + pio2_lo)
+        z = x * x
+        p, q = inverse_rational(f, z)
+        r = p / q
+        f.ret(pio2_hi - (x - (pio2_lo - x * r)))
+    with f.If(hx < 0):
+        z = (1.0 + x) * 0.5
+        p, q = inverse_rational(f, z)
+        s = f.sqrt(z)
+        r = p / q
+        w = r * s - pio2_lo
+        f.ret(pi - 2.0 * (s + w))
+    z = (1.0 - x) * 0.5
+    s = f.sqrt(z)
+    df = f.with_lo(s, 0)
+    c = (z - df * df) / (s + df)
+    p, q = inverse_rational(f, z)
+    r = p / q
+    w = r * s + c
+    f.ret(2.0 * (df + w))
+    return f
+
+
+MATH_ROUTINES = [math_ldexp, math_frexp, math_modf, math_fmod, math_exp, math_exp_dd, math_log, math_log10, math_sinh, math_cosh, math_tanh, math_pow, math_k_sin, math_k_cos, math_k_tan, math_rem_pio2, math_sin, math_cos, math_tan, math_atan_dd, math_atan, math_atan2, math_asin, math_acos]
+
+
+def math_runtime(first_local):
+    locals_by_target = {}
+
+    def local_name(target):
+        if isinstance(target, str):
+            return target
+        return locals_by_target.setdefault(target, f"local{first_local + len(locals_by_target)}")
+
+    steps = []
+    for build in MATH_ROUTINES:
+        for item in math_lower(build(), local_name):
+            if item[0] == "place":
+                steps.append(place(item[1]))
+            else:
+                _, form, a0, a1, a2, a3, target = item
+                steps.append(emit(form, a0, a1, a2, a3, to=label(target)) if target else emit(form, a0, a1, a2, a3))
+    return steps, first_local + len(locals_by_target)
+
+
+MATH_RUNTIME, MATH_LOCAL_END = math_runtime(len(REAL_LABELS))
+REAL_RUNTIME += MATH_RUNTIME
+EMIT_SOURCES += [f"local{index}" for index in range(LOCAL_LABEL_COUNT, MATH_LOCAL_END)]
+
+
 REAL_PARSE = [
     place("read_real_value"), emit("LDRB_W_REG", 9, 21, 19), emit("SUBS_W_IMM", XZR, 9, 32),
     emit("B_COND", a3=CC["NE"], to=label("malformed")), emit("ADD_X_IMM", 19, 19, 1), emit("ORR_X", 5, XZR, 19),
@@ -2087,6 +4158,8 @@ EMIT_TEMPLATES = [
     ("ROW_REAL_COPYSIGN_D", gated(copy_sign(3))),
     ("ROW_REAL_MODU_S", gated(complex_modulus_template(True))),
     ("ROW_REAL_MODU_D", gated(complex_modulus_template(False))),
+    *[(f"ROW_REAL_MATH_{function.upper().replace("'", "_")}", gated(math_template(function))) for function in MATH_UNARY + MATH_BINARY],
+    ("ROW_REAL_MATH_ARG", gated(complex_argument_template())),
     ("ROW_REAL_NEG", gated(generic(emit("real_in", 16, 9), emit("real_neg", 16, 16), emit("real_out", 9, 16)))),
     ("ROW_REAL_COMPARE", gated(generic(
         emit("real_in", 16, 9), emit("real_in", 17, 10), emit("real_cmp", 0, 16, 17), emit("CSINC_W", 9, XZR, XZR, "real_condition"),
@@ -2221,7 +4294,53 @@ MPS2_UNLOADED = 84
 MPS2_HEADER_BYTES = 92
 MPS2_RAM_BYTES = 0x400000
 MPS2_STACK_BYTES = 64
-VIRT_STACK_BYTES = 1024
+VIRT_STACK_BYTES = 1536
+
+
+def runtime_stack_depths(*step_lists):
+    frames, edges, entries = {}, {}, []
+    for steps in step_lists:
+        owner_of_local, jumps, current, falls = {}, [], None, False
+        for row in steps:
+            kind, form, a0, a1, a2, target_name = row[0], row[2], row[3], row[4], row[5], row[8]
+            if kind == "PLACE" and not a0.startswith("local"):
+                if current is not None and falls:
+                    edges[current].add(a0)
+                current = a0
+                entries.append(current)
+                frames[current], edges[current] = 0, set()
+            elif kind == "PLACE" and current is not None:
+                owner_of_local[a0] = current
+            elif kind == "EMIT" and current is not None:
+                if form == "SUB_X_IMM" and a0 == SP and a1 == SP:
+                    frames[current] += a2
+                elif form == "BL":
+                    edges[current].add(target_name)
+                elif form in ("B", "B_COND", "CBZ_W", "CBZ_X", "CBNZ_X"):
+                    jumps.append((current, target_name))
+                falls = form not in ("B", "RET")
+        for source, target_name in jumps:
+            target = owner_of_local.get(target_name, target_name)
+            if target != source and target in frames:
+                edges[source].add(target)
+    depths = {}
+
+    def depth(name, open_names):
+        if name in open_names:
+            raise SystemExit(f"tables.py: runtime routine {name} recurses")
+        if name not in depths:
+            callees = [callee for callee in edges[name] if callee in frames]
+            depths[name] = frames[name] + max((depth(callee, open_names | {name}) for callee in callees), default=0)
+        return depths[name]
+
+    return {name: depth(name, frozenset()) for name in entries}
+
+
+RUNTIME_STACK_DEPTHS = runtime_stack_depths(REAL_RUNTIME, REAL_PARSE, PUT_NUMBER)
+DEEPEST_RUNTIME_ROUTINE = max(RUNTIME_STACK_DEPTHS, key=RUNTIME_STACK_DEPTHS.get)
+if RUNTIME_STACK_DEPTHS[DEEPEST_RUNTIME_ROUTINE] > VIRT_STACK_BYTES:
+    raise SystemExit(f"tables.py: {DEEPEST_RUNTIME_ROUTINE} needs {RUNTIME_STACK_DEPTHS[DEEPEST_RUNTIME_ROUTINE]} stack bytes, "
+                     f"VIRT_STACK_BYTES is {VIRT_STACK_BYTES}")
 PLATFORMS = ["MACOS", "VIRT", "MPS2"]
 MACHINE_TEXT = "mps2-an385"
 THUMB_LOAD_FORMS = {(1, 0): "LDRB_T", (1, 1): "LDRB_T", (2, 0): "LDRH_T", (2, 1): "LDRSH_T", (4, 0): "LDR_T", (4, 1): "LDR_T",
@@ -3401,6 +5520,9 @@ def build():
     table("ET_START", "integer", starts)
     table("ET_LENGTH", "integer", lengths)
     table("ET_LABELS", "integer", label_counts)
+    template_names = [name for name, _ in EMIT_TEMPLATES]
+    table("MATH_TEMPLATE", "integer", [template_names.index(f"ROW_REAL_MATH_{function.upper().replace("'", "_")}") for function in MATH_UNARY + MATH_BINARY]
+          + [template_names.index("ROW_REAL_MATH_ARG"), template_names.index("ROW_REAL_MATH_ATAN2")])
     step_columns = ["KIND", "WHEN", "FORM", "A0", "A1", "A2", "A3", "TARGET", "TARGET_KIND", "SOURCE0", "SOURCE1"]
     for column, name in enumerate(step_columns):
         table(f"STEP_{name}", "integer", [row[column] for row in step_rows])
