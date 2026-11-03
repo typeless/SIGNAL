@@ -1,0 +1,12 @@
+d=
+empty true
+v=
+1
+d=odd
+empty false
+v=even
+2
+d=even
+empty false
+v=odd
+3

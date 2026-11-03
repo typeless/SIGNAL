@@ -22,12 +22,13 @@ class Lowered:
     types: sigc.Types
     table_types: list
     table_values: list
+    string_buffers: list
 
 
 def lowered(text):
     program = flat(text)
     rows, loops = sigc.lower(program)
-    return Lowered(rows, loops, program.types, program.table_types, program.table_values)
+    return Lowered(rows, loops, program.types, program.table_types, program.table_values, [0] * len(rows.op))
 
 
 def clocks(text):

@@ -1614,13 +1614,13 @@ class M11Program:
         self.char_factors = [(rng.randrange(-300, 301), rng.randrange(-300, 301)) for _ in range(2)]
         self.constant = rng.randrange(256)
         self.constant_text = char_literal(rng, self.constant)
-        base = random_text(rng, rng.choice([rng.randrange(1, 8), rng.randrange(1, 255)]))
+        base = random_text(rng, rng.choice([1, 254, 255, 256, rng.randrange(1, 8), rng.randrange(1, 4096)]))
         cut = rng.randrange(len(base))
         changed = bytearray(base)
         changed[cut] = (changed[cut] + rng.choice([1, 255, 128])) % 256
         if changed[cut] == 0x0A:
             changed[cut] = 0x0B
-        pool = [base, base[:cut], b"", base + random_text(rng, 1)[:255 - len(base)], bytes(changed)]
+        pool = [base, base[:cut], b"", base + random_text(rng, rng.randrange(1, 3)), bytes(changed)]
         self.pool = [rng.choice(pool) for _ in range(5)]
         self.selects = [[(rng.randrange(2, 5), rng.randrange(2)) for _ in range(2)] for _ in range(2)]
         self.prefixes = [random_text(rng, rng.randrange(0, 6)) for _ in range(6)]
@@ -1703,6 +1703,8 @@ class M11Program:
 
 
 M11_ROUNDTRIP_STEPS = 16
+M11_READ_CAPACITY = 1048575
+M11_READ_BYTES_PER_SECOND = 200000
 M11_ROUNDTRIP_SOURCE = """process M11ROUNDTRIP =
   ( )
   (| N := ZN + 1
@@ -1714,7 +1716,11 @@ M11_ROUNDTRIP_SOURCE = """process M11ROUNDTRIP =
    | A ^= B
    | B ^= C
    | C ^= D
+   | P := A $ 1 init "p0"
+   | F := (A when N = 1) cell ^N init ""
    | WA :: write("", A)
+   | WP :: write("", P)
+   | WF :: write("", F)
    | WC :: write("", C)
    | WS :: write("", A < B)
    | WT :: write("", A = B)
@@ -1722,27 +1728,32 @@ M11_ROUNDTRIP_SOURCE = """process M11ROUNDTRIP =
    | WV :: write("", C < D)
    | WW :: write("", C = D)
    | WX :: write("", C <= D)
-   | RA --> RB --> RC --> RD --> WA --> WC --> WS --> WT --> WU --> WV --> WW --> WX
+   | RA --> RB --> RC --> RD --> WA --> WP --> WF --> WC --> WS --> WT --> WU --> WV --> WW --> WX
    |)
   where
     integer N, ZN;
-    string A, B;
+    string A, B, P, F;
     char C, D;
-    label RA, RB, RC, RD, WA, WC, WS, WT, WU, WV, WW, WX;
+    label RA, RB, RC, RD, WA, WP, WF, WC, WS, WT, WU, WV, WW, WX;
   end;
 """
+
+
+def m11_line(rng):
+    length = rng.choice([0, 1, 254, 255, 256, M11_READ_CAPACITY, rng.randrange(512), rng.randrange(M11_READ_CAPACITY + 1)])
+    return rng.randbytes(length).replace(b"\n", b"\x0b")
 
 
 def m11_roundtrip_steps(seed):
     rng = random.Random(seed)
     steps = []
     for _ in range(M11_ROUNDTRIP_STEPS):
-        a = bytes(rng.choice([b for b in range(256) if b != 0x0A]) for _ in range(rng.choice([0, 1, 254, 255, rng.randrange(256)])))
+        a = m11_line(rng)
         if a and rng.randrange(2):
             cut = rng.randrange(len(a))
             b = rng.choice([a, a[:cut], a[:cut] + bytes([(a[cut] + rng.choice([1, 255])) % 256 or 1]) + a[cut + 1:]]).replace(b"\n", b"\x0b")
         else:
-            b = bytes(rng.choice([b for b in range(256) if b != 0x0A]) for _ in range(rng.randrange(256)))
+            b = m11_line(rng)
         c = rng.choice([code for code in range(256) if code != 0x0A])
         d = rng.choice([c, rng.randrange(256), (c + 1) % 256])
         d = 0x0B if d == 0x0A else d
@@ -1754,14 +1765,166 @@ def check_m11_roundtrip(executable, directory, seed):
     steps = m11_roundtrip_steps(seed)
     feed = b"".join(a + b"\n" + b + b"\n" + chr(c).encode() + b"\n" + chr(d).encode() + b"\n" for a, b, c, d in steps)
     words = {True: b"true", False: b"false"}
-    expected = b"".join(a + b"\n" + chr(c).encode() + b"\n" + b"\n".join(words[value] for value in (a < b, a == b, a <= b, c < d, c == d, c <= d)) + b"\n"
-                        for a, b, c, d in steps)
+    previous = [b"p0"] + [a for a, _, _, _ in steps]
+    first = steps[0][0]
+    expected = b"".join(a + b"\n" + previous[step] + b"\n" + first + b"\n" + chr(c).encode() + b"\n"
+                        + b"\n".join(words[value] for value in (a < b, a == b, a <= b, c < d, c == d, c <= d)) + b"\n"
+                        for step, (a, b, c, d) in enumerate(steps))
     input_path = directory / "roundtrip.in"
     input_path.write_bytes(feed)
     with input_path.open("rb") as stdin:
-        finished = subprocess.run([str(executable)], stdin=stdin, capture_output=True, timeout=run.RUN_TIMEOUT_SECONDS)
+        finished = subprocess.run([str(executable)], stdin=stdin, capture_output=True,
+                                  timeout=run.RUN_TIMEOUT_SECONDS + len(feed) // M11_READ_BYTES_PER_SECOND)
     if finished.returncode != 0 or finished.stdout != expected:
         return [f"{input_path}: roundtrip exit {finished.returncode}, output {finished.stdout!r}, expected {expected!r}"]
+    return []
+
+
+M11_WITNESS_STEPS = 8
+
+
+def m11_witness_line(rng):
+    return bytes(rng.choice([b for b in range(256) if b != 0x0A]) for _ in range(rng.choice([0, 1, 2, rng.randrange(9), rng.randrange(300)])))
+
+
+class M11WitnessProgram:
+    def __init__(self, seed):
+        rng = random.Random(seed)
+        self.reads = rng.randrange(1, 3)
+        self.count = rng.randrange(3, 9)
+        self.conditions = [(rng.randrange(2, 5), rng.randrange(2)) for _ in range(2)]
+        self.definitions = [self.definition(rng, index) for index in range(self.count)]
+        self.shared = [self.operand(rng, self.count) for _ in range(rng.randrange(3))]
+        self.shared_init = random_text(rng, rng.randrange(3))
+        self.lines = [[m11_witness_line(rng) for _ in range(self.reads)] for _ in range(M11_WITNESS_STEPS)]
+
+    def literal(self, rng):
+        return ("literal", random_text(rng, rng.randrange(4)))
+
+    def signal(self, rng, bound):
+        return ("signal", rng.choice([f"X{read}" for read in range(self.reads)] + [f"S{index}" for index in range(bound)]))
+
+    def operand(self, rng, bound):
+        return rng.choice([self.literal(rng), self.signal(rng, bound)])
+
+    def definition(self, rng, index):
+        condition = rng.randrange(2)
+        forms = [
+            lambda: ("if", condition, self.operand(rng, index), self.operand(rng, index)),
+            lambda: ("default", condition, self.operand(rng, index), self.operand(rng, index)),
+            lambda: ("delay", self.signal(rng, self.count), random_text(rng, rng.randrange(3))),
+            lambda: ("lag", self.signal(rng, self.count), rng.randrange(2, 4)),
+            lambda: ("cell", condition, self.operand(rng, index), random_text(rng, rng.randrange(3))),
+            lambda: ("var", condition, self.signal(rng, index)),
+            lambda: ("seeded", self.operand(rng, index), random_text(rng, rng.randrange(3)), rng.randrange(1, 4)),
+            lambda: ("carried", self.operand(rng, index), rng.randrange(1, 4)),
+        ]
+        return rng.choice(forms)()
+
+    def text(self, operand):
+        kind, value = operand
+        return string_literal(value) if kind == "literal" else value
+
+    def source(self):
+        body = ["N := ZN + 1", "ZN := N $ init 0",
+                *[f"C{position} := N modulo {modulus} = {residue}" for position, (modulus, residue) in enumerate(self.conditions)],
+                *[f"R{read} :: X{read} := read(\"\" when ^N)" for read in range(self.reads)]]
+        strings = [f"S{index}" for index in range(self.count)] + [f"X{read}" for read in range(self.reads)]
+        declarations = ["integer N, ZN;", "boolean C0, C1;"]
+        for index, definition in enumerate(self.definitions):
+            form = definition[0]
+            if form == "if":
+                body.append(f"S{index} := if C{definition[1]} then {self.text(definition[2])} else {self.text(definition[3])}")
+            elif form == "default":
+                body.append(f"S{index} := ({self.text(definition[2])} when C{definition[1]}) default {self.text(definition[3])}")
+            elif form == "delay":
+                body.append(f"S{index} := {self.text(definition[1])} $ 1 init {string_literal(definition[2])}")
+            elif form == "lag":
+                body.append(f"S{index} := {self.text(definition[1])} $ {definition[2]}")
+            elif form == "cell":
+                body.append(f"S{index} := ({self.text(definition[2])} when C{definition[1]}) cell ^N init {string_literal(definition[3])}")
+            elif form == "var":
+                body += [f"V{index} := {self.text(definition[2])} when (C{definition[1]} or N = 1)", f"S{index} := var V{index}"]
+                strings.append(f"V{index}")
+            else:
+                carried = form == "carried"
+                size = definition[-1]
+                step = f"E{index} := S{index}" if carried else f"E{index} := {string_literal(definition[2])}"
+                body.append(f"iterate K{index} of (| S{index} := E{index}[?] | {step} |) with E{index} := {self.text(definition[1])} end")
+                body.append(f"K{index} := indices({size})")
+                strings.append(f"E{index}")
+                declarations.append(f"[{size}] integer K{index};")
+        labels = [f"R{read}" for read in range(self.reads)] + [f"W{index}" for index in range(self.count)]
+        body += [f"S{index} ^= N" for index in range(self.count)]
+        body += [f"W{index} :: write(\"\", S{index})" for index in range(self.count)]
+        if self.shared:
+            body += ["P ^= N", *[f"P ::= {self.text(operand)} when {guard}C0" for operand, guard in zip(self.shared, ["", "not "])],
+                     "WP :: write(\"\", P)"]
+            labels.append("WP")
+            declarations.append(f"shared string P init {string_literal(self.shared_init)};")
+        body.append(" --> ".join(labels))
+        declarations += [f"string {', '.join(strings)};", f"label {', '.join(labels)};"]
+        return ("process M11WITNESS =\n  ( )\n  (| " + "\n   | ".join(body) + "\n   |)\n  where\n"
+                + "".join(f"    {declaration}\n" for declaration in declarations) + "  end;\n")
+
+    def feed(self):
+        return b"".join(line + b"\n" for step in self.lines for line in step)
+
+    def expected(self):
+        history = {name: [] for name in [f"S{index}" for index in range(self.count)] + [f"X{read}" for read in range(self.reads)]}
+        shared = self.shared_init
+        output = []
+        for step, lines in enumerate(self.lines, 1):
+            flags = [step % modulus == residue for modulus, residue in self.conditions]
+            now = {f"X{read}": line for read, line in enumerate(lines)}
+
+            def value(operand):
+                return operand[1] if operand[0] == "literal" else now[operand[1]]
+
+            for index, definition in enumerate(self.definitions):
+                form = definition[0]
+                name = f"S{index}"
+                if form == "if" or form == "default":
+                    result = value(definition[2]) if flags[definition[1]] else value(definition[3])
+                elif form == "delay":
+                    result = definition[2] if step == 1 else history[definition[1][1]][-1]
+                elif form == "lag":
+                    result = b"" if step <= definition[2] else history[definition[1][1]][step - 1 - definition[2]]
+                elif form == "cell":
+                    result = value(definition[2]) if flags[definition[1]] else (history[name][-1] if history[name] else definition[3])
+                elif form == "var":
+                    result = value(definition[2]) if flags[definition[1]] or step == 1 else history[name][-1]
+                elif form == "seeded":
+                    result = value(definition[1]) if definition[3] == 1 else definition[2]
+                else:
+                    result = value(definition[1])
+                now[name] = result
+            for name in history:
+                history[name].append(now[name])
+            output += [now[f"S{index}"] for index in range(self.count)]
+            if self.shared:
+                for operand, guard in zip(self.shared, [True, False]):
+                    if flags[0] == guard:
+                        shared = value(operand)
+                output.append(shared)
+        return b"".join(line + b"\n" for line in output)
+
+
+def check_m11_witness(compiler, directory, seed):
+    program = M11WitnessProgram(seed)
+    source = directory / "witness.sig"
+    source.write_text(program.source(), encoding="utf-8")
+    executable = directory / "witness"
+    compiled = compile_case(compiler, source, executable)
+    if compiled.returncode != 0:
+        return [f"{source}: compile failed (exit {compiled.returncode}): {compiled.stderr.strip()}"]
+    input_path = directory / "witness.in"
+    input_path.write_bytes(program.feed())
+    expected = program.expected()
+    with input_path.open("rb") as stdin:
+        finished = subprocess.run([str(executable)], stdin=stdin, capture_output=True, timeout=run.RUN_TIMEOUT_SECONDS)
+    if finished.returncode != 0 or finished.stdout != expected:
+        return [f"{source}: exit {finished.returncode}, output {finished.stdout!r}, expected {expected!r}"]
     return []
 
 
@@ -1770,7 +1933,7 @@ def check_m11(compiler, roundtrip, seed):
     directory = BUILD / "m11" / str(seed)
     directory.mkdir(parents=True, exist_ok=True)
     expected = program.expected()
-    report = check_m11_roundtrip(roundtrip, directory, seed)
+    report = check_m11_roundtrip(roundtrip, directory, seed) + check_m11_witness(compiler, directory, seed)
     for variant, machine in (("macos", False), ("mps2", True)):
         source = directory / f"{variant}.sig"
         source.write_text(program.source(machine), encoding="utf-8")

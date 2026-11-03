@@ -526,10 +526,11 @@ CLOCK_COLUMNS = [
     "node_right", "roots",
 ]
 SCHEDULE_COLUMNS = ["order", "loop_orders", "snapshots", "snapshotted"]
-ALL_COLUMNS = COLUMNS + ROW_COLUMNS + CLOCK_COLUMNS + SCHEDULE_COLUMNS
+STRING_COLUMNS = ["string_buffers"]
+ALL_COLUMNS = COLUMNS + ROW_COLUMNS + CLOCK_COLUMNS + SCHEDULE_COLUMNS + STRING_COLUMNS
 TYPE_COLUMNS = [column for column in COLUMNS if column.startswith("types.")]
 DUMP_ORDERS = [
-    ("PROGRAM", COLUMNS), ("ROWS", ROW_COLUMNS + TYPE_COLUMNS + ["table_types", "table_values"]), ("CLOCKS", CLOCK_COLUMNS),
+    ("PROGRAM", COLUMNS), ("ROWS", ROW_COLUMNS + TYPE_COLUMNS + ["table_types", "table_values"] + STRING_COLUMNS), ("CLOCKS", CLOCK_COLUMNS),
     ("SCHEDULE", SCHEDULE_COLUMNS),
 ]
 CLOCK_KINDS = ["NONE", "ROOT", "SAMPLE", "PRODUCT", "SUM", "NULL"]
@@ -745,14 +746,11 @@ TEMPLATES = [
     ("ESCAPE_RANGE", "escape value # does not fit in a byte", ["NUMBER"]),
     ("CHARACTER_COUNT", "character constant must hold one character", []),
     ("CHARACTER_RANGE", "character constant above U+00FF", []),
-    ("STRING_LONG", "string constant longer than 255 bytes", []),
     ("STRING_ELEMENT", "string cannot be an array element or a field", []),
     ("STRING_INTERFACE", "string # cannot be an input or output of the top model; use read or write", ["NAME"]),
     ("IO_STRING", "input 1 of # must be a string, found #", ["NAME", "TYPE"]),
     ("WRITE_VALUE", "input 2 of write must be a boolean, an integer, a char, a real, a complex or a string, found #", ["TYPE"]),
     ("READ_TYPE", "the output of read must be a boolean, an integer, a char, a real, a complex or a string, found #", ["TYPE"]),
-    ("STRING_VALUE", "a string value can only be the whole definition of a signal", []),
-    ("STRING_BRANCHES", "only one branch of an if can build a string value; define the other as a signal", []),
     ("CASE_STRING", "a case value cannot be a string literal; name it with a constant", []),
     ("HIDES_OUTPUT", "signal # is an # of # and cannot be hidden", ["NAME", "FRAGMENT", "NAME"]),
     ("MODEL_IN_INNER_WHERE", "a model cannot be declared in an inner where", []),
@@ -1328,7 +1326,7 @@ EMIT_SOURCES = [
     "count_shift", "load_indexed_scalar", "store_indexed_scalar", "load_indexed_init", "scalar_row", "init_element",
     "iter_stride", "iter_size", "iter_start", "loop_inner", "size_right", "put_param", "key_arg0", "key_arg1",
     "real_in", "real_out", "real_op", "real_neg", "real_cmp", "real_condition", "real_from_int", "real_to_int", "real_bytes",
-    "imag_row",
+    "imag_row", "key_string_init", "key_string_value", "key_string_mem",
 ] + [f"local{index}" for index in range(LOCAL_LABEL_COUNT)]
 EMIT_PREDICATES = [
     "always", "flag", "has_arg1", "has_arg2", "has_arg3", "has_arg4", "has_arg5", "has_arg6", "right_loads",
@@ -1348,7 +1346,7 @@ CODE_COLUMNS = [
 ]
 EMIT_TEXT = "presence input malformed at step memory reservation failed"
 UNIT_PHASES = [
-    "PROLOGUE", "RESERVE", "WINDOW", "SEED_MEMORY", "JUMP_STEP", "BOOT", "WAIT", "DISPATCH", "WAIT_TAIL", "RESERVE_FAILED", "READ_VALUE",
+    "PROLOGUE", "RESERVE", "WINDOW", "SEED_MEMORY", "SEED_STRING", "JUMP_STEP", "BOOT", "WAIT", "DISPATCH", "WAIT_TAIL", "RESERVE_FAILED", "READ_VALUE",
     "STEP", "READ_LINE", "VALUE_INPUT", "READ_TAIL", "ORDER", "DELAY", "LAG", "OUTPUT_HEAD", "OUTPUT", "OUTPUT_TAIL", "FINISH",
     "PUT_TEXT", "READ_INPUT", "READ_NUMBER", "REAL_RUNTIME", "REAL_PARSE",
 ]
@@ -1412,6 +1410,19 @@ def gated(body, stores=True):
         [ld(9, ("CLK", "clock_row"), UINTEGER_TYPE, "flag"), emit("CBZ_W", 9, to=label("local0"), when="flag")]
         + body + ([st(9, ("SIG", "row"), "type_row")] if stores else []) + [place("local0", "flag")]
     )
+
+
+def string_length(register, pointer, when="always"):
+    return [emit("SUB_X_IMM", register, pointer, 8, when=when), emit("LDR_X", register, register, 0, when=when)]
+
+
+def copy_string(source, destination, loop_label):
+    return [
+        *string_length(11, source), emit("STR_X", 11, destination, 0), emit("ADD_X_IMM", destination, destination, 8),
+        emit("ADD_X_IMM", 11, 11, 1), emit("MOVZ_X", 15), place(loop_label), emit("LDRB_W_REG", 16, source, 15),
+        emit("STRB_W_REG", 16, destination, 15), emit("ADD_X_IMM", 15, 15, 1), emit("SUBS_X", XZR, 15, 11),
+        emit("B_COND", a3=CC["LO"], to=label(loop_label)),
+    ]
 
 
 def widen(register, when):
@@ -1515,6 +1526,8 @@ PUT_NUMBER = [
 
 
 READ_REAL_BYTES = 1024
+READ_STRING_CAPACITY = 1048575
+STRING_BUFFER_BYTES = 8 + READ_STRING_CAPACITY + 1
 PARSE_LIMBS = 120
 PRINT_LIMBS = 40
 PRINT_FRAME = 896
@@ -3934,8 +3947,8 @@ EMIT_TEMPLATES = [
     ])),
     ("ROW_INSTRUCTION", gated([operand(0, "arg0"), emit("WORD", a2="param"), emit("ORR_X", 9, XZR, 0)])),
     ("ROW_WRITE", gated([
-        address(1, "key_arg0"), emit("LDRB_W", 2, 1, 255), emit("BL", to=label("put_text")),
-        address(1, "key_arg1", "writes_string"), emit("LDRB_W", 2, 1, 255, when="writes_string"),
+        operand(1, "arg0"), *string_length(2, 1), emit("BL", to=label("put_text")),
+        operand(1, "arg1", "writes_string"), *string_length(2, 1, "writes_string"),
         emit("BL", to=label("put_text"), when="writes_string"), emit("SUB_X_IMM", SP, SP, 32, when="writes_complex"),
         emit("SUB_X_IMM", SP, SP, 32), emit("ADD_X_IMM", 20, SP, 0),
         operand(0, "arg1", "writes_number"), emit("BL", to=label("put_param"), when="writes_number"),
@@ -3946,12 +3959,13 @@ EMIT_TEMPLATES = [
         emit("BL", to=label("put_text")), emit("ADD_X_IMM", SP, SP, 32), emit("ADD_X_IMM", SP, SP, 32, when="writes_complex"),
     ], False)),
     ("ROW_READ", gated([
-        address(1, "key_arg0"), emit("LDRB_W", 2, 1, 255), emit("BL", to=label("put_text")),
-        address(13, "key_owner", "reads_string"), emit("MOVZ_X", 15, 0, 32, when="reads_string"), place("local1", "reads_string"),
-        emit("STR_X_POST", XZR, 13, 8, when="reads_string"), emit("SUBS_X_IMM", 15, 15, 1, when="reads_string"),
-        emit("B_COND", a3=CC["NE"], to=label("local1"), when="reads_string"), address(1, "key_owner", "reads_string"),
-        emit("MOVZ_X", 2, 0, 255, when="reads_string"), emit("BL", to=label("read_line"), when="reads_string"),
-        address(1, "key_owner", "reads_string"), emit("STRB_W", 0, 1, 255, when="reads_string"),
+        operand(1, "arg0"), *string_length(2, 1), emit("BL", to=label("put_text")),
+        address(13, "key_string_value", "reads_string"), emit("ADD_X_IMM", 1, 13, 8, when="reads_string"),
+        emit("MOVZ_X", 2, 0, READ_STRING_CAPACITY & 0xFFFF, when="reads_string"),
+        emit("MOVK_X", 2, 0, READ_STRING_CAPACITY >> 16, 1, when="reads_string"), emit("BL", to=label("read_line"), when="reads_string"),
+        address(13, "key_string_value", "reads_string"), emit("STR_X", 0, 13, 0, when="reads_string"),
+        emit("ADD_X_IMM", 9, 13, 8, when="reads_string"), emit("STRB_W_REG", XZR, 9, 0, when="reads_string"),
+        st(9, ("SIG", "row"), "type_row", "reads_string"),
         emit("SUB_X_IMM", SP, SP, 32, when="reads_scalar"), emit("SUB_X_IMM", SP, SP, READ_REAL_BYTES, when="reads_real"),
         emit("SUB_X_IMM", SP, SP, 2 * READ_REAL_BYTES, when="reads_complex"),
         emit("ADD_X_IMM", 1, SP, 0, when="reads_scalar"),
@@ -4066,14 +4080,23 @@ EMIT_TEMPLATES = [
         emit("B_COND", a3=CC["LO"], to=label("local1")), emit("MOVZ_X", 9, 0, 1), emit("B", to=label("local3")),
         place("local2"), emit("MOVZ_X", 9), place("local3"), emit("EOR_X_ONE", 9, 9, when="compare_negated"),
     ])),
-    ("ROW_ARRAY_LT", gated([
-        address(12, "key_left", "compare_direct"), address(13, "key_right", "compare_direct"),
-        address(12, "key_right", "compare_swapped"), address(13, "key_left", "compare_swapped"), emit("MOVZ_X", 15),
-        li(17, "size_left"), place("local1"), emit("load_indexed_index", 10, 12, 15), emit("load_indexed_index", 11, 13, 15),
-        emit("SUBS_X", XZR, 10, 11), emit("B_COND", a3=CC["NE"], to=label("local2")), emit("ADD_X_IMM", 15, 15, 1),
-        emit("SUBS_X", XZR, 15, 17), emit("B_COND", a3=CC["LO"], to=label("local1")), emit("MOVZ_X", 9),
-        emit("B", to=label("local3")), place("local2"), emit("MOVZ_X", 9), emit("B_COND", a3=CC["HS"], to=label("local3")),
-        emit("MOVZ_X", 9, 0, 1), place("local3"), emit("EOR_X_ONE", 9, 9, when="compare_negated"),
+    ("ROW_STRING_EQ", gated([
+        operand(12, "left"), operand(13, "right"), *string_length(10, 12), *string_length(11, 13), emit("SUBS_X", XZR, 10, 11),
+        emit("B_COND", a3=CC["NE"], to=label("local2")), emit("MOVZ_X", 15), place("local1"), emit("SUBS_X", XZR, 15, 10),
+        emit("B_COND", a3=CC["HS"], to=label("local3")), emit("LDRB_W_REG", 16, 12, 15), emit("LDRB_W_REG", 17, 13, 15),
+        emit("SUBS_X", XZR, 16, 17), emit("B_COND", a3=CC["NE"], to=label("local2")), emit("ADD_X_IMM", 15, 15, 1),
+        emit("B", to=label("local1")), place("local3"), emit("MOVZ_X", 9, 0, 1), emit("B", to=label("local4")), place("local2"),
+        emit("MOVZ_X", 9), place("local4"), emit("EOR_X_ONE", 9, 9, when="compare_negated"),
+    ])),
+    ("ROW_STRING_LT", gated([
+        operand(12, "left", "compare_direct"), operand(13, "right", "compare_direct"),
+        operand(12, "right", "compare_swapped"), operand(13, "left", "compare_swapped"), *string_length(10, 12),
+        *string_length(11, 13), emit("SUBS_X", XZR, 10, 11), emit("CSEL_X", 14, 10, 11, CC["LO"]), emit("MOVZ_X", 15),
+        place("local1"), emit("SUBS_X", XZR, 15, 14), emit("B_COND", a3=CC["HS"], to=label("local2")),
+        emit("LDRB_W_REG", 16, 12, 15), emit("LDRB_W_REG", 17, 13, 15), emit("SUBS_X", XZR, 16, 17),
+        emit("B_COND", a3=CC["NE"], to=label("local3")), emit("ADD_X_IMM", 15, 15, 1), emit("B", to=label("local1")),
+        place("local2"), emit("SUBS_X", XZR, 10, 11), place("local3"), emit("CSINC_W", 9, XZR, XZR, CC["HS"]),
+        emit("EOR_X_ONE", 9, 9, when="compare_negated"),
     ])),
     ("ROW_IF_BLOCK", gated([
         operand(9, "left"), emit("CBZ_W", 9, to=label("local1")),
@@ -4124,6 +4147,13 @@ EMIT_TEMPLATES = [
     ("ROW_CONST", gated([operand(9, "row")])),
     ("ROW_DELAY", gated([ld(9, ("MEM", "row"), "type_row")])),
     ("ROW_STATE", gated([ld(9, ("MEM", "value_row"), "type_row")])),
+    ("ROW_DELAY_STRING", gated([
+        ld(10, ("MEM", "row"), "type_row"), address(13, "key_string_value"), *copy_string(10, 13, "local1"), emit("ORR_X", 9, XZR, 13),
+    ])),
+    ("ROW_STATE_STRING", gated([
+        ld(10, ("MEM", "value_row"), "type_row"), address(13, "key_string_value"), *copy_string(10, 13, "local1"),
+        emit("ORR_X", 9, XZR, 13),
+    ])),
     ("ROW_ONE", gated([emit("MOVZ_X", 9, 0, 1)])),
     ("ROW_IF", gated([
         operand(9, "left"), operand(10, "right_left"), *widen(10, "right_left_widens"), operand(11, "right_right"),
@@ -4174,6 +4204,12 @@ EMIT_TEMPLATES = [
         ld(9, ("CLK", "clock_row"), UINTEGER_TYPE), emit("CBZ_W", 9, to=label("local0")),
         ld(9, ("SIG", "left"), "type_row"), st(9, ("MEM", "row"), "type_row"), place("local0"),
     ]),
+    ("DELAY_STRING", [
+        ld(9, ("CLK", "clock_row"), UINTEGER_TYPE), emit("CBZ_W", 9, to=label("local0")),
+        ld(10, ("SIG", "left"), "type_row"), address(13, "key_string_mem"), *copy_string(10, 13, "local1"),
+        st(13, ("MEM", "row"), "type_row"), place("local0"),
+    ]),
+    ("SEED_STRING", [address(9, "key_string_init"), st(9, ("MEM", "row"), "type_row")]),
     ("OUTPUT_HEAD", [emit("ADRP", 20, to=("OUT", 0)), emit("ADD_X_IMM", 20, 20, to=("OUT", 0))]),
     ("OUTPUT", [
         emit("MOVZ_W", 10, 0, 32, when="flag"), emit("STRB_W_POST", 10, 20, 1, when="flag"),
@@ -4452,6 +4488,10 @@ def copy_pairs(source_key, destination_key, words, loop_label, when="always"):
     ]
 
 
+def string_length_thumb(register, pointer, when="always"):
+    return [emit("SUBS_IMM_T", register, pointer, 4, when=when), emit("LDR_T", register, register, 0, when=when)]
+
+
 def gated_thumb(body, stores=True):
     return (
         [ld1(0, ("CLK", "clock_row"), UINTEGER_TYPE, "flag"), compare(0, 0, "flag"), *branch_if("EQ", "local0", "flag")]
@@ -4620,13 +4660,21 @@ EMIT_TEMPLATES += [
         *branch_if("LO", "local1"), movw(0, 1), movw(1, 0), branch("local3"), place("local2"), movw(0, 0), movw(1, 0),
         place("local3"), emit("EOR_IMM_T", 0, 0, 1, when="compare_negated"),
     ])),
-    ("ROW_ARRAY_LT_THUMB", gated_thumb([
-        address(6, "key_left", "compare_direct"), address(7, "key_right", "compare_direct"),
-        address(6, "key_right", "compare_swapped"), address(7, "key_left", "compare_swapped"), movw(9, 0), place("local1"),
-        load_at(0, "index_element", 6, 9), load_at(2, "index_element", 7, 9), compare_registers(0, 2),
-        *branch_if("NE", "local2"), emit("ADDW_T", 9, 9, 1), li1(LR, "size_left"), compare_registers(9, LR),
-        *branch_if("LO", "local1"), movw(0, 0), movw(1, 0), branch("local3"), place("local2"), movw(0, 0), movw(1, 0),
-        *branch_if("HS", "local3"), movw(0, 1), place("local3"), emit("EOR_IMM_T", 0, 0, 1, when="compare_negated"),
+    ("ROW_STRING_EQ_THUMB", gated_thumb([
+        operand1(6, "left"), operand1(7, "right"), *string_length_thumb(4, 6), *string_length_thumb(5, 7), compare_registers(4, 5),
+        *branch_if("NE", "local2"), place("local1"), compare(4, 0), *branch_if("EQ", "local3"), emit("LDRB_POST_T", 0, 6, 1),
+        emit("LDRB_POST_T", 2, 7, 1), compare_registers(0, 2), *branch_if("NE", "local2"), emit("SUBS_IMM_T", 4, 4, 1),
+        branch("local1"), place("local3"), movw(0, 1), movw(1, 0), branch("local4"), place("local2"), movw(0, 0), movw(1, 0),
+        place("local4"), emit("EOR_IMM_T", 0, 0, 1, when="compare_negated"),
+    ])),
+    ("ROW_STRING_LT_THUMB", gated_thumb([
+        operand1(6, "left", "compare_direct"), operand1(7, "right", "compare_direct"),
+        operand1(6, "right", "compare_swapped"), operand1(7, "left", "compare_swapped"), *string_length_thumb(4, 6),
+        *string_length_thumb(5, 7), mov(8, 4), compare_registers(5, 4), only_if("LO"), mov(8, 5), place("local1"),
+        compare(8, 0), *branch_if("EQ", "local2"), emit("LDRB_POST_T", 0, 6, 1), emit("LDRB_POST_T", 2, 7, 1),
+        compare_registers(0, 2), *branch_if("NE", "local3"), emit("SUBS_IMM_T", 8, 8, 1), branch("local1"), place("local2"),
+        compare_registers(4, 5), place("local3"), movw(0, 0), movw(1, 0), *branch_if("HS", "local4"), movw(0, 1),
+        place("local4"), emit("EOR_IMM_T", 0, 0, 1, when="compare_negated"),
     ])),
     ("ROW_IF_BLOCK_THUMB", gated_thumb([
         operand1(0, "left"), compare(0, 0), *branch_if("EQ", "local1"),
@@ -4718,6 +4766,7 @@ EMIT_TEMPLATES += [
         *[step_row[:1] + ("shift_right",) + step_row[2:] for step_row in SHIFT_RIGHT],
         emit("SUBS_IMM_T", LR, 2, 64), emit("SBCS_IMM_T", LR, 3, 0), only_if("HS"), movw(0, 0), only_if("HS"), movw(1, 0),
     ))),
+    ("SEED_STRING_THUMB", [address(0, "key_string_init"), st1(0, ("MEM", "row"), "type_row")]),
     ("DELAY_THUMB", [
         ld1(0, ("CLK", "clock_row"), UINTEGER_TYPE), compare(0, 0), *branch_if("EQ", "local0"),
         ld2(0, ("SIG", "left"), "type_row"), st2(0, ("MEM", "row"), "type_row"), place("local0"),
@@ -4758,8 +4807,8 @@ EMIT_TEMPLATES += [
         emit("AND_T", 2, 0, 3), emit("ORR_IMM_T", 2, 2, 0x80), put_byte(2), emit("BX_LR_T"),
     ]),
     ("ROW_WRITE_THUMB", gated_thumb([
-        address(6, "key_arg0"), emit("LDRB_T", 2, 6, 255), emit("BL_T", to=label("put_text")),
-        address(6, "key_arg1", "writes_string"), emit("LDRB_T", 2, 6, 255, when="writes_string"),
+        operand1(6, "arg0"), *string_length_thumb(2, 6), emit("BL_T", to=label("put_text")),
+        operand1(6, "arg1", "writes_string"), *string_length_thumb(2, 6, "writes_string"),
         emit("BL_T", to=label("put_text"), when="writes_string"), *absolute(10, ("OUT", 0)),
         operand2(0, "arg1", "writes_number"), emit("BL_T", to=label("put_param"), when="writes_number"),
         operand1(0, "arg1", "writes_char"), emit("BL_T", to=label("put_char"), when="writes_char"),
@@ -4867,6 +4916,10 @@ def clocked_thumb(body):
 
 EMIT_TEMPLATES += [
     ("ROW_LAG", gated([address(12, "key_mem"), emit("MOVZ_X", 10), emit("load_indexed_scalar", 9, 12, 10)])),
+    ("ROW_LAG_STRING", gated([
+        address(12, "key_mem"), emit("LDR_X", 10, 12, 0), address(13, "key_string_value"), *copy_string(10, 13, "local1"),
+        emit("ORR_X", 9, XZR, 13),
+    ])),
     ("ROW_LAG_THUMB", gated_thumb([address(6, "key_mem"), movw(9, 0), load_at(0, "scalar_row", 6, 9)])),
     ("ROW_LAG_ARRAY", gated(copy_words("key_mem", "key_row", "words_row", "local1"), False)),
     ("ROW_LAG_ARRAY_THUMB", gated_thumb(copy_pairs("key_mem", "key_row", "words_row", "local1"), False)),
@@ -4896,6 +4949,30 @@ EMIT_TEMPLATES += [
         compare_registers(9, 5), *branch_if("HS", "local1"), load_at(0, "init_element", 7, 9),
         store_at(0, "scalar_row", 6, 9), emit("ADDW_T", 9, 9, 1), branch("local0"), place("local1"),
     ]),
+    ("SEED_STRING_LAG", [
+        address(12, "key_mem"), address(9, "key_string_init"), emit("MOVZ_X", 15), li(17, "count_mem"), place("local0"),
+        emit("SUBS_X", XZR, 15, 17), emit("B_COND", a3=CC["HS"], to=label("local1")), emit("store_indexed_scalar", 9, 12, 15),
+        emit("ADD_X_IMM", 15, 15, 1), emit("B", to=label("local0")), place("local1"),
+    ]),
+    ("SEED_STRING_LAG_THUMB", [
+        address(6, "key_mem"), address(0, "key_string_init"), movw(9, 0), li1(5, "count_mem"), place("local0"),
+        compare_registers(9, 5), *branch_if("HS", "local1"), store_at(0, "scalar_row", 6, 9), emit("ADDW_T", 9, 9, 1),
+        branch("local0"), place("local1"),
+    ]),
+    ("SEED_STRING_RING", [
+        address(12, "key_mem"), address(13, "key_string_mem"), emit("ADD_X_IMM", 13, 13, 8),
+        emit("MOVZ_X", 14, 0, STRING_BUFFER_BYTES & 0xFFFF), emit("MOVK_X", 14, 0, STRING_BUFFER_BYTES >> 16, 1),
+        emit("MOVZ_X", 15), li(17, "count_mem"), place("local0"), emit("SUBS_X", XZR, 15, 17),
+        emit("B_COND", a3=CC["HS"], to=label("local1")), emit("store_indexed_scalar", 13, 12, 15), emit("ADD_X", 13, 13, 14),
+        emit("ADD_X_IMM", 15, 15, 1), emit("B", to=label("local0")), place("local1"),
+    ]),
+    ("LAG_STRING", clocked([
+        address(12, "key_mem"), emit("LDR_X", 14, 12, 0), li(17, "count_shift"), emit("MOVZ_X", 15), place("local1"),
+        emit("SUBS_X", XZR, 15, 17), emit("B_COND", a3=CC["HS"], to=label("local2")), emit("ADD_X_IMM", 16, 15, 1),
+        emit("load_indexed_scalar", 9, 12, 16), emit("store_indexed_scalar", 9, 12, 15), emit("ADD_X_IMM", 15, 15, 1),
+        emit("B", to=label("local1")), place("local2"), emit("SUB_X_IMM", 13, 14, 8), ld(10, ("SIG", "left"), "type_row"),
+        *copy_string(10, 13, "local3"), emit("store_indexed_scalar", 13, 12, 17),
+    ])),
     ("LAG", clocked([
         address(12, "key_mem"), *element_loop(12, 12, "count_shift", "local1", "local2", "span"),
         ld(9, ("SIG", "left"), "type_row"), emit("store_indexed_scalar", 9, 12, 15),
@@ -5460,6 +5537,7 @@ def build():
     integer("MPS2_HEADER_BYTES", MPS2_HEADER_BYTES)
     integer("MPS2_UNLOADED", MPS2_UNLOADED)
     integer("MPS2_RAM_BYTES", MPS2_RAM_BYTES)
+    integer("STRING_BUFFER_BYTES", STRING_BUFFER_BYTES)
     integer("MPS2_STACK_BYTES", MPS2_STACK_BYTES)
     integer("VIRT_STACK_BYTES", VIRT_STACK_BYTES)
     for index, name in enumerate(PLATFORMS):
@@ -5504,7 +5582,8 @@ def build():
         thumb_name = base + THUMB_SUFFIX
         thumb_template.append(template_names.index(thumb_name) if thumb_name in template_names
                               else template_names.index(name) if name.endswith(THUMB_SUFFIX) else -1)
-    assert all(name + THUMB_SUFFIX in template_names for name in template_names if name.startswith("ROW_") and name not in ("ROW_SYSCALL", "ROW_READ")
+    assert all(name + THUMB_SUFFIX in template_names for name in template_names if name.startswith("ROW_")
+               and name not in ("ROW_SYSCALL", "ROW_READ", "ROW_DELAY_STRING", "ROW_STATE_STRING", "ROW_LAG_STRING")
                and not name.startswith("ROW_REAL_") and not name.endswith(THUMB_SUFFIX))
     table("THUMB_TEMPLATE", "integer", thumb_template)
     table("THUMB_LOAD_FORM", "integer", [FORMS.index(THUMB_LOAD_FORMS[key]) if key in THUMB_LOAD_FORMS else 0
